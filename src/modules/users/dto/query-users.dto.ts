@@ -10,7 +10,7 @@ import {
 } from 'class-validator';
 import { BadRequestException } from '@nestjs/common';
 import { KycStatus, UserRole } from '../schemas/user.schema';
-import { ApiPropertyOptional } from '../../common/swagger.decorators';
+import { ApiPropertyOptional } from '../../../common/swagger.decorators';
 
 const toBoolean = (value: unknown): boolean | undefined => {
   if (value === undefined || value === null || value === '') {

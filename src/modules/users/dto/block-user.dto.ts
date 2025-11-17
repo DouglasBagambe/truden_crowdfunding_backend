@@ -1,5 +1,5 @@
 import { IsBoolean, IsOptional, IsString, Length } from 'class-validator';
-import { ApiProperty } from '../../common/swagger.decorators';
+import { ApiProperty } from '../../../common/swagger.decorators';
 
 export class BlockUserDto {
   @ApiProperty({ description: 'Whether the user should be blocked' })

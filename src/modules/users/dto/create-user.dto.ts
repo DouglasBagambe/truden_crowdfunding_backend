@@ -13,7 +13,7 @@ import { KycStatus, UserRole } from '../schemas/user.schema';
 import {
   ApiProperty,
   ApiPropertyOptional,
-} from '../../common/swagger.decorators';
+} from '../../../common/swagger.decorators';
 
 const toLowerCase = (value: unknown) =>
   typeof value === 'string' ? value.trim().toLowerCase() : value;

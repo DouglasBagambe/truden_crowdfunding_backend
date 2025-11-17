@@ -1,7 +1,7 @@
 import { IsString } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { BadRequestException } from '@nestjs/common';
-import { ApiProperty } from '../../common/swagger.decorators';
+import { ApiProperty } from '../../../common/swagger.decorators';
 
 const normalizeWallet = (value: unknown) => {
   if (typeof value === 'string') {

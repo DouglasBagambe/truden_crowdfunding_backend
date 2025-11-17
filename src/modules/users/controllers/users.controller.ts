@@ -9,7 +9,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '../../common/swagger.decorators';
+import { ApiBearerAuth, ApiTags } from '../../../common/swagger.decorators';
 import { UsersService } from '../users.service';
 import { CreateUserDto } from '../dto/create-user.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';

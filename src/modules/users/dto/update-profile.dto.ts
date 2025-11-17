@@ -1,5 +1,5 @@
 import { IsEmail, IsOptional, IsString, IsUrl, Length } from 'class-validator';
-import { ApiPropertyOptional } from '../../common/swagger.decorators';
+import { ApiPropertyOptional } from '../../../common/swagger.decorators';
 
 export class UpdateProfileDto {
   @ApiPropertyOptional({ minLength: 2, maxLength: 64 })
