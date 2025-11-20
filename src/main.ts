@@ -8,7 +8,7 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   app.enableCors({
-    origin: configService.get('cors.origin'),
+    origin: configService.get<string>('cors.origin'),
     credentials: true,
   });
 
@@ -22,10 +22,13 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api');
 
-  const port = configService.get('port') || 3000;
+  const port = configService.get<number>('port') || 3000;
   await app.listen(port);
 
   console.log(`Application is running on: http://localhost:${port}/api`);
   console.log(`Auth endpoints available at: http://localhost:${port}/api/auth`);
 }
-bootstrap();
+bootstrap().catch((error) => {
+  console.error('Failed to start application:', error);
+  process.exit(1);
+});
