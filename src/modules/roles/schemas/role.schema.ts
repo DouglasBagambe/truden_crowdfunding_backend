@@ -5,7 +5,14 @@ import { UserRole } from '../../../common/enums/role.enum';
 
 @Schema({ collection: 'roles', timestamps: true })
 export class Role {
-  @Prop({ required: true, unique: true, uppercase: true, trim: true })
+  @Prop({
+    required: true,
+    unique: true,
+    uppercase: true,
+    trim: true,
+    type: String,
+    enum: UserRole,
+  })
   name: UserRole;
 
   @Prop({
