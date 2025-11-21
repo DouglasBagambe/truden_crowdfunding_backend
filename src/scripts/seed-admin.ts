@@ -1,0 +1,59 @@
+import 'dotenv/config';
+import * as bcrypt from 'bcryptjs';
+import { connect, connection } from 'mongoose';
+import appConfig from '../config/app.config';
+import { User, UserSchema } from '../modules/auth/schemas/user.schema';
+import { UserRole } from '../common/enums/role.enum';
+
+async function seedAdmin() {
+  const config = appConfig();
+  const mongoUri = process.env.MONGO_URI || config.database.uri;
+
+  if (!mongoUri) {
+    throw new Error('MONGO_URI (or database.uri) is not set');
+  }
+
+  await connect(mongoUri);
+  const UserModel = connection.model(User.name, UserSchema);
+
+  const email = (process.env.ADMIN_EMAIL || 'admin@truden.net').toLowerCase();
+  const password = process.env.ADMIN_PASSWORD || 'F13ryl10n!';
+  const firstName = process.env.ADMIN_FIRST_NAME || 'Admin';
+  const lastName = process.env.ADMIN_LAST_NAME || 'User';
+
+  const existing = await UserModel.findOne({ email }).select('+password');
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+  if (existing) {
+    existing.password = hashedPassword;
+    existing.role = Array.from(
+      new Set([...(existing.role || []), UserRole.ADMIN]),
+    );
+    existing.profile = {
+      ...existing.profile,
+      firstName: existing.profile?.firstName || firstName,
+      lastName: existing.profile?.lastName || lastName,
+    };
+    existing.isActive = true;
+    await existing.save();
+    console.log(`Admin user updated: ${email}`);
+  } else {
+    await UserModel.create({
+      email,
+      password: hashedPassword,
+      role: [UserRole.ADMIN],
+      isActive: true,
+      profile: { firstName, lastName },
+    });
+    console.log(`Admin user created: ${email}`);
+  }
+}
+
+seedAdmin()
+  .catch((err) => {
+    console.error('Admin seeding failed:', err.message);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await connection.close();
+  });
