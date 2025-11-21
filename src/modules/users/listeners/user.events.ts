@@ -12,6 +12,6 @@ export enum UserEvent {
 
 export interface UserEventPayload {
   userId: string;
-  primaryWallet: string;
+  primaryWallet?: string;
   changes?: Record<string, unknown>;
 }

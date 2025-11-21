@@ -2,7 +2,7 @@ import 'dotenv/config';
 import * as bcrypt from 'bcryptjs';
 import { connect, connection } from 'mongoose';
 import appConfig from '../config/app.config';
-import { User, UserSchema } from '../modules/auth/schemas/user.schema';
+import { User, UserSchema } from '../modules/users/schemas/user.schema';
 import { UserRole } from '../common/enums/role.enum';
 
 async function seedAdmin() {
@@ -26,24 +26,33 @@ async function seedAdmin() {
 
   if (existing) {
     existing.password = hashedPassword;
-    existing.role = Array.from(
-      new Set([...(existing.role || []), UserRole.ADMIN]),
+    existing.roles = Array.from(
+      new Set([...(existing.roles || []), UserRole.ADMIN]),
     );
     existing.profile = {
       ...existing.profile,
       firstName: existing.profile?.firstName || firstName,
       lastName: existing.profile?.lastName || lastName,
+      displayName:
+        existing.profile?.displayName ||
+        [firstName, lastName].filter(Boolean).join(' ').trim(),
     };
     existing.isActive = true;
+    existing.isBlocked = false;
     await existing.save();
     console.log(`Admin user updated: ${email}`);
   } else {
     await UserModel.create({
       email,
       password: hashedPassword,
-      role: [UserRole.ADMIN],
+      roles: [UserRole.ADMIN],
       isActive: true,
-      profile: { firstName, lastName },
+      isBlocked: false,
+      profile: {
+        firstName,
+        lastName,
+        displayName: [firstName, lastName].filter(Boolean).join(' ').trim(),
+      },
     });
     console.log(`Admin user created: ${email}`);
   }

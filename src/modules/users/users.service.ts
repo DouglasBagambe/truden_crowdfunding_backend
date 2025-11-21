@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { UserRole, KYCStatus } from '../../common/enums/role.enum';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { LinkWalletDto } from './dto/link-wallet.dto';
@@ -15,7 +16,6 @@ import { buildUserQuery } from './utils/user-query.util';
 import { UsersRepository } from './repositories/users.repository';
 import { UserEvent } from './listeners/user.events';
 import type { UserEventPayload } from './listeners/user.events';
-import { UserRole } from './schemas/user.schema';
 import type { UserDocument } from './schemas/user.schema';
 
 @Injectable()
@@ -40,11 +40,12 @@ export class UsersService {
     const user: UserDocument = await this.usersRepository.create({
       primaryWallet,
       linkedWallets,
-      role: dto.role ?? UserRole.User,
-      ...(dto.kycStatus ? { kycStatus: dto.kycStatus } : {}),
+      roles: [dto.role ?? UserRole.INVESTOR],
+      kycStatus: dto.kycStatus ?? KYCStatus.NOT_VERIFIED,
+      email: dto.email.toLowerCase(),
+      isActive: true,
       profile: {
         displayName: dto.displayName,
-        email: dto.email,
         avatarUrl: dto.avatarUrl,
         country: dto.country,
       },
@@ -79,7 +80,7 @@ export class UsersService {
     const setPayload: Record<string, unknown> = {};
     if (dto.displayName !== undefined)
       setPayload['profile.displayName'] = dto.displayName;
-    if (dto.email !== undefined) setPayload['profile.email'] = dto.email;
+    if (dto.email !== undefined) setPayload['email'] = dto.email.toLowerCase();
     if (dto.avatarUrl !== undefined)
       setPayload['profile.avatarUrl'] = dto.avatarUrl;
     if (dto.country !== undefined) setPayload['profile.country'] = dto.country;
@@ -181,7 +182,7 @@ export class UsersService {
     const user: UserDocument | null = await this.usersRepository.updateById(
       userId,
       {
-        $set: { isBlocked: dto.isBlocked },
+        $set: { isBlocked: dto.isBlocked, isActive: !dto.isBlocked },
       },
     );
     if (!user) {

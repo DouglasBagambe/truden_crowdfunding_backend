@@ -7,7 +7,6 @@ import {
   Patch,
   Post,
   Query,
-  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '../../../common/swagger.decorators';
 import { UsersService } from '../users.service';
@@ -18,21 +17,18 @@ import { UpdateRoleDto } from '../dto/update-role.dto';
 import { UpdateKycStatusDto } from '../dto/update-kyc-status.dto';
 import { BlockUserDto } from '../dto/block-user.dto';
 import { QueryUsersDto } from '../dto/query-users.dto';
-import { JwtSiweAuthGuard } from '../guards/jwt-siwe.guard';
-import { RolesGuard } from '../guards/roles.guard';
-import { Roles } from '../decorators/roles.decorator';
-import { UserRole } from '../schemas/user.schema';
-import { CurrentUser } from '../decorators/current-user.decorator';
+import { Roles } from '../../../common/decorators/roles.decorator';
+import { CurrentUser } from '../../../common/decorators/current-user.decorator';
+import { UserRole } from '../../../common/enums/role.enum';
 
 @ApiTags('users')
 @ApiBearerAuth()
 @Controller('users')
-@UseGuards(JwtSiweAuthGuard, RolesGuard)
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Post()
-  @Roles(UserRole.Admin)
+  @Roles(UserRole.ADMIN)
   createUser(@Body() dto: CreateUserDto) {
     return this.usersService.createUser(dto);
   }
@@ -43,13 +39,13 @@ export class UsersController {
   }
 
   @Get()
-  @Roles(UserRole.Admin)
+  @Roles(UserRole.ADMIN)
   listUsers(@Query() query: QueryUsersDto) {
     return this.usersService.listUsers(query);
   }
 
   @Get(':id')
-  @Roles(UserRole.Admin)
+  @Roles(UserRole.ADMIN)
   getUser(@Param('id') id: string) {
     return this.usersService.getUserById(id);
   }
@@ -63,7 +59,7 @@ export class UsersController {
   }
 
   @Patch(':id/profile')
-  @Roles(UserRole.Admin)
+  @Roles(UserRole.ADMIN)
   adminUpdateProfile(@Param('id') id: string, @Body() dto: UpdateProfileDto) {
     return this.usersService.updateProfile(id, dto);
   }
@@ -82,19 +78,19 @@ export class UsersController {
   }
 
   @Patch(':id/role')
-  @Roles(UserRole.Admin)
+  @Roles(UserRole.ADMIN)
   updateRole(@Param('id') id: string, @Body() dto: UpdateRoleDto) {
     return this.usersService.updateRole(id, dto);
   }
 
   @Patch(':id/kyc')
-  @Roles(UserRole.Admin)
+  @Roles(UserRole.ADMIN)
   updateKyc(@Param('id') id: string, @Body() dto: UpdateKycStatusDto) {
     return this.usersService.updateKycStatus(id, dto);
   }
 
   @Patch(':id/block')
-  @Roles(UserRole.Admin)
+  @Roles(UserRole.ADMIN)
   blockUser(@Param('id') id: string, @Body() dto: BlockUserDto) {
     return this.usersService.blockUser(id, dto);
   }

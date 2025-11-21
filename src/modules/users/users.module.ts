@@ -5,8 +5,6 @@ import { UsersController } from './controllers/users.controller';
 import { UsersService } from './users.service';
 import { UsersRepository } from './repositories/users.repository';
 import { UserEventsListener } from './listeners/user-events.listener';
-import { RolesGuard } from './guards/roles.guard';
-import { JwtSiweAuthGuard } from './guards/jwt-siwe.guard';
 
 @Module({
   imports: [
@@ -17,8 +15,6 @@ import { JwtSiweAuthGuard } from './guards/jwt-siwe.guard';
     UsersService,
     UsersRepository,
     UserEventsListener,
-    RolesGuard,
-    JwtSiweAuthGuard,
   ],
   exports: [UsersService, UsersRepository],
 })

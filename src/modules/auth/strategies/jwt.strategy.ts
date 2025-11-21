@@ -25,7 +25,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       return {
         sub: payload.sub,
         email: payload.email,
-        walletAddress: payload.walletAddress,
+        primaryWallet: payload.primaryWallet,
+        walletAddress: payload.walletAddress ?? payload.primaryWallet,
         roles: payload.roles,
       };
     } catch (error) {

@@ -7,9 +7,9 @@ import {
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { ROLES_KEY } from '../decorators/roles.decorator';
-import { UserRole } from '../schemas/user.schema';
+import { UserRole } from '../../../common/enums/role.enum';
 
-type RequestWithUserRole = Request & { user?: { role?: UserRole } };
+type RequestWithUserRole = Request & { user?: { roles?: UserRole[] } };
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -26,9 +26,9 @@ export class RolesGuard implements CanActivate {
     }
 
     const { user } = context.switchToHttp().getRequest<RequestWithUserRole>();
-    const role = user?.role;
+    const roles = user?.roles ?? [];
 
-    if (!role || !requiredRoles.includes(role)) {
+    if (!requiredRoles.some((role) => roles.includes(role))) {
       throw new ForbiddenException(
         `Requires roles: ${requiredRoles.join(', ')}`,
       );
