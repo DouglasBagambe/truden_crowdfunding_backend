@@ -5,8 +5,10 @@ import { APP_GUARD } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
+import { RolesModule } from './modules/roles/roles.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { PermissionsGuard } from './common/guards/permissions.guard';
 import appConfig from './config/app.config';
 
 @Module({
@@ -34,6 +36,7 @@ import appConfig from './config/app.config';
     }),
     EventEmitterModule.forRoot(),
     AuthModule,
+    RolesModule,
     UsersModule,
   ],
   providers: [
@@ -44,6 +47,10 @@ import appConfig from './config/app.config';
     {
       provide: APP_GUARD,
       useClass: RolesGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: PermissionsGuard,
     },
   ],
 })

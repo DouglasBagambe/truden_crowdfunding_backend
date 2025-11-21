@@ -17,9 +17,11 @@ import { UpdateRoleDto } from '../dto/update-role.dto';
 import { UpdateKycStatusDto } from '../dto/update-kyc-status.dto';
 import { BlockUserDto } from '../dto/block-user.dto';
 import { QueryUsersDto } from '../dto/query-users.dto';
-import { Roles } from '../../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { UserRole } from '../../../common/enums/role.enum';
+import { Permissions } from '../../../common/decorators/permissions.decorator';
+import { Permission } from '../../../common/enums/permission.enum';
+import { RoleMetadataOr } from '../../../common/decorators/role-or.decorator';
 
 @ApiTags('users')
 @ApiBearerAuth()
@@ -28,7 +30,8 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Post()
-  @Roles(UserRole.ADMIN)
+  @RoleMetadataOr(UserRole.ADMIN)
+  @Permissions(Permission.MANAGE_USERS)
   createUser(@Body() dto: CreateUserDto) {
     return this.usersService.createUser(dto);
   }
@@ -39,13 +42,15 @@ export class UsersController {
   }
 
   @Get()
-  @Roles(UserRole.ADMIN)
+  @RoleMetadataOr(UserRole.ADMIN)
+  @Permissions(Permission.MANAGE_USERS)
   listUsers(@Query() query: QueryUsersDto) {
     return this.usersService.listUsers(query);
   }
 
   @Get(':id')
-  @Roles(UserRole.ADMIN)
+  @RoleMetadataOr(UserRole.ADMIN)
+  @Permissions(Permission.MANAGE_USERS)
   getUser(@Param('id') id: string) {
     return this.usersService.getUserById(id);
   }
@@ -59,7 +64,8 @@ export class UsersController {
   }
 
   @Patch(':id/profile')
-  @Roles(UserRole.ADMIN)
+  @RoleMetadataOr(UserRole.ADMIN)
+  @Permissions(Permission.MANAGE_USERS)
   adminUpdateProfile(@Param('id') id: string, @Body() dto: UpdateProfileDto) {
     return this.usersService.updateProfile(id, dto);
   }
@@ -78,19 +84,22 @@ export class UsersController {
   }
 
   @Patch(':id/role')
-  @Roles(UserRole.ADMIN)
+  @RoleMetadataOr(UserRole.ADMIN)
+  @Permissions(Permission.MANAGE_USERS)
   updateRole(@Param('id') id: string, @Body() dto: UpdateRoleDto) {
     return this.usersService.updateRole(id, dto);
   }
 
   @Patch(':id/kyc')
-  @Roles(UserRole.ADMIN)
+  @RoleMetadataOr(UserRole.ADMIN)
+  @Permissions(Permission.MANAGE_USERS)
   updateKyc(@Param('id') id: string, @Body() dto: UpdateKycStatusDto) {
     return this.usersService.updateKycStatus(id, dto);
   }
 
   @Patch(':id/block')
-  @Roles(UserRole.ADMIN)
+  @RoleMetadataOr(UserRole.ADMIN)
+  @Permissions(Permission.MANAGE_USERS)
   blockUser(@Param('id') id: string, @Body() dto: BlockUserDto) {
     return this.usersService.blockUser(id, dto);
   }

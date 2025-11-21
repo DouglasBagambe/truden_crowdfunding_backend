@@ -24,6 +24,10 @@ export class RolesGuard implements CanActivate {
       ? [user.role]
       : [];
 
+    if (userRoles.includes(UserRole.SUPERADMIN)) {
+      return true;
+    }
+
     if (!user || userRoles.length === 0) {
       return false;
     }

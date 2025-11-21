@@ -18,15 +18,18 @@ import { LinkWalletDto } from './dto/link-wallet.dto';
 import { JwtPayload } from '../../common/interfaces/user.interface';
 import { UserRole } from '../../common/enums/role.enum';
 import { User, UserDocument } from '../users/schemas/user.schema';
+import { RolesService } from '../roles/roles.service';
 
 @Injectable()
 export class AuthService {
-  private nonceStore: Map<string, { nonce: string; timestamp: number }> = new Map();
+  private nonceStore: Map<string, { nonce: string; timestamp: number }> =
+    new Map();
 
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private rolesService: RolesService,
   ) {}
 
   async register(registerDto: RegisterDto) {
@@ -57,8 +60,12 @@ export class AuthService {
 
     const tokens = await this.generateTokens(user);
 
+    const permissions = await this.rolesService.getPermissionsForRoles(
+      user.roles,
+    );
+
     return {
-      user: this.sanitizeUser(user),
+      user: { ...this.sanitizeUser(user), permissions },
       ...tokens,
     };
   }
@@ -87,10 +94,13 @@ export class AuthService {
       .findByIdAndUpdate(user._id, { lastLoginAt: new Date() })
       .exec();
 
+    const permissions = await this.rolesService.getPermissionsForRoles(
+      user.roles,
+    );
     const tokens = await this.generateTokens(user);
 
     return {
-      user: this.sanitizeUser(user),
+      user: { ...this.sanitizeUser(user), permissions },
       ...tokens,
     };
   }
@@ -142,14 +152,19 @@ export class AuthService {
         .findByIdAndUpdate(user._id, { lastLoginAt: new Date() })
         .exec();
 
+      const permissions = await this.rolesService.getPermissionsForRoles(
+        user.roles,
+      );
       const tokens = await this.generateTokens(user);
 
       return {
-        user: this.sanitizeUser(user),
+        user: { ...this.sanitizeUser(user), permissions },
         ...tokens,
       };
     } catch (error) {
-      throw new UnauthorizedException('SIWE verification failed: ' + error.message);
+      throw new UnauthorizedException(
+        'SIWE verification failed: ' + error.message,
+      );
     }
   }
 
@@ -160,7 +175,10 @@ export class AuthService {
       const siweMessage = new SiweMessage(message);
       const fields = await siweMessage.verify({ signature });
 
-      if (!fields.success || siweMessage.address.toLowerCase() !== walletAddress.toLowerCase()) {
+      if (
+        !fields.success ||
+        siweMessage.address.toLowerCase() !== walletAddress.toLowerCase()
+      ) {
         throw new BadRequestException('Invalid signature or address mismatch');
       }
 
@@ -178,7 +196,9 @@ export class AuthService {
         })
         .exec();
       if (existingUser && (existingUser._id as any).toString() !== userId) {
-        throw new BadRequestException('Wallet already linked to another account');
+        throw new BadRequestException(
+          'Wallet already linked to another account',
+        );
       }
 
       const updatedUser = await this.userModel
@@ -196,8 +216,11 @@ export class AuthService {
         throw new BadRequestException('User not found');
       }
 
+      const permissions = await this.rolesService.getPermissionsForRoles(
+        updatedUser.roles,
+      );
       return {
-        user: this.sanitizeUser(updatedUser),
+        user: { ...this.sanitizeUser(updatedUser), permissions },
         message: 'Wallet linked successfully',
       };
     } catch (error) {
@@ -210,7 +233,10 @@ export class AuthService {
     if (!user || !user.isActive || user.isBlocked) {
       throw new UnauthorizedException('User not found or inactive');
     }
-    return this.sanitizeUser(user);
+    const permissions = await this.rolesService.getPermissionsForRoles(
+      user.roles,
+    );
+    return { ...this.sanitizeUser(user), permissions };
   }
 
   async refreshToken(refreshToken: string) {
@@ -225,7 +251,10 @@ export class AuthService {
       }
 
       const tokens = await this.generateTokens(user);
-      return tokens;
+      const permissions = await this.rolesService.getPermissionsForRoles(
+        user.roles,
+      );
+      return { ...tokens, permissions };
     } catch (error) {
       throw new UnauthorizedException('Invalid refresh token');
     }
@@ -233,23 +262,32 @@ export class AuthService {
 
   private async generateTokens(user: UserDocument) {
     const roles = Array.isArray(user.roles) ? user.roles : [];
+    const permissions = await this.rolesService.getPermissionsForRoles(roles);
     const payload: JwtPayload = {
       sub: (user._id as any).toString(),
       email: user.email,
       primaryWallet: user.primaryWallet,
       walletAddress: user.primaryWallet,
       roles,
+      permissions,
     };
 
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(payload as any, {
-        secret: this.configService.get<string>('JWT_SECRET'),
-        expiresIn: this.configService.get<string>('JWT_EXPIRY') || '15m',
-      } as any),
-      this.jwtService.signAsync(payload as any, {
-        secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
-        expiresIn: this.configService.get<string>('REFRESH_TOKEN_EXPIRY') || '7d',
-      } as any),
+      this.jwtService.signAsync(
+        payload as any,
+        {
+          secret: this.configService.get<string>('JWT_SECRET'),
+          expiresIn: this.configService.get<string>('JWT_EXPIRY') || '15m',
+        } as any,
+      ),
+      this.jwtService.signAsync(
+        payload as any,
+        {
+          secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
+          expiresIn:
+            this.configService.get<string>('REFRESH_TOKEN_EXPIRY') || '7d',
+        } as any,
+      ),
     ]);
 
     return {
@@ -280,9 +318,10 @@ export class AuthService {
     const userObj = user.toObject();
     const { password, nonce, __v, ...sanitized } = userObj;
     const primaryWallet = userObj.primaryWallet;
+    const roles = Array.isArray(userObj.roles) ? userObj.roles : [];
     return {
       ...sanitized,
-      roles: Array.isArray(userObj.roles) ? userObj.roles : [],
+      roles,
       walletAddress: primaryWallet,
       id: (user._id as any).toString(),
     };

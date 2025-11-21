@@ -77,6 +77,4 @@ export class User {
 
 export const UserSchema = SchemaFactory.createForClass(User);
 
-UserSchema.index({ email: 1 }, { unique: true, sparse: true });
-UserSchema.index({ primaryWallet: 1 }, { unique: true, sparse: true });
 UserSchema.index({ roles: 1, kycStatus: 1 });

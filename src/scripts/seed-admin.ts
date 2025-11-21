@@ -27,7 +27,11 @@ async function seedAdmin() {
   if (existing) {
     existing.password = hashedPassword;
     existing.roles = Array.from(
-      new Set([...(existing.roles || []), UserRole.ADMIN]),
+      new Set([
+        ...(existing.roles || []),
+        UserRole.ADMIN,
+        UserRole.SUPERADMIN,
+      ]),
     );
     existing.profile = {
       ...existing.profile,
@@ -45,7 +49,7 @@ async function seedAdmin() {
     await UserModel.create({
       email,
       password: hashedPassword,
-      roles: [UserRole.ADMIN],
+      roles: [UserRole.SUPERADMIN, UserRole.ADMIN],
       isActive: true,
       isBlocked: false,
       profile: {

@@ -1,4 +1,5 @@
 import { UserRole, KYCStatus } from '../enums/role.enum';
+import { Permission } from '../enums/permission.enum';
 
 export interface IUser {
   id: string;
@@ -7,6 +8,7 @@ export interface IUser {
   primaryWallet?: string;
   linkedWallets?: string[];
   roles: UserRole[];
+  permissions?: Permission[];
   kycStatus: KYCStatus;
   nonce?: string;
   isActive: boolean;
@@ -30,5 +32,6 @@ export interface JwtPayload {
   walletAddress?: string;
   email?: string;
   roles: UserRole[];
+  permissions?: Permission[];
   [key: string]: any;
 }
