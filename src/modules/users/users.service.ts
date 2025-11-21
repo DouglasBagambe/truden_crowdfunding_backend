@@ -69,11 +69,11 @@ export class UsersService {
 
   async listUsers(query: QueryUsersDto) {
     const filter = buildUserQuery(query);
-    const [items, total] = await Promise.all([
+    const [users, total] = await Promise.all([
       this.usersRepository.query(filter, query.limit, query.skip),
       this.usersRepository.count(filter),
     ]);
-    return { items, total };
+    return { users, total };
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {
