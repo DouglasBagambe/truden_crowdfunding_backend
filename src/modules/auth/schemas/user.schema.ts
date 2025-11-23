@@ -16,16 +16,16 @@ export class User {
   walletAddress?: string;
 
   @Prop({ type: [String], enum: UserRole, default: [UserRole.INVESTOR] })
-  role: UserRole[];
+  role!: UserRole[];
 
   @Prop({ type: String, enum: KYCStatus, default: KYCStatus.NOT_VERIFIED })
-  kycStatus: KYCStatus;
+  kycStatus!: KYCStatus;
 
   @Prop({ required: false, select: false })
   nonce?: string;
 
   @Prop({ default: true })
-  isActive: boolean;
+  isActive!: boolean;
 
   @Prop({ type: Date })
   lastLogin?: Date;
@@ -39,7 +39,7 @@ export class User {
     },
     default: {},
   })
-  profile: {
+  profile!: {
     firstName?: string;
     lastName?: string;
     avatar?: string;

@@ -43,7 +43,7 @@ export class CreateUserDto {
   })
   @IsString()
   @Transform(({ value }) => toLowerCase(value))
-  primaryWallet: string;
+  primaryWallet!: string;
 
   @ApiProperty({
     description: 'Display name visible on the platform',
@@ -52,11 +52,11 @@ export class CreateUserDto {
   })
   @IsString()
   @Length(2, 64)
-  displayName: string;
+  displayName!: string;
 
   @ApiProperty({ description: 'Contact email for notifications' })
   @IsEmail()
-  email: string;
+  email!: string;
 
   @ApiPropertyOptional({ description: 'Avatar URL', format: 'uri' })
   @IsOptional()

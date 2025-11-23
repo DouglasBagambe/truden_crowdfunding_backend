@@ -19,9 +19,28 @@ import { JwtPayload } from '../../common/interfaces/user.interface';
 import { UserRole } from '../../common/enums/role.enum';
 import { User, UserDocument } from './schemas/user.schema';
 
+interface SanitizedUserProfile {
+  firstName?: string;
+  lastName?: string;
+  avatar?: string;
+  bio?: string;
+}
+
+interface SanitizedUser {
+  id: string;
+  email?: string;
+  walletAddress?: string;
+  role: UserRole[];
+  isActive: boolean;
+  lastLogin?: Date;
+  profile: SanitizedUserProfile;
+  kycStatus: User['kycStatus'];
+}
+
 @Injectable()
 export class AuthService {
-  private nonceStore: Map<string, { nonce: string; timestamp: number }> = new Map();
+  private nonceStore: Map<string, { nonce: string; timestamp: number }> =
+    new Map();
 
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
@@ -32,7 +51,9 @@ export class AuthService {
   async register(registerDto: RegisterDto) {
     const { email, password, firstName, lastName, role } = registerDto;
 
-    const existingUser = await this.userModel.findOne({ email: email.toLowerCase() }).exec();
+    const existingUser = await this.userModel
+      .findOne({ email: email.toLowerCase() })
+      .exec();
     if (existingUser) {
       throw new ConflictException('User with this email already exists');
     }
@@ -60,7 +81,10 @@ export class AuthService {
   async login(loginDto: LoginDto) {
     const { email, password } = loginDto;
 
-    const user = await this.userModel.findOne({ email: email.toLowerCase() }).select('+password').exec();
+    const user = await this.userModel
+      .findOne({ email: email.toLowerCase() })
+      .select('+password')
+      .exec();
     if (!user || !user.password) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -74,7 +98,9 @@ export class AuthService {
       throw new UnauthorizedException('Account is deactivated');
     }
 
-    await this.userModel.findByIdAndUpdate(user._id, { lastLogin: new Date() }).exec();
+    await this.userModel
+      .findByIdAndUpdate(user._id, { lastLogin: new Date() })
+      .exec();
 
     const tokens = await this.generateTokens(user);
 
@@ -85,6 +111,7 @@ export class AuthService {
   }
 
   async generateSiweNonce(address: string): Promise<string> {
+    await Promise.resolve();
     const nonce = randomBytes(16).toString('hex');
     this.nonceStore.set(address.toLowerCase(), {
       nonce,
@@ -112,7 +139,9 @@ export class AuthService {
         throw new UnauthorizedException('Invalid or expired nonce');
       }
 
-      let user = await this.userModel.findOne({ walletAddress: walletAddress.toLowerCase() }).exec();
+      let user = await this.userModel
+        .findOne({ walletAddress: walletAddress.toLowerCase() })
+        .exec();
 
       if (!user) {
         user = await this.userModel.create({
@@ -121,7 +150,9 @@ export class AuthService {
         });
       }
 
-      await this.userModel.findByIdAndUpdate(user._id, { lastLogin: new Date() }).exec();
+      await this.userModel
+        .findByIdAndUpdate(user._id, { lastLogin: new Date() })
+        .exec();
 
       const tokens = await this.generateTokens(user);
 
@@ -129,8 +160,9 @@ export class AuthService {
         user: this.sanitizeUser(user),
         ...tokens,
       };
-    } catch (error) {
-      throw new UnauthorizedException('SIWE verification failed: ' + error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      throw new UnauthorizedException('SIWE verification failed: ' + message);
     }
   }
 
@@ -141,20 +173,29 @@ export class AuthService {
       const siweMessage = new SiweMessage(message);
       const fields = await siweMessage.verify({ signature });
 
-      if (!fields.success || siweMessage.address.toLowerCase() !== walletAddress.toLowerCase()) {
+      if (
+        !fields.success ||
+        siweMessage.address.toLowerCase() !== walletAddress.toLowerCase()
+      ) {
         throw new BadRequestException('Invalid signature or address mismatch');
       }
 
-      const existingUser = await this.userModel.findOne({ walletAddress: walletAddress.toLowerCase() }).exec();
-      if (existingUser && (existingUser._id as any).toString() !== userId) {
-        throw new BadRequestException('Wallet already linked to another account');
+      const existingUser = await this.userModel
+        .findOne({ walletAddress: walletAddress.toLowerCase() })
+        .exec();
+      if (existingUser && String(existingUser._id) !== userId) {
+        throw new BadRequestException(
+          'Wallet already linked to another account',
+        );
       }
 
-      const updatedUser = await this.userModel.findByIdAndUpdate(
-        userId,
-        { walletAddress: walletAddress.toLowerCase() },
-        { new: true }
-      ).exec();
+      const updatedUser = await this.userModel
+        .findByIdAndUpdate(
+          userId,
+          { walletAddress: walletAddress.toLowerCase() },
+          { new: true },
+        )
+        .exec();
 
       if (!updatedUser) {
         throw new BadRequestException('User not found');
@@ -164,8 +205,9 @@ export class AuthService {
         user: this.sanitizeUser(updatedUser),
         message: 'Wallet linked successfully',
       };
-    } catch (error) {
-      throw new BadRequestException('Failed to link wallet: ' + error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      throw new BadRequestException('Failed to link wallet: ' + message);
     }
   }
 
@@ -179,7 +221,7 @@ export class AuthService {
 
   async refreshToken(refreshToken: string) {
     try {
-      const payload = this.jwtService.verify(refreshToken, {
+      const payload = this.jwtService.verify<JwtPayload>(refreshToken, {
         secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
       });
 
@@ -190,28 +232,29 @@ export class AuthService {
 
       const tokens = await this.generateTokens(user);
       return tokens;
-    } catch (error) {
+    } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }
   }
 
   private async generateTokens(user: UserDocument) {
     const payload: JwtPayload = {
-      sub: (user._id as any).toString(),
+      sub: String(user._id),
       email: user.email,
       walletAddress: user.walletAddress,
       roles: user.role,
     };
 
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(payload as any, {
+      this.jwtService.signAsync(payload, {
         secret: this.configService.get<string>('JWT_SECRET'),
         expiresIn: this.configService.get<string>('JWT_EXPIRY') || '15m',
-      } as any),
-      this.jwtService.signAsync(payload as any, {
+      }),
+      this.jwtService.signAsync(payload, {
         secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
-        expiresIn: this.configService.get<string>('REFRESH_TOKEN_EXPIRY') || '7d',
-      } as any),
+        expiresIn:
+          this.configService.get<string>('REFRESH_TOKEN_EXPIRY') || '7d',
+      }),
     ]);
 
     return {
@@ -238,12 +281,21 @@ export class AuthService {
     return isValid;
   }
 
-  private sanitizeUser(user: UserDocument) {
-    const userObj = user.toObject();
-    const { password, nonce, __v, ...sanitized } = userObj;
+  private sanitizeUser(user: UserDocument): SanitizedUser {
     return {
-      ...sanitized,
-      id: (user._id as any).toString(),
+      id: String(user._id),
+      email: user.email ?? undefined,
+      walletAddress: user.walletAddress ?? undefined,
+      role: user.role,
+      isActive: user.isActive,
+      lastLogin: user.lastLogin ?? undefined,
+      profile: {
+        firstName: user.profile?.firstName,
+        lastName: user.profile?.lastName,
+        avatar: user.profile?.avatar,
+        bio: user.profile?.bio,
+      },
+      kycStatus: user.kycStatus,
     };
   }
 }

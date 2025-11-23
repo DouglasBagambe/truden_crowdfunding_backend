@@ -16,10 +16,10 @@ export enum KycStatus {
 
 export class UserProfile {
   @Prop({ required: true, trim: true })
-  displayName: string;
+  displayName!: string;
 
   @Prop({ required: true, lowercase: true, trim: true })
-  email: string;
+  email!: string;
 
   @Prop({ trim: true })
   avatarUrl?: string;
@@ -34,22 +34,22 @@ export class UserProfile {
 })
 export class User {
   @Prop({ required: true, unique: true, lowercase: true, trim: true })
-  primaryWallet: string;
+  primaryWallet!: string;
 
   @Prop({ type: [String], default: [], lowercase: true })
-  linkedWallets: string[];
+  linkedWallets!: string[];
 
   @Prop({ enum: UserRole, default: UserRole.User })
-  role: UserRole;
+  role!: UserRole;
 
   @Prop({ enum: KycStatus, default: KycStatus.None })
-  kycStatus: KycStatus;
+  kycStatus!: KycStatus;
 
   @Prop({ type: UserProfile, required: true })
-  profile: UserProfile;
+  profile!: UserProfile;
 
   @Prop({ default: false })
-  isBlocked: boolean;
+  isBlocked!: boolean;
 
   @Prop({ type: Date })
   lastLoginAt?: Date;

@@ -1,9 +1,18 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy } from 'passport-jwt';
+import { Strategy } from 'passport-jwt';
+import type { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { JwtPayload } from '../../../common/interfaces/user.interface';
 import { AuthService } from '../auth.service';
+
+function extractJwtFromAuthHeader(req: Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return null;
+  const [scheme, token] = authHeader.split(' ');
+  if (scheme !== 'Bearer' || !token) return null;
+  return token;
+}
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -12,7 +21,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private authService: AuthService,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: extractJwtFromAuthHeader,
       ignoreExpiration: false,
       secretOrKey:
         configService.get<string>('JWT_SECRET') || 'default-secret-key',
@@ -28,7 +37,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         walletAddress: payload.walletAddress,
         roles: payload.roles,
       };
-    } catch (error) {
+    } catch {
       throw new UnauthorizedException('User not found or inactive');
     }
   }
