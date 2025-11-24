@@ -8,7 +8,7 @@ export const buildUserQuery = (
   const filter: FilterQuery<UserDocument> = {};
 
   if (params.role) {
-    filter.role = params.role;
+    filter.roles = params.role;
   }
 
   if (typeof params.isBlocked === 'boolean') {
@@ -24,7 +24,7 @@ export const buildUserQuery = (
     filter.$or = [
       { primaryWallet: regex },
       { linkedWallets: regex },
-      { 'profile.email': regex },
+      { email: regex },
       { 'profile.displayName': regex },
     ];
   }

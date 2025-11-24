@@ -1,12 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, UpdateQuery } from 'mongoose';
-import {
-  KycStatus,
-  User,
-  UserDocument,
-  UserRole,
-} from '../schemas/user.schema';
+import { KYCStatus, UserRole } from '../../../common/enums/role.enum';
+import { User, UserDocument } from '../schemas/user.schema';
 
 @Injectable()
 export class UsersRepository {
@@ -21,12 +17,6 @@ export class UsersRepository {
 
   findById(id: string): Promise<UserDocument | null> {
     return this.userModel.findById(id).exec();
-  }
-
-  findByPrimaryWallet(primaryWallet: string): Promise<UserDocument | null> {
-    return this.userModel
-      .findOne({ primaryWallet: primaryWallet.toLowerCase() })
-      .exec();
   }
 
   findByWallet(wallet: string): Promise<UserDocument | null> {
@@ -87,13 +77,13 @@ export class UsersRepository {
 
   updateRole(userId: string, role: UserRole): Promise<UserDocument | null> {
     return this.userModel
-      .findByIdAndUpdate(userId, { role }, { new: true })
+      .findByIdAndUpdate(userId, { roles: [role] }, { new: true })
       .exec();
   }
 
   updateKycStatus(
     userId: string,
-    kycStatus: KycStatus,
+    kycStatus: KYCStatus,
   ): Promise<UserDocument | null> {
     return this.userModel
       .findByIdAndUpdate(userId, { kycStatus }, { new: true })

@@ -9,7 +9,7 @@ import {
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { BadRequestException } from '@nestjs/common';
-import { KycStatus, UserRole } from '../schemas/user.schema';
+import { KYCStatus, UserRole } from '../../../common/enums/role.enum';
 import {
   ApiProperty,
   ApiPropertyOptional,
@@ -68,15 +68,15 @@ export class CreateUserDto {
   @IsString()
   country?: string;
 
-  @ApiPropertyOptional({ enum: UserRole, default: UserRole.User })
+  @ApiPropertyOptional({ enum: UserRole, default: UserRole.INVESTOR })
   @IsOptional()
   @IsEnum(UserRole)
   role?: UserRole;
 
-  @ApiPropertyOptional({ enum: KycStatus, default: KycStatus.None })
+  @ApiPropertyOptional({ enum: KYCStatus, default: KYCStatus.NOT_VERIFIED })
   @IsOptional()
-  @IsEnum(KycStatus)
-  kycStatus?: KycStatus;
+  @IsEnum(KYCStatus)
+  kycStatus?: KYCStatus;
 
   @ApiPropertyOptional({
     description: 'Additional wallets controlled by the user',

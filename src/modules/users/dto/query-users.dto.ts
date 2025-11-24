@@ -9,7 +9,7 @@ import {
   Min,
 } from 'class-validator';
 import { BadRequestException } from '@nestjs/common';
-import { KycStatus, UserRole } from '../schemas/user.schema';
+import { KYCStatus, UserRole } from '../../../common/enums/role.enum';
 import { ApiPropertyOptional } from '../../../common/swagger.decorators';
 
 const toBoolean = (value: unknown): boolean | undefined => {
@@ -40,10 +40,10 @@ export class QueryUsersDto {
   @IsEnum(UserRole)
   role?: UserRole;
 
-  @ApiPropertyOptional({ enum: KycStatus })
+  @ApiPropertyOptional({ enum: KYCStatus })
   @IsOptional()
-  @IsEnum(KycStatus)
-  kycStatus?: KycStatus;
+  @IsEnum(KYCStatus)
+  kycStatus?: KYCStatus;
 
   @ApiPropertyOptional()
   @IsOptional()
