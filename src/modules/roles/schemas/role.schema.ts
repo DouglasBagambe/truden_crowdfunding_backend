@@ -13,23 +13,23 @@ export class Role {
     type: String,
     enum: UserRole,
   })
-  name: UserRole;
+  name!: UserRole;
 
   @Prop({
     type: [String],
     enum: Object.values(Permission),
     default: [],
   })
-  permissions: Permission[];
+  permissions!: Permission[];
 
   @Prop({ default: '' })
   description?: string;
 
   @Prop({ default: false })
-  isSystem: boolean;
+  isSystem!: boolean;
 
   @Prop({ default: true })
-  isActive: boolean;
+  isActive!: boolean;
 }
 
 export type RoleDocument = HydratedDocument<Role>;

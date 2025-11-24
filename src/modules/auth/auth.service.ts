@@ -162,9 +162,8 @@ export class AuthService {
         ...tokens,
       };
     } catch (error) {
-      throw new UnauthorizedException(
-        'SIWE verification failed: ' + error.message,
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      throw new UnauthorizedException('SIWE verification failed: ' + message);
     }
   }
 
@@ -224,7 +223,8 @@ export class AuthService {
         message: 'Wallet linked successfully',
       };
     } catch (error) {
-      throw new BadRequestException('Failed to link wallet: ' + error.message);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException('Failed to link wallet: ' + message);
     }
   }
 

@@ -18,5 +18,5 @@ export class LinkWalletDto {
   @ApiProperty({ description: 'Wallet address to link/unlink' })
   @IsString()
   @Transform(({ value }) => normalizeWallet(value))
-  wallet: string;
+  wallet!: string;
 }

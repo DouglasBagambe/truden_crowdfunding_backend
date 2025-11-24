@@ -51,19 +51,19 @@ export class User {
   primaryWallet?: string;
 
   @Prop({ type: [String], default: [], lowercase: true })
-  linkedWallets: string[];
+  linkedWallets!: string[];
 
   @Prop({ type: [String], enum: UserRole, default: [UserRole.INVESTOR] })
-  roles: UserRole[];
+  roles!: UserRole[];
 
   @Prop({ type: String, enum: KYCStatus, default: KYCStatus.NOT_VERIFIED })
-  kycStatus: KYCStatus;
+  kycStatus!: KYCStatus;
 
   @Prop({ default: false })
-  isBlocked: boolean;
+  isBlocked!: boolean;
 
   @Prop({ default: true })
-  isActive: boolean;
+  isActive!: boolean;
 
   @Prop({ type: Date })
   lastLoginAt?: Date;
@@ -72,7 +72,7 @@ export class User {
   nonce?: string;
 
   @Prop({ type: UserProfile, default: {} })
-  profile: UserProfile;
+  profile!: UserProfile;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

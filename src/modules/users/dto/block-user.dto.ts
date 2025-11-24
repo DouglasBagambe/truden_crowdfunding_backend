@@ -4,7 +4,7 @@ import { ApiProperty } from '../../../common/swagger.decorators';
 export class BlockUserDto {
   @ApiProperty({ description: 'Whether the user should be blocked' })
   @IsBoolean()
-  isBlocked: boolean;
+  isBlocked!: boolean;
 
   @ApiProperty({
     description: 'Optional reason for moderation',

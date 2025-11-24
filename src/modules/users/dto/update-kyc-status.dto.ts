@@ -5,5 +5,5 @@ import { ApiProperty } from '../../../common/swagger.decorators';
 export class UpdateKycStatusDto {
   @ApiProperty({ enum: KYCStatus })
   @IsEnum(KYCStatus)
-  kycStatus: KYCStatus;
+  kycStatus!: KYCStatus;
 }
