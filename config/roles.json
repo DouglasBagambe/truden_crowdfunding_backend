@@ -1,0 +1,38 @@
+[
+  {
+    "name": "SUPERADMIN",
+    "description": "Full platform access",
+    "permissions": ["MANAGE_USERS", "REVIEW_PROJECTS", "APPROVE_PROJECTS", "MANAGE_PROJECTS", "MANAGE_TREASURY", "SUBMIT_PROJECT", "EDIT_OWN_PROJECT", "INVEST", "MANAGE_ESCROW"],
+    "isSystem": true
+  },
+  {
+    "name": "ADMIN",
+    "description": "Operational admin with project and user management",
+    "permissions": ["MANAGE_USERS", "REVIEW_PROJECTS", "APPROVE_PROJECTS", "MANAGE_PROJECTS", "MANAGE_ESCROW"],
+    "isSystem": true
+  },
+  {
+    "name": "INNOVATOR",
+    "description": "Project owner who can submit and manage own projects",
+    "permissions": ["SUBMIT_PROJECT", "EDIT_OWN_PROJECT"],
+    "isSystem": true
+  },
+  {
+    "name": "APPROVER",
+    "description": "Project assessment and approval lead",
+    "permissions": ["REVIEW_PROJECTS", "APPROVE_PROJECTS"],
+    "isSystem": true
+  },
+  {
+    "name": "INVESTOR",
+    "description": "Can invest in approved projects",
+    "permissions": ["INVEST"],
+    "isSystem": true
+  },
+  {
+    "name": "TREASURY",
+    "description": "Treasury operations and escrow management",
+    "permissions": ["MANAGE_TREASURY", "MANAGE_ESCROW"],
+    "isSystem": true
+  }
+]

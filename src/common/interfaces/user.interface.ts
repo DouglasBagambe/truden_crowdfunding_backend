@@ -1,29 +1,37 @@
 import { UserRole, KYCStatus } from '../enums/role.enum';
+import { Permission } from '../enums/permission.enum';
 
 export interface IUser {
   id: string;
   email?: string;
   password?: string;
-  walletAddress?: string;
-  role: UserRole[];
+  primaryWallet?: string;
+  linkedWallets?: string[];
+  roles: UserRole[];
+  permissions?: Permission[];
   kycStatus: KYCStatus;
   nonce?: string;
   isActive: boolean;
+  isBlocked: boolean;
   createdAt: Date;
   updatedAt: Date;
-  lastLogin?: Date;
+  lastLoginAt?: Date;
   profile: {
+    displayName?: string;
     firstName?: string;
     lastName?: string;
-    avatar?: string;
+    avatarUrl?: string;
     bio?: string;
+    country?: string;
   };
 }
 
 export interface JwtPayload {
   sub: string;
-  email?: string;
+  primaryWallet?: string;
   walletAddress?: string;
+  email?: string;
   roles: UserRole[];
+  permissions?: Permission[];
   [key: string]: any;
 }

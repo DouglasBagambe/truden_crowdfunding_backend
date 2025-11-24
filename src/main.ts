@@ -1,14 +1,19 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import appConfig from './config/app.config';
+
+type AppConfig = ReturnType<typeof appConfig>;
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  const configService = app.get(ConfigService);
+  const configService = app.get<ConfigService<AppConfig>>(ConfigService);
 
+  const corsConfig = configService.get<AppConfig['cors']>('cors');
+  const corsOrigin = corsConfig?.origin ?? ['http://localhost:3000'];
   app.enableCors({
-    origin: configService.get<string>('cors.origin'),
+    origin: corsOrigin,
     credentials: true,
   });
 

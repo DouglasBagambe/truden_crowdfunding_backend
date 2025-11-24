@@ -2,11 +2,11 @@ import { IsString, IsEthereumAddress } from 'class-validator';
 
 export class LinkWalletDto {
   @IsEthereumAddress()
-  walletAddress: string;
+  walletAddress!: string;
 
   @IsString()
-  message: string;
+  message!: string;
 
   @IsString()
-  signature: string;
+  signature!: string;
 }

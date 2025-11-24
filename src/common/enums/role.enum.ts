@@ -1,9 +1,10 @@
 export enum UserRole {
+  SUPERADMIN = 'SUPERADMIN',
   ADMIN = 'ADMIN',
   INNOVATOR = 'INNOVATOR',
+  APPROVER = 'APPROVER',
   INVESTOR = 'INVESTOR',
-  VALIDATOR = 'VALIDATOR',
-  ORACLE = 'ORACLE',
+  TREASURY = 'TREASURY',
 }
 
 export enum KYCStatus {

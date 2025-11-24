@@ -17,22 +17,27 @@ import { SiweVerifyDto } from './dto/siwe.dto';
 import { LinkWalletDto } from './dto/link-wallet.dto';
 import { JwtPayload } from '../../common/interfaces/user.interface';
 import { UserRole } from '../../common/enums/role.enum';
-import { User, UserDocument } from './schemas/user.schema';
+import { User, UserDocument } from '../users/schemas/user.schema';
+import { RolesService } from '../roles/roles.service';
 
 @Injectable()
 export class AuthService {
-  private nonceStore: Map<string, { nonce: string; timestamp: number }> = new Map();
+  private nonceStore: Map<string, { nonce: string; timestamp: number }> =
+    new Map();
 
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private rolesService: RolesService,
   ) {}
 
   async register(registerDto: RegisterDto) {
     const { email, password, firstName, lastName, role } = registerDto;
 
-    const existingUser = await this.userModel.findOne({ email: email.toLowerCase() }).exec();
+    const existingUser = await this.userModel
+      .findOne({ email: email.toLowerCase() })
+      .exec();
     if (existingUser) {
       throw new ConflictException('User with this email already exists');
     }
@@ -42,17 +47,25 @@ export class AuthService {
     const user = await this.userModel.create({
       email: email.toLowerCase(),
       password: hashedPassword,
-      role: role ? [role] : [UserRole.INVESTOR],
+      roles: role ? [role] : [UserRole.INVESTOR],
+      isActive: true,
+      isBlocked: false,
       profile: {
         firstName,
         lastName,
+        displayName:
+          [firstName, lastName].filter(Boolean).join(' ').trim() || email,
       },
     });
 
     const tokens = await this.generateTokens(user);
 
+    const permissions = await this.rolesService.getPermissionsForRoles(
+      user.roles,
+    );
+
     return {
-      user: this.sanitizeUser(user),
+      user: { ...this.sanitizeUser(user), permissions },
       ...tokens,
     };
   }
@@ -60,7 +73,10 @@ export class AuthService {
   async login(loginDto: LoginDto) {
     const { email, password } = loginDto;
 
-    const user = await this.userModel.findOne({ email: email.toLowerCase() }).select('+password').exec();
+    const user = await this.userModel
+      .findOne({ email: email.toLowerCase() })
+      .select('+password')
+      .exec();
     if (!user || !user.password) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -70,16 +86,21 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    if (!user.isActive) {
+    if (!user.isActive || user.isBlocked) {
       throw new UnauthorizedException('Account is deactivated');
     }
 
-    await this.userModel.findByIdAndUpdate(user._id, { lastLogin: new Date() }).exec();
+    await this.userModel
+      .findByIdAndUpdate(user._id, { lastLoginAt: new Date() })
+      .exec();
 
+    const permissions = await this.rolesService.getPermissionsForRoles(
+      user.roles,
+    );
     const tokens = await this.generateTokens(user);
 
     return {
-      user: this.sanitizeUser(user),
+      user: { ...this.sanitizeUser(user), permissions },
       ...tokens,
     };
   }
@@ -112,25 +133,37 @@ export class AuthService {
         throw new UnauthorizedException('Invalid or expired nonce');
       }
 
-      let user = await this.userModel.findOne({ walletAddress: walletAddress.toLowerCase() }).exec();
+      let user = await this.userModel
+        .findOne({ primaryWallet: walletAddress.toLowerCase() })
+        .exec();
 
       if (!user) {
         user = await this.userModel.create({
-          walletAddress: walletAddress.toLowerCase(),
-          role: [UserRole.INVESTOR],
+          primaryWallet: walletAddress.toLowerCase(),
+          roles: [UserRole.INVESTOR],
+          isActive: true,
+          isBlocked: false,
         });
+      } else if (!user.isActive || user.isBlocked) {
+        throw new UnauthorizedException('Account is deactivated');
       }
 
-      await this.userModel.findByIdAndUpdate(user._id, { lastLogin: new Date() }).exec();
+      await this.userModel
+        .findByIdAndUpdate(user._id, { lastLoginAt: new Date() })
+        .exec();
 
+      const permissions = await this.rolesService.getPermissionsForRoles(
+        user.roles,
+      );
       const tokens = await this.generateTokens(user);
 
       return {
-        user: this.sanitizeUser(user),
+        user: { ...this.sanitizeUser(user), permissions },
         ...tokens,
       };
     } catch (error) {
-      throw new UnauthorizedException('SIWE verification failed: ' + error.message);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new UnauthorizedException('SIWE verification failed: ' + message);
     }
   }
 
@@ -141,40 +174,69 @@ export class AuthService {
       const siweMessage = new SiweMessage(message);
       const fields = await siweMessage.verify({ signature });
 
-      if (!fields.success || siweMessage.address.toLowerCase() !== walletAddress.toLowerCase()) {
+      if (
+        !fields.success ||
+        siweMessage.address.toLowerCase() !== walletAddress.toLowerCase()
+      ) {
         throw new BadRequestException('Invalid signature or address mismatch');
       }
 
-      const existingUser = await this.userModel.findOne({ walletAddress: walletAddress.toLowerCase() }).exec();
-      if (existingUser && (existingUser._id as any).toString() !== userId) {
-        throw new BadRequestException('Wallet already linked to another account');
+      const targetUser = await this.userModel.findById(userId).exec();
+      if (!targetUser || !targetUser.isActive || targetUser.isBlocked) {
+        throw new BadRequestException('User not found or inactive');
       }
 
-      const updatedUser = await this.userModel.findByIdAndUpdate(
-        userId,
-        { walletAddress: walletAddress.toLowerCase() },
-        { new: true }
-      ).exec();
+      const existingUser = await this.userModel
+        .findOne({
+          $or: [
+            { primaryWallet: walletAddress.toLowerCase() },
+            { linkedWallets: walletAddress.toLowerCase() },
+          ],
+        })
+        .exec();
+      if (existingUser && (existingUser._id as any).toString() !== userId) {
+        throw new BadRequestException(
+          'Wallet already linked to another account',
+        );
+      }
+
+      const updatedUser = await this.userModel
+        .findByIdAndUpdate(
+          userId,
+          {
+            primaryWallet: walletAddress.toLowerCase(),
+            $addToSet: { linkedWallets: walletAddress.toLowerCase() },
+          },
+          { new: true },
+        )
+        .exec();
 
       if (!updatedUser) {
         throw new BadRequestException('User not found');
       }
 
+      const permissions = await this.rolesService.getPermissionsForRoles(
+        updatedUser.roles,
+      );
       return {
-        user: this.sanitizeUser(updatedUser),
+        user: { ...this.sanitizeUser(updatedUser), permissions },
         message: 'Wallet linked successfully',
       };
     } catch (error) {
-      throw new BadRequestException('Failed to link wallet: ' + error.message);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException('Failed to link wallet: ' + message);
     }
   }
 
   async getProfile(userId: string) {
     const user = await this.userModel.findById(userId).exec();
-    if (!user) {
-      throw new UnauthorizedException('User not found');
+    if (!user || !user.isActive || user.isBlocked) {
+      throw new UnauthorizedException('User not found or inactive');
     }
-    return this.sanitizeUser(user);
+    const permissions = await this.rolesService.getPermissionsForRoles(
+      user.roles,
+    );
+    return { ...this.sanitizeUser(user), permissions };
   }
 
   async refreshToken(refreshToken: string) {
@@ -184,34 +246,48 @@ export class AuthService {
       });
 
       const user = await this.userModel.findById(payload.sub).exec();
-      if (!user || !user.isActive) {
+      if (!user || !user.isActive || user.isBlocked) {
         throw new UnauthorizedException('User not found or inactive');
       }
 
       const tokens = await this.generateTokens(user);
-      return tokens;
+      const permissions = await this.rolesService.getPermissionsForRoles(
+        user.roles,
+      );
+      return { ...tokens, permissions };
     } catch (error) {
       throw new UnauthorizedException('Invalid refresh token');
     }
   }
 
   private async generateTokens(user: UserDocument) {
+    const roles = Array.isArray(user.roles) ? user.roles : [];
+    const permissions = await this.rolesService.getPermissionsForRoles(roles);
     const payload: JwtPayload = {
       sub: (user._id as any).toString(),
       email: user.email,
-      walletAddress: user.walletAddress,
-      roles: user.role,
+      primaryWallet: user.primaryWallet,
+      walletAddress: user.primaryWallet,
+      roles,
+      permissions,
     };
 
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(payload as any, {
-        secret: this.configService.get<string>('JWT_SECRET'),
-        expiresIn: this.configService.get<string>('JWT_EXPIRY') || '15m',
-      } as any),
-      this.jwtService.signAsync(payload as any, {
-        secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
-        expiresIn: this.configService.get<string>('REFRESH_TOKEN_EXPIRY') || '7d',
-      } as any),
+      this.jwtService.signAsync(
+        payload as any,
+        {
+          secret: this.configService.get<string>('JWT_SECRET'),
+          expiresIn: this.configService.get<string>('JWT_EXPIRY') || '15m',
+        } as any,
+      ),
+      this.jwtService.signAsync(
+        payload as any,
+        {
+          secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
+          expiresIn:
+            this.configService.get<string>('REFRESH_TOKEN_EXPIRY') || '7d',
+        } as any,
+      ),
     ]);
 
     return {
@@ -241,8 +317,12 @@ export class AuthService {
   private sanitizeUser(user: UserDocument) {
     const userObj = user.toObject();
     const { password, nonce, __v, ...sanitized } = userObj;
+    const primaryWallet = userObj.primaryWallet;
+    const roles = Array.isArray(userObj.roles) ? userObj.roles : [];
     return {
       ...sanitized,
+      roles,
+      walletAddress: primaryWallet,
       id: (user._id as any).toString(),
     };
   }

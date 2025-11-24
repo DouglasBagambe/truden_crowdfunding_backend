@@ -2,13 +2,13 @@ import { IsString, IsEthereumAddress } from 'class-validator';
 
 export class SiweNonceDto {
   @IsEthereumAddress()
-  address: string;
+  address!: string;
 }
 
 export class SiweVerifyDto {
   @IsString()
-  message: string;
+  message!: string;
 
   @IsString()
-  signature: string;
+  signature!: string;
 }

@@ -1,28 +1,24 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
+import { UserRole, KYCStatus } from '../../../common/enums/role.enum';
 
-export enum UserRole {
-  User = 'user',
-  Creator = 'creator',
-  Admin = 'admin',
-}
-
-export enum KycStatus {
-  None = 'none',
-  Pending = 'pending',
-  Approved = 'approved',
-  Rejected = 'rejected',
-}
+export type UserDocument = HydratedDocument<User>;
 
 export class UserProfile {
-  @Prop({ required: true, trim: true })
-  displayName: string;
+  @Prop({ trim: true })
+  displayName?: string;
 
-  @Prop({ required: true, lowercase: true, trim: true })
-  email: string;
+  @Prop({ trim: true })
+  firstName?: string;
+
+  @Prop({ trim: true })
+  lastName?: string;
 
   @Prop({ trim: true })
   avatarUrl?: string;
+
+  @Prop({ trim: true })
+  bio?: string;
 
   @Prop({ trim: true })
   country?: string;
@@ -33,31 +29,52 @@ export class UserProfile {
   timestamps: true,
 })
 export class User {
-  @Prop({ required: true, unique: true, lowercase: true, trim: true })
-  primaryWallet: string;
+  @Prop({
+    required: false,
+    unique: true,
+    sparse: true,
+    lowercase: true,
+    trim: true,
+  })
+  email?: string;
+
+  @Prop({ required: false, select: false })
+  password?: string;
+
+  @Prop({
+    required: false,
+    unique: true,
+    sparse: true,
+    lowercase: true,
+    trim: true,
+  })
+  primaryWallet?: string;
 
   @Prop({ type: [String], default: [], lowercase: true })
-  linkedWallets: string[];
+  linkedWallets!: string[];
 
-  @Prop({ enum: UserRole, default: UserRole.User })
-  role: UserRole;
+  @Prop({ type: [String], enum: UserRole, default: [UserRole.INVESTOR] })
+  roles!: UserRole[];
 
-  @Prop({ enum: KycStatus, default: KycStatus.None })
-  kycStatus: KycStatus;
-
-  @Prop({ type: UserProfile, required: true })
-  profile: UserProfile;
+  @Prop({ type: String, enum: KYCStatus, default: KYCStatus.NOT_VERIFIED })
+  kycStatus!: KYCStatus;
 
   @Prop({ default: false })
-  isBlocked: boolean;
+  isBlocked!: boolean;
+
+  @Prop({ default: true })
+  isActive!: boolean;
 
   @Prop({ type: Date })
   lastLoginAt?: Date;
-}
 
-export type UserDocument = HydratedDocument<User>;
+  @Prop({ default: null, select: false })
+  nonce?: string;
+
+  @Prop({ type: UserProfile, default: {} })
+  profile!: UserProfile;
+}
 
 export const UserSchema = SchemaFactory.createForClass(User);
 
-UserSchema.index({ role: 1, kycStatus: 1 });
-UserSchema.index({ 'profile.email': 1 }, { unique: true });
+UserSchema.index({ roles: 1, kycStatus: 1 });
