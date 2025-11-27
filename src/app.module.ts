@@ -7,6 +7,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { EscrowModule } from './modules/escrow/escrow.module';
 import { DealRoomModule } from './modules/deal-room/deal-room.module';
 import { UsersModule } from './modules/users/users.module';
+import { InvestmentsModule } from './modules/investments/investments.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import appConfig from './config/app.config';
 
@@ -32,6 +33,7 @@ import appConfig from './config/app.config';
     EscrowModule,
     DealRoomModule,
     UsersModule,
+    InvestmentsModule,
   ],
   providers: [
     {
