@@ -8,7 +8,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { EscrowService } from './escrow.service';
+import { EscrowService } from '../services/escrow.service';
 import { DepositDto } from '../dto/deposit.dto';
 import { ReleaseDto } from '../dto/release.dto';
 import { RefundDto } from '../dto/refund.dto';
