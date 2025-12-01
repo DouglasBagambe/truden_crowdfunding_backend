@@ -1,10 +1,15 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ProjectsService } from './projects.service';
 import { ProjectStatus } from '../../common/enums/project-status.enum';
 import { ProjectType } from '../../common/enums/project-type.enum';
 import { MilestoneStatus } from '../../common/enums/milestone-status.enum';
+import { CreateVerificationLogDto } from './dto/create-verification-log.dto';
 
-const mockProjectId = 'proj-1';
+const mockProjectId = '507f1f77bcf86cd799439011';
 
 const createService = () => {
   const projectsRepo = {
@@ -21,18 +26,13 @@ const createService = () => {
     deleteByProject: jest.fn(),
     findByProject: jest.fn(),
   };
-  const reviewsRepo = {
-    findExisting: jest.fn(),
-    create: jest.fn(),
-  };
 
   const service = new ProjectsService(
     projectsRepo as any,
     milestonesRepo as any,
-    reviewsRepo as any,
   );
 
-  return { service, projectsRepo, milestonesRepo, reviewsRepo };
+  return { service, projectsRepo, milestonesRepo };
 };
 
 describe('ProjectsService', () => {
@@ -41,7 +41,7 @@ describe('ProjectsService', () => {
   it('creates ROI project with defaults and persists agreements/media fields', async () => {
     const { service, projectsRepo, milestonesRepo } = createService();
     const dto = {
-      type: ProjectType.ROI,
+      projectType: ProjectType.ROI,
       name: 'Tech Academy',
       summary: 'Upskilling engineers',
       story: 'Detailed story',
@@ -58,19 +58,23 @@ describe('ProjectsService', () => {
       videoUrls: ['https://example.com/video'],
       socialLinks: [{ platform: 'twitter', url: 'https://twitter.com/x' }],
       website: 'https://example.com',
-      attachments: [{ title: 'proof', url: 'https://example.com/doc', isRequired: true }],
+      attachments: [
+        { title: 'proof', url: 'https://example.com/doc', isRequired: true },
+      ],
       agreements: [{ title: 'Terms', requiresAcceptance: true }],
     };
 
     projectsRepo.create.mockResolvedValue({ id: mockProjectId });
     const result = { project: { id: mockProjectId }, milestones: [] };
-    jest.spyOn(service, 'getProjectWithMilestones').mockResolvedValue(result as any);
+    jest
+      .spyOn(service, 'getProjectWithMilestones')
+      .mockResolvedValue(result as any);
 
     const response = await service.createProject('user-1', dto as any);
 
     expect(projectsRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: ProjectType.ROI,
+        projectType: ProjectType.ROI,
         name: 'Tech Academy',
         summary: 'Upskilling engineers',
         story: 'Detailed story',
@@ -89,6 +93,7 @@ describe('ProjectsService', () => {
         website: dto.website,
         attachments: dto.attachments,
         agreements: dto.agreements,
+        roiAgreements: dto.agreements,
         requiresAgreement: true,
         status: ProjectStatus.DRAFT,
       }),
@@ -119,13 +124,15 @@ describe('ProjectsService', () => {
 
     projectsRepo.create.mockResolvedValue({ id: mockProjectId });
     const result = { project: { id: mockProjectId }, milestones: [] };
-    jest.spyOn(service, 'getProjectWithMilestones').mockResolvedValue(result as any);
+    jest
+      .spyOn(service, 'getProjectWithMilestones')
+      .mockResolvedValue(result as any);
 
     await service.createProject('user-1', dto as any);
 
     expect(projectsRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: ProjectType.CHARITY,
+        projectType: ProjectType.CHARITY,
         category: 'school',
         subcategory: 'education',
       }),
@@ -133,7 +140,10 @@ describe('ProjectsService', () => {
     expect(milestonesRepo.createMany).toHaveBeenCalledWith(
       mockProjectId,
       expect.arrayContaining([
-        expect.objectContaining({ title: 'Phase 1', status: MilestoneStatus.PLANNED }),
+        expect.objectContaining({
+          title: 'Phase 1',
+          status: MilestoneStatus.PLANNED,
+        }),
       ]),
     );
   });
@@ -152,9 +162,9 @@ describe('ProjectsService', () => {
       currency: 'KES',
     };
 
-    await expect(service.createProject('user', dto as any)).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
+    await expect(
+      service.createProject('user', dto as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('rejects ROI projects without industry', async () => {
@@ -171,9 +181,9 @@ describe('ProjectsService', () => {
       currency: 'KES',
     };
 
-    await expect(service.createProject('user', dto as any)).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
+    await expect(
+      service.createProject('user', dto as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('prevents updating project not owned by user', async () => {
@@ -185,7 +195,9 @@ describe('ProjectsService', () => {
     });
 
     await expect(
-      service.updateProject(mockProjectId, 'owner-2', { summary: 'new' } as any),
+      service.updateProject(mockProjectId, 'owner-2', {
+        summary: 'new',
+      } as any),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
@@ -207,7 +219,7 @@ describe('ProjectsService', () => {
     expect(projectsRepo.query).toHaveBeenCalledWith(
       expect.objectContaining({
         status: expect.any(Object),
-        type: ProjectType.CHARITY,
+        projectType: ProjectType.CHARITY,
         category: 'school',
         country: 'Kenya',
         tags: { $in: ['health'] },
@@ -222,8 +234,44 @@ describe('ProjectsService', () => {
     const { service, projectsRepo } = createService();
     projectsRepo.findById.mockResolvedValue({ status: ProjectStatus.DRAFT });
 
-    await expect(service.getProjectPublic(mockProjectId)).rejects.toBeInstanceOf(
-      NotFoundException,
+    await expect(
+      service.getProjectPublic(mockProjectId),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('requires verification log before approval', async () => {
+    const { service, projectsRepo } = createService();
+    projectsRepo.findById.mockResolvedValue({
+      status: ProjectStatus.PENDING_REVIEW,
+      verificationLogs: [],
+      attachments: [],
+    });
+
+    await expect(
+      service.decide(mockProjectId, {
+        finalStatus: ProjectStatus.APPROVED,
+      } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('allows approval with verification log present', async () => {
+    const { service, projectsRepo } = createService();
+    const logs: CreateVerificationLogDto[] = [
+      { performedBy: 'agent', summary: 'checked', decision: 'approve' },
+    ] as any;
+    projectsRepo.findById.mockResolvedValue({
+      status: ProjectStatus.PENDING_REVIEW,
+      verificationLogs: logs,
+      attachments: [],
+    });
+    projectsRepo.setStatus.mockResolvedValue(true);
+    await service.decide(mockProjectId, {
+      finalStatus: ProjectStatus.APPROVED,
+    } as any);
+    expect(projectsRepo.setStatus).toHaveBeenCalledWith(
+      mockProjectId,
+      ProjectStatus.APPROVED,
+      undefined,
     );
   });
 });

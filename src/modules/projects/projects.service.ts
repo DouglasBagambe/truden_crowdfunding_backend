@@ -41,19 +41,25 @@ export class ProjectsService {
       throw new BadRequestException('Projects can only be created as DRAFT');
     }
 
-    this.validateProjectType(dto, { requireType: true });
+    const projectType = dto.type ?? (dto as any).projectType;
+    this.validateProjectType(
+      { ...dto, type: projectType },
+      { requireType: true },
+    );
     const agreementsPayload: AgreementRuleDto[] = this.resolveAgreements(
-      dto.type,
+      projectType,
       {
-        agreements: this.normalizeAgreementArray(dto.agreements),
-        roiAgreements: this.normalizeAgreementArray(dto.roiAgreements),
-        charityAgreements: this.normalizeAgreementArray(dto.charityAgreements),
+        agreements: this.normalizeAgreementArray(dto.agreements ?? []),
+        roiAgreements: this.normalizeAgreementArray(dto.roiAgreements ?? []),
+        charityAgreements: this.normalizeAgreementArray(
+          dto.charityAgreements ?? [],
+        ),
       },
     );
 
     const project = await this.projectsRepo.create({
       creatorId,
-      projectType: dto.type,
+      projectType,
       name: dto.name,
       summary: dto.summary,
       story: dto.story,
@@ -76,9 +82,9 @@ export class ProjectsService {
       website: dto.website,
       attachments: dto.attachments ?? [],
       agreements: agreementsPayload,
-      roiAgreements: dto.type === ProjectType.ROI ? agreementsPayload : [],
+      roiAgreements: projectType === ProjectType.ROI ? agreementsPayload : [],
       charityAgreements:
-        dto.type === ProjectType.CHARITY ? agreementsPayload : [],
+        projectType === ProjectType.CHARITY ? agreementsPayload : [],
       requiresAgreement: dto.requiresAgreement ?? true,
       galleryImages: this.normalizeStringArray(dto.galleryImages),
       useOfFunds: this.normalizeUseOfFundsArray(dto.useOfFunds),
@@ -199,9 +205,11 @@ export class ProjectsService {
     ) {
       const updatedType = inferredType ?? currentType;
       const agreementsPayload = this.resolveAgreements(updatedType, {
-        agreements: this.normalizeAgreementArray(dto.agreements),
-        roiAgreements: this.normalizeAgreementArray(dto.roiAgreements),
-        charityAgreements: this.normalizeAgreementArray(dto.charityAgreements),
+        agreements: this.normalizeAgreementArray(dto.agreements ?? []),
+        roiAgreements: this.normalizeAgreementArray(dto.roiAgreements ?? []),
+        charityAgreements: this.normalizeAgreementArray(
+          dto.charityAgreements ?? [],
+        ),
       });
       setPayload.agreements = agreementsPayload;
       setPayload.roiAgreements =
@@ -439,10 +447,14 @@ export class ProjectsService {
     },
   ): AgreementRuleDto[] {
     if (type === ProjectType.ROI) {
-      return dto.roiAgreements ?? dto.agreements ?? [];
+      const roi = dto.roiAgreements;
+      if (roi && roi.length) return roi;
+      return dto.agreements ?? [];
     }
     if (type === ProjectType.CHARITY) {
-      return dto.charityAgreements ?? dto.agreements ?? [];
+      const charity = dto.charityAgreements;
+      if (charity && charity.length) return charity;
+      return dto.agreements ?? [];
     }
     return dto.agreements ?? [];
   }
@@ -469,17 +481,18 @@ export class ProjectsService {
     dto: Partial<CreateProjectDto>,
     options: { requireType?: boolean } = {},
   ) {
-    if (options.requireType && !dto.type) {
+    const projectType = dto.type ?? (dto as any).projectType;
+    if (options.requireType && !projectType) {
       throw new BadRequestException('Project type is required');
     }
-    if (!dto.type) return;
-    if (dto.type === ProjectType.CHARITY && !dto.category) {
+    if (!projectType) return;
+    if (projectType === ProjectType.CHARITY && !dto.category) {
       throw new BadRequestException('Charity projects must include a category');
     }
-    if (dto.type === ProjectType.ROI && !dto.industry) {
+    if (projectType === ProjectType.ROI && !dto.industry) {
       throw new BadRequestException('ROI projects must include an industry');
     }
-    if (dto.type === ProjectType.CHARITY && dto.verificationBadges) {
+    if (projectType === ProjectType.CHARITY && dto.verificationBadges) {
       const required = dto.attachments?.some((a) => a.isRequired);
       if (!required) {
         throw new BadRequestException(
