@@ -21,6 +21,7 @@ import { AgreementRuleDto } from './dto/agreement-rule.dto';
 import { CharityCategory } from '../../common/enums/charity-category.enum';
 import { CharitySubcategory } from '../../common/enums/charity-subcategory.enum';
 import { ROIIndustry } from '../../common/enums/roi-industry.enum';
+import { UseOfFundsDto } from './dto/use-of-funds.dto';
 
 const PUBLIC_STATUSES: ProjectStatus[] = [
   ProjectStatus.APPROVED,
@@ -81,6 +82,14 @@ export class ProjectsService {
       charityAgreements:
         dto.type === ProjectType.CHARITY ? agreementsPayload : [],
       requiresAgreement: dto.requiresAgreement ?? true,
+      galleryImages: this.normalizeStringArray(dto.galleryImages),
+      useOfFunds: this.normalizeUseOfFundsArray(dto.useOfFunds),
+      riskFactors: this.normalizeStringArray(dto.riskFactors),
+      disclosures: this.normalizeStringArray(dto.disclosures),
+      verificationBadges: this.normalizeStringArray(dto.verificationBadges),
+      highlights: this.normalizeStringArray(dto.highlights),
+      raisedAmount: 0,
+      backerCount: 0,
     });
 
     if (dto.milestones?.length) {
@@ -155,8 +164,14 @@ export class ProjectsService {
     if (dto.subcategory !== undefined) setPayload.subcategory = dto.subcategory;
     if (dto.industry !== undefined) setPayload.industry = dto.industry;
     if (dto.risks !== undefined) setPayload.risks = dto.risks;
+    if (dto.riskFactors !== undefined)
+      setPayload.riskFactors = this.normalizeStringArray(dto.riskFactors);
+    if (dto.disclosures !== undefined)
+      setPayload.disclosures = this.normalizeStringArray(dto.disclosures);
     if (dto.tags !== undefined) setPayload.tags = dto.tags;
     if (dto.videoUrls !== undefined) setPayload.videoUrls = dto.videoUrls;
+    if (dto.galleryImages !== undefined)
+      setPayload.galleryImages = this.normalizeStringArray(dto.galleryImages);
     if (dto.socialLinks !== undefined) setPayload.socialLinks = dto.socialLinks;
     if (dto.website !== undefined) setPayload.website = dto.website;
     if (dto.targetAmount !== undefined)
@@ -167,6 +182,14 @@ export class ProjectsService {
     if (dto.fundingEndDate !== undefined)
       setPayload.fundingEndDate = dto.fundingEndDate;
     if (dto.attachments !== undefined) setPayload.attachments = dto.attachments;
+    if (dto.useOfFunds !== undefined)
+      setPayload.useOfFunds = this.normalizeUseOfFundsArray(dto.useOfFunds);
+    if (dto.verificationBadges !== undefined)
+      setPayload.verificationBadges = this.normalizeStringArray(
+        dto.verificationBadges,
+      );
+    if (dto.highlights !== undefined)
+      setPayload.highlights = this.normalizeStringArray(dto.highlights);
 
     if (
       dto.agreements !== undefined ||
@@ -403,6 +426,14 @@ export class ProjectsService {
     return Array.isArray(value) ? (value as AgreementRuleDto[]) : [];
   }
 
+  private normalizeStringArray(value: unknown): string[] {
+    return Array.isArray(value) ? (value as string[]) : [];
+  }
+
+  private normalizeUseOfFundsArray(value: unknown): UseOfFundsDto[] {
+    return Array.isArray(value) ? (value as UseOfFundsDto[]) : [];
+  }
+
   private validateProjectType(
     dto: Partial<CreateProjectDto>,
     options: { requireType?: boolean } = {},
@@ -416,6 +447,14 @@ export class ProjectsService {
     }
     if (dto.type === ProjectType.ROI && !dto.industry) {
       throw new BadRequestException('ROI projects must include an industry');
+    }
+    if (dto.type === ProjectType.CHARITY && dto.verificationBadges) {
+      const required = dto.attachments?.some((a) => a.isRequired);
+      if (!required) {
+        throw new BadRequestException(
+          'Charity projects with verification badges must include required attachments',
+        );
+      }
     }
   }
 }

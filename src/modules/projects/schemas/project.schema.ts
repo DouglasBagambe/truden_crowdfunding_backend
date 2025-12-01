@@ -60,6 +60,9 @@ export class Project {
   @Prop({ type: [String], default: [] })
   videoUrls!: string[];
 
+  @Prop({ type: [String], default: [] })
+  galleryImages!: string[];
+
   @Prop({
     type: [
       {
@@ -140,6 +143,24 @@ export class Project {
   @Prop({
     type: [
       {
+        item: { type: String, trim: true },
+        description: { type: String, trim: true },
+        amount: { type: Number, min: 0 },
+        percentage: { type: Number, min: 0 },
+      },
+    ],
+    default: [],
+  })
+  useOfFunds!: Array<{
+    item?: string;
+    description?: string;
+    amount?: number;
+    percentage?: number;
+  }>;
+
+  @Prop({
+    type: [
+      {
         title: { type: String, required: true, trim: true },
         description: { type: String, trim: true },
         requiresAcceptance: { type: Boolean, default: true },
@@ -168,6 +189,24 @@ export class Project {
     description?: string;
     requiresAcceptance: boolean;
   }>;
+
+  @Prop({ type: [String], default: [] })
+  riskFactors!: string[];
+
+  @Prop({ type: [String], default: [] })
+  disclosures!: string[];
+
+  @Prop({ type: [String], default: [] })
+  verificationBadges!: string[];
+
+  @Prop({ type: [String], default: [] })
+  highlights!: string[];
+
+  @Prop({ type: Number, default: 0, min: 0 })
+  raisedAmount!: number;
+
+  @Prop({ type: Number, default: 0, min: 0 })
+  backerCount!: number;
 
   @Prop({ type: Date })
   createdAt?: Date;
@@ -219,6 +258,7 @@ ProjectSchema.index({
   industry: 'text',
   tags: 'text',
   location: 'text',
+  highlights: 'text',
 });
 
 ProjectSchema.pre('validate', function (next) {

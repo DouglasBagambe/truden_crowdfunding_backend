@@ -14,27 +14,39 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '../../../common/swagger.decorators';
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+} from '../../../common/swagger.decorators';
 import { ProjectStatus } from '../../../common/enums/project-status.enum';
 import { ProjectType } from '../../../common/enums/project-type.enum';
 import { CharityCategory } from '../../../common/enums/charity-category.enum';
 import { CharitySubcategory } from '../../../common/enums/charity-subcategory.enum';
 import { ROIIndustry } from '../../../common/enums/roi-industry.enum';
 import { AgreementRuleDto } from './agreement-rule.dto';
+import { UseOfFundsDto } from './use-of-funds.dto';
 import { MilestoneDto } from './milestone.dto';
 import { DocumentAttachmentDto } from './document-attachment.dto';
 import { SocialLinkDto } from './social-link.dto';
-import { AgreementRuleDto } from './agreement-rule.dto';
 
-const toDate = (value: unknown) => (value ? new Date(value as string) : undefined);
-const toStringArray = (value: unknown) => {
-  if (Array.isArray(value)) return value;
-  if (typeof value === 'string') return value.split(',').map((v) => v.trim()).filter(Boolean);
+const toDate = (value: unknown) =>
+  value ? new Date(value as string) : undefined;
+const toStringArray = (value: unknown): string[] | undefined => {
+  if (Array.isArray(value)) return value as string[];
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0);
+  }
   return undefined;
 };
 
 export class CreateProjectDto {
-  @ApiProperty({ description: 'Project type: ROI or CHARITY', enum: ProjectType })
+  @ApiProperty({
+    description: 'Project type: ROI or CHARITY',
+    enum: ProjectType,
+  })
   @IsEnum(ProjectType)
   type!: ProjectType;
 
@@ -92,6 +104,17 @@ export class CreateProjectDto {
   videoUrls?: string[];
 
   @ApiPropertyOptional({
+    description: 'Gallery images for the project',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsUrl({}, { each: true })
+  @Transform(({ value }) => toStringArray(value))
+  galleryImages?: string[];
+
+  @ApiPropertyOptional({
     description: 'Social links for the project/beneficiary',
     type: [SocialLinkDto],
   })
@@ -116,7 +139,7 @@ export class CreateProjectDto {
     description: 'Category (for CHARITY projects)',
     enum: CharityCategory,
   })
-  @ValidateIf((o) => o.type === ProjectType.CHARITY)
+  @ValidateIf((o: CreateProjectDto) => o.type === ProjectType.CHARITY)
   @IsEnum(CharityCategory)
   category?: CharityCategory;
 
@@ -124,7 +147,7 @@ export class CreateProjectDto {
     description: 'Subcategory (for CHARITY projects)',
     enum: CharitySubcategory,
   })
-  @ValidateIf((o) => o.type === ProjectType.CHARITY)
+  @ValidateIf((o: CreateProjectDto) => o.type === ProjectType.CHARITY)
   @IsEnum(CharitySubcategory)
   subcategory?: CharitySubcategory;
 
@@ -132,12 +155,12 @@ export class CreateProjectDto {
     description: 'Industry (for ROI projects)',
     enum: ROIIndustry,
   })
-  @ValidateIf((o) => o.type === ProjectType.ROI)
+  @ValidateIf((o: CreateProjectDto) => o.type === ProjectType.ROI)
   @IsEnum(ROIIndustry)
   industry?: ROIIndustry;
 
   @ApiPropertyOptional({ description: 'Risks and challenges (ROI projects)' })
-  @ValidateIf((o) => o.type === ProjectType.ROI)
+  @ValidateIf((o: CreateProjectDto) => o.type === ProjectType.ROI)
   @IsOptional()
   @IsString()
   @Length(0, 4000)
@@ -177,7 +200,8 @@ export class CreateProjectDto {
   milestones?: MilestoneDto[];
 
   @ApiPropertyOptional({
-    description: 'Supporting attachments (required verification docs + additional materials)',
+    description:
+      'Supporting attachments (required verification docs + additional materials)',
     type: [DocumentAttachmentDto],
   })
   @IsOptional()
@@ -188,7 +212,8 @@ export class CreateProjectDto {
   attachments?: DocumentAttachmentDto[];
 
   @ApiPropertyOptional({
-    description: 'Rules/agreements investors must accept for this project (type-specific preferred)',
+    description:
+      'Rules/agreements investors must accept for this project (type-specific preferred)',
     type: [AgreementRuleDto],
   })
   @IsOptional()
@@ -202,7 +227,7 @@ export class CreateProjectDto {
     description: 'Agreements for ROI projects',
     type: [AgreementRuleDto],
   })
-  @ValidateIf((o) => o.type === ProjectType.ROI)
+  @ValidateIf((o: CreateProjectDto) => o.type === ProjectType.ROI)
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(20)
@@ -214,7 +239,7 @@ export class CreateProjectDto {
     description: 'Agreements for Charity projects',
     type: [AgreementRuleDto],
   })
-  @ValidateIf((o) => o.type === ProjectType.CHARITY)
+  @ValidateIf((o: CreateProjectDto) => o.type === ProjectType.CHARITY)
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(20)
@@ -223,15 +248,71 @@ export class CreateProjectDto {
   charityAgreements?: AgreementRuleDto[];
 
   @ApiPropertyOptional({
+    description: 'Use of funds breakdown (short list)',
+    type: [UseOfFundsDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => UseOfFundsDto)
+  useOfFunds?: UseOfFundsDto[];
+
+  @ApiPropertyOptional({
+    description: 'Risk factors for ROI projects',
+    type: [String],
+  })
+  @ValidateIf((o: CreateProjectDto) => o.type === ProjectType.ROI)
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  riskFactors?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Disclosures for ROI projects',
+    type: [String],
+  })
+  @ValidateIf((o: CreateProjectDto) => o.type === ProjectType.ROI)
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  disclosures?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Verification badges for charity projects',
+    type: [String],
+  })
+  @ValidateIf((o: CreateProjectDto) => o.type === ProjectType.CHARITY)
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  verificationBadges?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Short highlights for the public page',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  highlights?: string[];
+
+  @ApiPropertyOptional({
     enum: ProjectStatus,
-    description: 'Initial status; defaults to DRAFT and only DRAFT is allowed on creation',
+    description:
+      'Initial status; defaults to DRAFT and only DRAFT is allowed on creation',
   })
   @IsOptional()
   @IsEnum(ProjectStatus)
   status?: ProjectStatus;
 
   @ApiPropertyOptional({
-    description: 'Flag to require investor acceptance of all required agreements',
+    description:
+      'Flag to require investor acceptance of all required agreements',
     default: true,
   })
   @IsOptional()
