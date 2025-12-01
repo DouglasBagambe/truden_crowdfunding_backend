@@ -22,6 +22,7 @@ import { CharityCategory } from '../../common/enums/charity-category.enum';
 import { CharitySubcategory } from '../../common/enums/charity-subcategory.enum';
 import { ROIIndustry } from '../../common/enums/roi-industry.enum';
 import { UseOfFundsDto } from './dto/use-of-funds.dto';
+import { DocumentAttachmentDto } from './dto/document-attachment.dto';
 
 const PUBLIC_STATUSES: ProjectStatus[] = [
   ProjectStatus.APPROVED,
@@ -287,7 +288,10 @@ export class ProjectsService {
       this.projectsRepo.query(filter, pageSize, skip),
       this.projectsRepo.count(filter),
     ]);
-    return { projects, total, page, pageSize };
+    const projectsWithProgress = projects.map((proj) =>
+      this.withProgress(proj),
+    );
+    return { projects: projectsWithProgress, total, page, pageSize };
   }
 
   async getProjectPublic(id: string) {
@@ -357,6 +361,10 @@ export class ProjectsService {
       );
     }
 
+    if (dto.finalStatus === ProjectStatus.APPROVED) {
+      this.ensureRequiredAttachments(project.attachments);
+    }
+
     const updated = await this.projectsRepo.setStatus(
       projectId,
       dto.finalStatus,
@@ -372,7 +380,7 @@ export class ProjectsService {
       this.milestonesRepo.findByProject(projectId),
     ]);
     if (!project) throw new NotFoundException('Project not found');
-    return { project, milestones };
+    return { project: this.withProgress(project), milestones };
   }
 
   private normalizeProjectType(type: unknown): ProjectType | undefined {
@@ -455,6 +463,34 @@ export class ProjectsService {
           'Charity projects with verification badges must include required attachments',
         );
       }
+    }
+  }
+
+  private withProgress(project: ProjectDocument) {
+    const obj = project.toObject();
+    const target = obj.targetAmount || 0;
+    const raised = obj.raisedAmount || 0;
+    const progressPct = target > 0 ? Math.min(100, (raised / target) * 100) : 0;
+    return {
+      ...obj,
+      progress: {
+        raisedAmount: raised,
+        targetAmount: target,
+        percentage: progressPct,
+        backerCount: obj.backerCount ?? 0,
+      },
+    };
+  }
+
+  private ensureRequiredAttachments(
+    attachments: DocumentAttachmentDto[] | undefined,
+  ) {
+    const requiredAttachments =
+      attachments?.filter((a) => a.isRequired !== false) ?? [];
+    if (!requiredAttachments.length) {
+      throw new BadRequestException(
+        'At least one required attachment is needed before approval',
+      );
     }
   }
 }
