@@ -5,7 +5,6 @@ import { AdminProjectsController } from './admin-projects.controller';
 import { ProjectsService } from './projects.service';
 import { ProjectsRepository } from './repositories/projects.repository';
 import { MilestonesRepository } from './repositories/milestones.repository';
-import { ProjectReviewsRepository } from './repositories/project-reviews.repository';
 import {
   Project,
   ProjectSchema,
@@ -15,10 +14,6 @@ import {
   CharityProjectSchema,
 } from './schemas/project.schema';
 import { Milestone, MilestoneSchema } from './schemas/milestone.schema';
-import {
-  ProjectReview,
-  ProjectReviewSchema,
-} from './schemas/project-review.schema';
 import { ProjectType } from '../../common/enums/project-type.enum';
 
 @Module({
@@ -33,7 +28,6 @@ import { ProjectType } from '../../common/enums/project-type.enum';
         ],
       },
       { name: Milestone.name, schema: MilestoneSchema },
-      { name: ProjectReview.name, schema: ProjectReviewSchema },
     ]),
   ],
   controllers: [ProjectsController, AdminProjectsController],
@@ -41,7 +35,6 @@ import { ProjectType } from '../../common/enums/project-type.enum';
     ProjectsService,
     ProjectsRepository,
     MilestonesRepository,
-    ProjectReviewsRepository,
   ],
   exports: [ProjectsService],
 })

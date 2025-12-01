@@ -1,20 +1,18 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
+import { Types } from 'mongoose';
 import { ProjectStatus } from '../../common/enums/project-status.enum';
 import { MilestoneStatus } from '../../common/enums/milestone-status.enum';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { QueryProjectsDto } from './dto/query-projects.dto';
-import { CreateReviewDto } from './dto/create-review.dto';
 import { ProjectDecisionDto } from './dto/decision.dto';
 import { ProjectsRepository } from './repositories/projects.repository';
 import { MilestonesRepository } from './repositories/milestones.repository';
-import { ProjectReviewsRepository } from './repositories/project-reviews.repository';
 import { ProjectDocument } from './schemas/project.schema';
 import { ProjectType } from '../../common/enums/project-type.enum';
 import { AgreementRuleDto } from './dto/agreement-rule.dto';
@@ -22,7 +20,7 @@ import { CharityCategory } from '../../common/enums/charity-category.enum';
 import { CharitySubcategory } from '../../common/enums/charity-subcategory.enum';
 import { ROIIndustry } from '../../common/enums/roi-industry.enum';
 import { UseOfFundsDto } from './dto/use-of-funds.dto';
-import { DocumentAttachmentDto } from './dto/document-attachment.dto';
+import { CreateVerificationLogDto } from './dto/create-verification-log.dto';
 
 const PUBLIC_STATUSES: ProjectStatus[] = [
   ProjectStatus.APPROVED,
@@ -36,7 +34,6 @@ export class ProjectsService {
   constructor(
     private readonly projectsRepo: ProjectsRepository,
     private readonly milestonesRepo: MilestonesRepository,
-    private readonly reviewsRepo: ProjectReviewsRepository,
   ) {}
 
   async createProject(creatorId: string, dto: CreateProjectDto) {
@@ -56,7 +53,7 @@ export class ProjectsService {
 
     const project = await this.projectsRepo.create({
       creatorId,
-      type: dto.type,
+      projectType: dto.type,
       name: dto.name,
       summary: dto.summary,
       story: dto.story,
@@ -116,9 +113,12 @@ export class ProjectsService {
     creatorId: string,
     dto: UpdateProjectDto,
   ) {
+    this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
-    const currentType = this.normalizeProjectType(project.type);
+    const currentType = this.normalizeProjectType(
+      this.readProjectType(project),
+    );
     if (project.creatorId !== creatorId) {
       throw new ForbiddenException('You can only edit your own projects');
     }
@@ -152,7 +152,7 @@ export class ProjectsService {
       currentType ??
       (dto.category || project.category ? ProjectType.CHARITY : undefined) ??
       (dto.industry || project.industry ? ProjectType.ROI : undefined);
-    if (inferredType !== undefined) setPayload.type = inferredType;
+    if (inferredType !== undefined) setPayload.projectType = inferredType;
     if (dto.name !== undefined) setPayload.name = dto.name;
     if (dto.summary !== undefined) setPayload.summary = dto.summary;
     if (dto.story !== undefined) setPayload.story = dto.story;
@@ -234,6 +234,7 @@ export class ProjectsService {
   }
 
   async submitProject(projectId: string, creatorId: string) {
+    this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
     if (project.creatorId !== creatorId) {
@@ -268,7 +269,7 @@ export class ProjectsService {
       filter.industry = query.industry;
     }
     if (query.type) {
-      filter.type = query.type;
+      filter.projectType = query.type;
     }
     if (query.country) {
       filter.country = query.country;
@@ -295,6 +296,7 @@ export class ProjectsService {
   }
 
   async getProjectPublic(id: string) {
+    this.ensureValidObjectId(id);
     const project = await this.projectsRepo.findById(id);
     if (!project) throw new NotFoundException('Project not found');
     if (!PUBLIC_STATUSES.includes(project.status)) {
@@ -304,6 +306,7 @@ export class ProjectsService {
   }
 
   async getMilestonesPublic(projectId: string) {
+    this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
     if (!PUBLIC_STATUSES.includes(project.status)) {
@@ -320,32 +323,37 @@ export class ProjectsService {
     );
   }
 
-  async createReview(
-    projectId: string,
-    reviewerId: string,
-    dto: CreateReviewDto,
-  ) {
+  async addVerificationLog(projectId: string, dto: CreateVerificationLogDto) {
+    this.ensureValidObjectId(projectId);
+    const update = await this.projectsRepo.updateById(projectId, {
+      $push: {
+        verificationLogs: {
+          performedBy: dto.performedBy,
+          role: dto.role,
+          summary: dto.summary,
+          decision: dto.decision,
+          evidenceUrls: dto.evidenceUrls ?? [],
+          attachments: dto.attachments ?? [],
+          createdAt: new Date(),
+        },
+      },
+      $set: { lastVerifiedAt: new Date() },
+    });
+    if (!update) throw new NotFoundException('Project not found');
+    return update;
+  }
+
+  async listVerificationLogs(projectId: string) {
+    this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
-    if (project.status !== ProjectStatus.PENDING_REVIEW) {
-      throw new BadRequestException('Project is not pending review');
-    }
-
-    const existing = await this.reviewsRepo.findExisting(projectId, reviewerId);
-    if (existing) {
-      throw new ConflictException('Review already submitted by this reviewer');
-    }
-
-    return this.reviewsRepo.create({
-      projectId,
-      reviewerId,
-      score: dto.score,
-      comments: dto.comments,
-      recommendation: dto.recommendation,
-    });
+    return Array.isArray(project.verificationLogs)
+      ? (project.verificationLogs as CreateVerificationLogDto[])
+      : [];
   }
 
   async decide(projectId: string, dto: ProjectDecisionDto) {
+    this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
     if (project.status !== ProjectStatus.PENDING_REVIEW) {
@@ -362,7 +370,7 @@ export class ProjectsService {
     }
 
     if (dto.finalStatus === ProjectStatus.APPROVED) {
-      this.ensureRequiredAttachments(project.attachments);
+      this.ensureVerificationLogExists(project.verificationLogs);
     }
 
     const updated = await this.projectsRepo.setStatus(
@@ -388,6 +396,15 @@ export class ProjectsService {
       return type;
     }
     return undefined;
+  }
+
+  private readProjectType(project: {
+    projectType?: unknown;
+    type?: unknown;
+  }): ProjectType | undefined {
+    const t = this.normalizeProjectType(project.projectType);
+    if (t) return t;
+    return this.normalizeProjectType(project.type);
   }
 
   private normalizeCategory(value: unknown): CharityCategory | undefined {
@@ -442,6 +459,12 @@ export class ProjectsService {
     return Array.isArray(value) ? (value as UseOfFundsDto[]) : [];
   }
 
+  private ensureValidObjectId(id: string) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException('Project not found');
+    }
+  }
+
   private validateProjectType(
     dto: Partial<CreateProjectDto>,
     options: { requireType?: boolean } = {},
@@ -482,14 +505,12 @@ export class ProjectsService {
     };
   }
 
-  private ensureRequiredAttachments(
-    attachments: DocumentAttachmentDto[] | undefined,
+  private ensureVerificationLogExists(
+    logs: CreateVerificationLogDto[] | undefined,
   ) {
-    const requiredAttachments =
-      attachments?.filter((a) => a.isRequired !== false) ?? [];
-    if (!requiredAttachments.length) {
+    if (!logs || logs.length === 0) {
       throw new BadRequestException(
-        'At least one required attachment is needed before approval',
+        'Verification log is required before approval',
       );
     }
   }

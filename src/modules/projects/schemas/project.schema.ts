@@ -2,7 +2,6 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
 import { ProjectStatus } from '../../../common/enums/project-status.enum';
 import { ProjectType } from '../../../common/enums/project-type.enum';
-import { Schema as MongooseSchema } from 'mongoose';
 import { CharityCategory } from '../../../common/enums/charity-category.enum';
 import { CharitySubcategory } from '../../../common/enums/charity-subcategory.enum';
 import { ROIIndustry } from '../../../common/enums/roi-industry.enum';
@@ -12,7 +11,7 @@ export type ProjectDocument = HydratedDocument<Project>;
 @Schema({
   collection: 'projects',
   timestamps: { createdAt: 'createdAt', updatedAt: 'updatedAt' },
-  discriminatorKey: 'type',
+  discriminatorKey: 'projectType',
 })
 export class Project {
   @Prop({ required: true, trim: true, index: true })
@@ -24,8 +23,9 @@ export class Project {
     enum: ProjectType,
     index: true,
     default: ProjectType.ROI,
+    alias: 'type',
   })
-  type!: ProjectType;
+  projectType!: ProjectType;
 
   @Prop({ required: true, trim: true, index: true, alias: 'title' })
   name!: string;
@@ -208,6 +208,52 @@ export class Project {
   @Prop({ type: Number, default: 0, min: 0 })
   backerCount!: number;
 
+  @Prop({
+    type: [
+      {
+        performedBy: { type: String, required: true, trim: true },
+        role: { type: String, trim: true },
+        summary: { type: String, required: true, trim: true },
+        decision: {
+          type: String,
+          enum: ['approve', 'reject', 'needs_more_info'],
+          required: true,
+        },
+        evidenceUrls: { type: [String], default: [] },
+        attachments: {
+          type: [
+            {
+              title: { type: String, required: true, trim: true },
+              url: { type: String, required: true, trim: true },
+              type: { type: String, trim: true },
+              isRequired: { type: Boolean, default: false },
+            },
+          ],
+          default: [],
+        },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
+    default: [],
+  })
+  verificationLogs!: Array<{
+    performedBy: string;
+    role?: string;
+    summary: string;
+    decision: 'approve' | 'reject' | 'needs_more_info';
+    evidenceUrls?: string[];
+    attachments?: Array<{
+      title: string;
+      url: string;
+      type?: string;
+      isRequired?: boolean;
+    }>;
+    createdAt?: Date;
+  }>;
+
+  @Prop({ type: Date })
+  lastVerifiedAt?: Date;
+
   @Prop({ type: Date })
   createdAt?: Date;
 
@@ -217,7 +263,7 @@ export class Project {
 
 export const ProjectSchema = SchemaFactory.createForClass(Project);
 
-export class ROIProject extends Project {
+export class ROIProject {
   @Prop({ required: true, trim: true, index: true, enum: ROIIndustry })
   declare industry: string;
 
@@ -225,7 +271,7 @@ export class ROIProject extends Project {
   declare risks?: string;
 }
 
-export class CharityProject extends Project {
+export class CharityProject {
   @Prop({ required: true, trim: true, index: true, enum: CharityCategory })
   declare category: string;
 
@@ -236,15 +282,6 @@ export class CharityProject extends Project {
 export const ROIProjectSchema = SchemaFactory.createForClass(ROIProject);
 export const CharityProjectSchema =
   SchemaFactory.createForClass(CharityProject);
-
-ProjectSchema.discriminator(
-  ProjectType.ROI,
-  ROIProjectSchema as MongooseSchema,
-);
-ProjectSchema.discriminator(
-  ProjectType.CHARITY,
-  CharityProjectSchema as MongooseSchema,
-);
 
 ProjectSchema.index({
   title: 'text',
@@ -265,11 +302,11 @@ ProjectSchema.pre('validate', function (next) {
   const doc = this as unknown as Project &
     Partial<ROIProject> &
     Partial<CharityProject>;
-  if (!doc.type) {
+  if (!doc.projectType) {
     return next(new Error('Project type is required'));
   }
 
-  if (doc.type === ProjectType.CHARITY) {
+  if (doc.projectType === ProjectType.CHARITY) {
     if (!doc.category) {
       return next(new Error('Charity projects must include a category'));
     }
@@ -281,7 +318,7 @@ ProjectSchema.pre('validate', function (next) {
     }
   }
 
-  if (doc.type === ProjectType.ROI) {
+  if (doc.projectType === ProjectType.ROI) {
     if (!doc.industry) {
       return next(new Error('ROI projects must include an industry'));
     }
