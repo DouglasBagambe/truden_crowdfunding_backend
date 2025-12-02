@@ -21,11 +21,11 @@ async function seedAdmin() {
   const firstName = process.env.ADMIN_FIRST_NAME || 'Admin';
   const lastName = process.env.ADMIN_LAST_NAME || 'User';
 
-  const existing = await UserModel.findOne({ email }).select('+password');
+  const existing = await UserModel.findOne({ email }).select('+passwordHash');
   const hashedPassword = await bcrypt.hash(password, 10);
 
   if (existing) {
-    existing.password = hashedPassword;
+    existing.passwordHash = hashedPassword;
     existing.roles = Array.from(
       new Set([
         ...(existing.roles || []),
@@ -48,7 +48,8 @@ async function seedAdmin() {
   } else {
     await UserModel.create({
       email,
-      password: hashedPassword,
+      passwordHash: hashedPassword,
+      authProvider: 'email',
       roles: [UserRole.SUPERADMIN, UserRole.ADMIN],
       isActive: true,
       isBlocked: false,

@@ -1,14 +1,10 @@
-import { IsEmail, IsString } from 'class-validator';
-import { Transform } from 'class-transformer';
 import { ApiProperty } from '../../../common/swagger.decorators';
+import { IsEmail } from 'class-validator';
+import { Transform } from 'class-transformer';
 
-export class LoginDto {
+export class ResendEmailDto {
   @ApiProperty()
   @IsEmail()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
   email!: string;
-
-  @ApiProperty()
-  @IsString()
-  password!: string;
 }

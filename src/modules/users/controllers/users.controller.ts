@@ -22,12 +22,23 @@ import { UserRole } from '../../../common/enums/role.enum';
 import { Permissions } from '../../../common/decorators/permissions.decorator';
 import { Permission } from '../../../common/enums/permission.enum';
 import { RoleMetadataOr } from '../../../common/decorators/role-or.decorator';
+import { Public } from '../../../common/decorators/public.decorator';
+import { SignupUserDto } from '../dto/signup-user.dto';
+import { SubmitKycDto } from '../dto/submit-kyc.dto';
+import { SubmitCreatorVerificationDto } from '../dto/submit-creator-verification.dto';
+import { UpdateCreatorVerificationDto } from '../dto/update-creator-verification.dto';
 
 @ApiTags('users')
 @ApiBearerAuth()
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
+
+  @Public()
+  @Post('signup')
+  signup(@Body() dto: SignupUserDto) {
+    return this.usersService.signup(dto);
+  }
 
   @Post()
   @RoleMetadataOr(UserRole.ADMIN)
@@ -63,6 +74,19 @@ export class UsersController {
     return this.usersService.updateProfile(userId, dto);
   }
 
+  @Patch('me/kyc')
+  submitKyc(@CurrentUser('sub') userId: string, @Body() dto: SubmitKycDto) {
+    return this.usersService.submitKyc(userId, dto);
+  }
+
+  @Patch('me/creator-verification')
+  submitCreatorVerification(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: SubmitCreatorVerificationDto,
+  ) {
+    return this.usersService.submitCreatorVerification(userId, dto);
+  }
+
   @Patch(':id/profile')
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.MANAGE_USERS)
@@ -95,6 +119,16 @@ export class UsersController {
   @Permissions(Permission.MANAGE_USERS)
   updateKyc(@Param('id') id: string, @Body() dto: UpdateKycStatusDto) {
     return this.usersService.updateKycStatus(id, dto);
+  }
+
+  @Patch(':id/creator-verification')
+  @RoleMetadataOr(UserRole.ADMIN)
+  @Permissions(Permission.MANAGE_USERS)
+  updateCreatorVerification(
+    @Param('id') id: string,
+    @Body() dto: UpdateCreatorVerificationDto,
+  ) {
+    return this.usersService.updateCreatorVerificationStatus(id, dto);
   }
 
   @Patch(':id/block')

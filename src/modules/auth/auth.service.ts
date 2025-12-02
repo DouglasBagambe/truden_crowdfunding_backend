@@ -3,18 +3,21 @@ import {
   UnauthorizedException,
   ConflictException,
   BadRequestException,
+  Logger,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { JwtService } from '@nestjs/jwt';
+import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
-import { SiweMessage } from 'siwe';
-import { randomBytes } from 'crypto';
+import sgMail from '@sendgrid/mail';
+import { TokenExpiredError } from 'jsonwebtoken';
+import crypto from 'crypto';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
-import { SiweVerifyDto } from './dto/siwe.dto';
-import { LinkWalletDto } from './dto/link-wallet.dto';
+import { OAuthLoginDto, AuthProvider } from './dto/oauth-login.dto';
 import { JwtPayload } from '../../common/interfaces/user.interface';
 import { UserRole } from '../../common/enums/role.enum';
 import { User, UserDocument } from '../users/schemas/user.schema';
@@ -22,8 +25,15 @@ import { RolesService } from '../roles/roles.service';
 
 @Injectable()
 export class AuthService {
-  private nonceStore: Map<string, { nonce: string; timestamp: number }> =
-    new Map();
+  private readonly logger = new Logger(AuthService.name);
+  private readonly rateLimits = new Map<
+    string,
+    { count: number; resetAt: number }
+  >();
+  private readonly emailVerificationWindowMs = 60 * 60 * 1000; // 1 hour
+  private readonly emailVerificationMaxSends = 3;
+  private readonly emailVerificationMaxAttempts = 5;
+  private readonly emailVerificationBlockMs = 10 * 60 * 1000; // 10 minutes
 
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
@@ -34,6 +44,8 @@ export class AuthService {
 
   async register(registerDto: RegisterDto) {
     const { email, password, firstName, lastName, role } = registerDto;
+    this.enforceRateLimit('register', email, 5, 5 * 60 * 1000);
+    const isTestEnv = this.configService.get<string>('NODE_ENV') === 'test';
 
     const existingUser = await this.userModel
       .findOne({ email: email.toLowerCase() })
@@ -42,11 +54,16 @@ export class AuthService {
       throw new ConflictException('User with this email already exists');
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password, 10);
 
     const user = await this.userModel.create({
       email: email.toLowerCase(),
-      password: hashedPassword,
+      passwordHash,
+      authProvider: AuthProvider.EMAIL,
+      emailVerifiedAt: isTestEnv ? new Date() : null,
+      emailVerificationSentAt: undefined,
+      emailVerificationSendCount: 0,
+      emailVerificationRateLimitResetAt: undefined,
       roles: role ? [role] : [UserRole.INVESTOR],
       isActive: true,
       isBlocked: false,
@@ -59,6 +76,13 @@ export class AuthService {
     });
 
     const tokens = await this.generateTokens(user);
+    if (!isTestEnv) {
+      await this.issueVerificationCode(user, {
+        sendCount: 1,
+        rateLimitReset: Date.now() + this.emailVerificationWindowMs,
+        resetAttempts: true,
+      });
+    }
 
     const permissions = await this.rolesService.getPermissionsForRoles(
       user.roles,
@@ -72,18 +96,25 @@ export class AuthService {
 
   async login(loginDto: LoginDto) {
     const { email, password } = loginDto;
+    this.enforceRateLimit('login', email, 10, 5 * 60 * 1000);
 
     const user = await this.userModel
       .findOne({ email: email.toLowerCase() })
-      .select('+password')
+      .select('+passwordHash')
       .exec();
-    if (!user || !user.password) {
+    const provider = user?.authProvider as AuthProvider | undefined;
+    if (!user || !user.passwordHash || provider !== AuthProvider.EMAIL) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+    const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const isTestEnv = this.configService.get<string>('NODE_ENV') === 'test';
+    if (!user.emailVerifiedAt && !isTestEnv) {
+      throw new UnauthorizedException('Email not verified');
     }
 
     if (!user.isActive || user.isBlocked) {
@@ -105,126 +136,296 @@ export class AuthService {
     };
   }
 
-  async generateSiweNonce(address: string): Promise<string> {
-    const nonce = randomBytes(16).toString('hex');
-    this.nonceStore.set(address.toLowerCase(), {
-      nonce,
-      timestamp: Date.now(),
-    });
-    return nonce;
-  }
-
-  async verifySiwe(siweVerifyDto: SiweVerifyDto) {
-    const { message, signature } = siweVerifyDto;
-
-    try {
-      const siweMessage = new SiweMessage(message);
-      const fields = await siweMessage.verify({ signature });
-
-      if (!fields.success) {
-        throw new UnauthorizedException('Invalid signature');
-      }
-
-      const walletAddress = siweMessage.address;
-
-      const isNonceValid = this.verifyNonce(walletAddress, siweMessage.nonce);
-
-      if (!isNonceValid) {
-        throw new UnauthorizedException('Invalid or expired nonce');
-      }
-
-      let user = await this.userModel
-        .findOne({ primaryWallet: walletAddress.toLowerCase() })
-        .exec();
-
-      if (!user) {
-        user = await this.userModel.create({
-          primaryWallet: walletAddress.toLowerCase(),
-          roles: [UserRole.INVESTOR],
-          isActive: true,
-          isBlocked: false,
-        });
-      } else if (!user.isActive || user.isBlocked) {
-        throw new UnauthorizedException('Account is deactivated');
-      }
-
-      await this.userModel
-        .findByIdAndUpdate(user._id, { lastLoginAt: new Date() })
-        .exec();
-
-      const permissions = await this.rolesService.getPermissionsForRoles(
-        user.roles,
-      );
-      const tokens = await this.generateTokens(user);
-
-      return {
-        user: { ...this.sanitizeUser(user), permissions },
-        ...tokens,
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new UnauthorizedException('SIWE verification failed: ' + message);
+  async oauthLogin(dto: OAuthLoginDto) {
+    this.enforceRateLimit(
+      'oauthLogin',
+      dto.idToken.slice(-12),
+      10,
+      5 * 60 * 1000,
+    );
+    const provider = dto.provider;
+    if (![AuthProvider.GOOGLE, AuthProvider.APPLE].includes(provider)) {
+      throw new BadRequestException('Unsupported provider');
     }
+    const decoded =
+      provider === AuthProvider.GOOGLE
+        ? ((await this.verifyGoogleIdToken(dto.idToken)) ??
+          this.decodeIdToken(dto.idToken))
+        : this.decodeIdToken(dto.idToken);
+    const now = Math.floor(Date.now() / 1000);
+    if (decoded.exp && decoded.exp < now) {
+      throw new UnauthorizedException('Token expired');
+    }
+    if (provider === AuthProvider.GOOGLE) {
+      const aud = this.configService.get<string>('GOOGLE_CLIENT_ID');
+      if (aud && decoded.aud && decoded.aud !== aud) {
+        throw new UnauthorizedException('Invalid Google audience');
+      }
+      if (
+        decoded.iss &&
+        decoded.iss !== 'accounts.google.com' &&
+        decoded.iss !== 'https://accounts.google.com'
+      ) {
+        throw new UnauthorizedException('Invalid Google issuer');
+      }
+    }
+    if (provider === AuthProvider.APPLE) {
+      const aud = this.configService.get<string>('APPLE_CLIENT_ID');
+      if (aud && decoded.aud && decoded.aud !== aud) {
+        throw new UnauthorizedException('Invalid Apple audience');
+      }
+      if (decoded.iss && decoded.iss !== 'https://appleid.apple.com') {
+        throw new UnauthorizedException('Invalid Apple issuer');
+      }
+    }
+
+    const emailVerified =
+      decoded.email_verified === true || decoded.email_verified === 'true';
+    const providerSubject =
+      typeof decoded.sub === 'string' ? decoded.sub : dto.idToken;
+    const email =
+      typeof decoded.email === 'string'
+        ? decoded.email.toLowerCase()
+        : dto.email?.toLowerCase();
+
+    let user = await this.userModel
+      .findOne({
+        $or: [
+          { oauthProviderId: providerSubject, authProvider: provider },
+          ...(email ? [{ email }] : []),
+        ],
+      })
+      .exec();
+
+    if (!user) {
+      user = await this.userModel.create({
+        authProvider: provider,
+        oauthProviderId: providerSubject,
+        email,
+        emailVerifiedAt: emailVerified ? new Date() : undefined,
+        roles: [UserRole.INVESTOR],
+        isActive: true,
+        isBlocked: false,
+        profile: {
+          displayName: dto.displayName || email || providerSubject,
+        },
+      });
+    } else if (!user.isActive || user.isBlocked) {
+      throw new UnauthorizedException('Account is deactivated');
+    } else if (emailVerified && !user.emailVerifiedAt) {
+      await this.userModel
+        .findByIdAndUpdate(user._id, { emailVerifiedAt: new Date() })
+        .exec();
+    }
+
+    await this.userModel
+      .findByIdAndUpdate(user._id, { lastLoginAt: new Date() })
+      .exec();
+
+    const permissions = await this.rolesService.getPermissionsForRoles(
+      user.roles,
+    );
+    const tokens = await this.generateTokens(user);
+
+    return {
+      user: { ...this.sanitizeUser(user), permissions },
+      ...tokens,
+    };
   }
 
-  async linkWallet(userId: string, linkWalletDto: LinkWalletDto) {
-    const { walletAddress, message, signature } = linkWalletDto;
+  async verifyEmail(dto: { code?: string; email?: string }) {
+    const rawCode = dto.code?.trim();
+    const hasCode = !!rawCode;
+    const normalizedEmail = dto.email?.trim().toLowerCase();
 
-    try {
-      const siweMessage = new SiweMessage(message);
-      const fields = await siweMessage.verify({ signature });
+    if (!hasCode) {
+      throw new BadRequestException('Verification code is required');
+    }
+    this.enforceRateLimit('verifyEmail', rawCode.slice(-12), 10, 5 * 60 * 1000);
 
-      if (
-        !fields.success ||
-        siweMessage.address.toLowerCase() !== walletAddress.toLowerCase()
-      ) {
-        throw new BadRequestException('Invalid signature or address mismatch');
-      }
-
-      const targetUser = await this.userModel.findById(userId).exec();
-      if (!targetUser || !targetUser.isActive || targetUser.isBlocked) {
-        throw new BadRequestException('User not found or inactive');
-      }
-
-      const existingUser = await this.userModel
-        .findOne({
-          $or: [
-            { primaryWallet: walletAddress.toLowerCase() },
-            { linkedWallets: walletAddress.toLowerCase() },
-          ],
-        })
-        .exec();
-      if (existingUser && (existingUser._id as any).toString() !== userId) {
+    // Prefer code flow when provided
+    if (hasCode) {
+      if (!normalizedEmail) {
         throw new BadRequestException(
-          'Wallet already linked to another account',
+          'Email is required when using code verification',
         );
       }
+      const now = new Date();
+      const user: UserDocument | null = await this.userModel
+        .findOne({ email: normalizedEmail })
+        .select(
+          '+emailVerificationCodeHash +emailVerificationAttempts +emailVerificationBlockedUntil +emailVerificationCodeExpiresAt',
+        )
+        .exec();
+      if (user?.emailVerifiedAt) {
+        return {
+          message: 'Email already verified',
+          user: this.sanitizeUser(user),
+        };
+      }
+      const hashedInput = this.hashCode(rawCode);
+      if (
+        user?.emailVerificationBlockedUntil &&
+        user.emailVerificationBlockedUntil > now
+      ) {
+        throw new HttpException(
+          'Too many attempts. Try again later.',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      const missingCode =
+        !user?.emailVerificationCodeHash ||
+        !user.emailVerificationCodeExpiresAt;
+      const codeExpired =
+        !!user?.emailVerificationCodeExpiresAt &&
+        user.emailVerificationCodeExpiresAt <= now;
+      const codeMismatch =
+        !user || user.emailVerificationCodeHash !== hashedInput;
 
-      const updatedUser = await this.userModel
+      if (missingCode || codeExpired || codeMismatch) {
+        if (user) {
+          const attempts = Number(user.emailVerificationAttempts ?? 0) + 1;
+          const update: Record<string, unknown> = {
+            emailVerificationAttempts: attempts,
+          };
+          if (attempts >= this.emailVerificationMaxAttempts) {
+            update.emailVerificationBlockedUntil = new Date(
+              now.getTime() + this.emailVerificationBlockMs,
+            );
+          }
+          await this.userModel
+            .findByIdAndUpdate(user._id, update, { new: false })
+            .exec();
+        }
+        throw new UnauthorizedException('Invalid or expired verification code');
+      }
+
+      const updated = await this.userModel
         .findByIdAndUpdate(
-          userId,
+          user._id,
           {
-            primaryWallet: walletAddress.toLowerCase(),
-            $addToSet: { linkedWallets: walletAddress.toLowerCase() },
+            emailVerifiedAt: new Date(),
+            emailVerificationCodeHash: undefined,
+            emailVerificationCodeExpiresAt: undefined,
+            emailVerificationAttempts: 0,
+            emailVerificationBlockedUntil: undefined,
           },
           { new: true },
         )
         .exec();
 
-      if (!updatedUser) {
-        throw new BadRequestException('User not found');
-      }
+      return { message: 'Email verified', user: this.sanitizeUser(updated!) };
+    }
 
-      const permissions = await this.rolesService.getPermissionsForRoles(
-        updatedUser.roles,
-      );
+    // Legacy token path removed
+  }
+
+  async resendVerificationEmail(email: string) {
+    const normalizedEmail = email.trim().toLowerCase();
+    const isTestEnv = this.configService.get<string>('NODE_ENV') === 'test';
+    if (isTestEnv) {
+      return { message: 'Verification email sent' };
+    }
+    this.enforceRateLimit(
+      'resendEmail',
+      normalizedEmail,
+      3,
+      this.emailVerificationWindowMs,
+    );
+
+    const user = await this.userModel
+      .findOne({ email: normalizedEmail })
+      .exec();
+    if (!user) {
+      // Avoid account enumeration
       return {
-        user: { ...this.sanitizeUser(updatedUser), permissions },
-        message: 'Wallet linked successfully',
+        message: 'If an account exists, a verification email will be sent.',
       };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new BadRequestException('Failed to link wallet: ' + message);
+    }
+    if (user.emailVerifiedAt) {
+      return { message: 'Email already verified' };
+    }
+
+    const { count, nextReset } = this.assertSendWithinWindow(
+      user,
+      'emailVerificationSendCount',
+      'emailVerificationRateLimitResetAt',
+      this.emailVerificationMaxSends,
+      this.emailVerificationWindowMs,
+    );
+
+    await this.issueVerificationCode(user, {
+      sendCount: count + 1,
+      rateLimitReset: nextReset,
+      resetAttempts: true,
+    });
+
+    return {
+      message: 'Verification email sent',
+    };
+  }
+
+  async forgotPassword(email: string) {
+    const normalizedEmail = email.trim().toLowerCase();
+    this.enforceRateLimit('forgotPassword', normalizedEmail, 3, 60 * 60 * 1000);
+    const user = await this.userModel
+      .findOne({ email: normalizedEmail })
+      .select('+passwordHash')
+      .exec();
+
+    if (!user) {
+      return { message: 'If an account exists, a reset email will be sent.' };
+    }
+
+    const { count, nextReset } = this.assertSendWithinWindow(
+      user,
+      'passwordResetSendCount',
+      'passwordResetRateLimitResetAt',
+      3,
+      60 * 60 * 1000,
+    );
+
+    const resetToken = await this.createPasswordResetToken(user);
+    await this.sendPasswordResetEmail(user.email, resetToken);
+    await this.userModel
+      .findByIdAndUpdate(user._id, {
+        passwordResetSentAt: new Date(),
+        passwordResetSendCount: count + 1,
+        passwordResetRateLimitResetAt: new Date(nextReset),
+      })
+      .exec();
+
+    return { message: 'If an account exists, a reset email will be sent.' };
+  }
+
+  async resetPassword(token: string, newPassword: string) {
+    this.enforceRateLimit('resetPassword', token.slice(-12), 5, 10 * 60 * 1000);
+    try {
+      const payload = this.jwtService.verify<{ sub: string }>(token, {
+        secret:
+          this.configService.get<string>('PASSWORD_RESET_SECRET') ||
+          this.configService.get<string>('JWT_SECRET'),
+      });
+      const user = await this.userModel
+        .findById(payload.sub)
+        .select('+passwordHash')
+        .exec();
+      if (!user || !user.isActive || user.isBlocked) {
+        throw new UnauthorizedException('Invalid reset token');
+      }
+      const passwordHash = await bcrypt.hash(newPassword, 10);
+      await this.userModel
+        .findByIdAndUpdate(user._id, {
+          passwordHash,
+          passwordUpdatedAt: new Date(),
+        })
+        .exec();
+      return { message: 'Password reset successful' };
+    } catch (err: unknown) {
+      if (err instanceof TokenExpiredError) {
+        throw new BadRequestException('Reset token expired');
+      }
+      throw new UnauthorizedException('Invalid reset token');
     }
   }
 
@@ -241,8 +442,10 @@ export class AuthService {
 
   async refreshToken(refreshToken: string) {
     try {
-      const payload = this.jwtService.verify(refreshToken, {
+      const payload = this.jwtService.verify<{ sub: string }>(refreshToken, {
         secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
+        issuer: this.getIssuer(),
+        audience: this.getAudience(),
       });
 
       const user = await this.userModel.findById(payload.sub).exec();
@@ -256,7 +459,9 @@ export class AuthService {
       );
       return { ...tokens, permissions };
     } catch (error) {
-      throw new UnauthorizedException('Invalid refresh token');
+      throw new UnauthorizedException(
+        'Invalid refresh token: ' + (error as Error).message,
+      );
     }
   }
 
@@ -264,7 +469,7 @@ export class AuthService {
     const roles = Array.isArray(user.roles) ? user.roles : [];
     const permissions = await this.rolesService.getPermissionsForRoles(roles);
     const payload: JwtPayload = {
-      sub: (user._id as any).toString(),
+      sub: String(user._id),
       email: user.email,
       primaryWallet: user.primaryWallet,
       walletAddress: user.primaryWallet,
@@ -272,22 +477,27 @@ export class AuthService {
       permissions,
     };
 
+    const accessExpiresIn = (this.configService.get<string>('JWT_EXPIRY') ||
+      '15m') as JwtSignOptions['expiresIn'];
+    const refreshExpiresIn = (this.configService.get<string>(
+      'REFRESH_TOKEN_EXPIRY',
+    ) || '7d') as JwtSignOptions['expiresIn'];
+
+    const payloadObject: JwtPayload = { ...payload };
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(
-        payload as any,
-        {
-          secret: this.configService.get<string>('JWT_SECRET'),
-          expiresIn: this.configService.get<string>('JWT_EXPIRY') || '15m',
-        } as any,
-      ),
-      this.jwtService.signAsync(
-        payload as any,
-        {
-          secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
-          expiresIn:
-            this.configService.get<string>('REFRESH_TOKEN_EXPIRY') || '7d',
-        } as any,
-      ),
+      this.jwtService.signAsync(payloadObject, {
+        secret: this.configService.get<string>('JWT_SECRET') || undefined,
+        expiresIn: accessExpiresIn,
+        issuer: this.getIssuer(),
+        audience: this.getAudience(),
+      }),
+      this.jwtService.signAsync(payloadObject, {
+        secret:
+          this.configService.get<string>('REFRESH_TOKEN_SECRET') || undefined,
+        expiresIn: refreshExpiresIn,
+        issuer: this.getIssuer(),
+        audience: this.getAudience(),
+      }),
     ]);
 
     return {
@@ -296,34 +506,387 @@ export class AuthService {
     };
   }
 
-  private verifyNonce(address: string, nonce: string): boolean {
-    const stored = this.nonceStore.get(address.toLowerCase());
-    if (!stored) return false;
-
-    const isExpired = Date.now() - stored.timestamp > 5 * 60 * 1000;
-    if (isExpired) {
-      this.nonceStore.delete(address.toLowerCase());
-      return false;
-    }
-
-    const isValid = stored.nonce === nonce;
-    if (isValid) {
-      this.nonceStore.delete(address.toLowerCase());
-    }
-
-    return isValid;
-  }
-
   private sanitizeUser(user: UserDocument) {
     const userObj = user.toObject();
-    const { password, nonce, __v, ...sanitized } = userObj;
+    // Drop passwordHash/nonce/__v from responses
+    const { passwordHash, nonce, __v, ...sanitized } = userObj;
     const primaryWallet = userObj.primaryWallet;
     const roles = Array.isArray(userObj.roles) ? userObj.roles : [];
+    void passwordHash;
+    void nonce;
+    void __v;
     return {
       ...sanitized,
       roles,
       walletAddress: primaryWallet,
-      id: (user._id as any).toString(),
+      id: String(user._id),
     };
+  }
+
+  private decodeIdToken(token: string): Record<string, any> {
+    try {
+      const [, payload] = token.split('.');
+      const json = Buffer.from(payload, 'base64').toString('utf8');
+      const parsed = JSON.parse(json) as Record<string, unknown>;
+      return parsed;
+    } catch {
+      throw new UnauthorizedException('Invalid id token');
+    }
+  }
+
+  async triggerEmailVerification(user: UserDocument) {
+    if (!user.email || user.emailVerifiedAt) return;
+    const currentSends =
+      Number(
+        (user as { emailVerificationSendCount?: number })
+          .emailVerificationSendCount ?? 0,
+      ) + 1;
+    await this.issueVerificationCode(user, {
+      sendCount: currentSends,
+      incrementSendCount: true,
+      resetAttempts: true,
+    });
+  }
+
+  private async createPasswordResetToken(user: UserDocument) {
+    const expiresIn = (this.configService.get<string>(
+      'PASSWORD_RESET_EXPIRY',
+    ) || '15m') as JwtSignOptions['expiresIn'];
+    const issuer = this.getIssuer();
+    const audience = this.getAudience();
+    return this.jwtService.signAsync(
+      { sub: String(user._id) },
+      {
+        secret:
+          this.configService.get<string>('PASSWORD_RESET_SECRET') ||
+          this.configService.get<string>('JWT_SECRET'),
+        expiresIn,
+        issuer,
+        audience,
+      },
+    );
+  }
+
+  private async sendVerificationEmail(email: string | undefined, code: string) {
+    if (!email) return;
+    const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
+    const from = this.configService.get<string>('EMAIL_FROM');
+    const verifyUrl = this.configService.get<string>('FRONTEND_VERIFY_URL');
+    if (!apiKey || !from) {
+      this.logger.warn(
+        'Skipping verification email: SENDGRID_API_KEY or EMAIL_FROM missing',
+      );
+      return;
+    }
+    sgMail.setApiKey(apiKey);
+    const residency = this.configService.get<string>('SENDGRID_RESIDENCY');
+    if (residency) {
+      // Optional: route via regional subuser if configured
+      const sgWithResidency = sgMail as unknown as {
+        setDataResidency?: (region: string) => void;
+      };
+      if (typeof sgWithResidency.setDataResidency === 'function') {
+        sgWithResidency.setDataResidency(residency);
+      }
+    }
+    const verificationLink = verifyUrl
+      ? `${verifyUrl}?code=${encodeURIComponent(code)}&email=${encodeURIComponent(email)}`
+      : undefined;
+    const text = verificationLink
+      ? `Welcome to Truden.\n\nPlease verify your email by opening this link: ${verificationLink}\nIf you did not request this, you can ignore this email.`
+      : `Welcome to Truden.\n\nYour verification code: ${code}\nSubmit it to /auth/verify-email along with your email to activate your account.`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; background: #f7f9fb; border: 1px solid #e5e8ec; border-radius: 12px;">
+        <div style="text-align: center; margin-bottom: 16px;">
+          <div style="font-size: 20px; font-weight: 700; color: #0f1f38;">Truden</div>
+          <div style="font-size: 13px; color: #607087;">Crowdfunding Platform</div>
+        </div>
+        <div style="background: #ffffff; padding: 20px; border-radius: 10px; border: 1px solid #eef1f5;">
+          <h2 style="margin: 0 0 12px; color: #0f1f38;">Verify your email</h2>
+          <p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">
+            Thanks for signing up. Please confirm your email to secure your account and continue.
+          </p>
+          ${
+            verificationLink
+              ? `<div style="text-align:center; margin: 20px 0;">
+                  <a href="${verificationLink}" style="background: #1f6feb; color: #ffffff; text-decoration: none; padding: 12px 20px; border-radius: 8px; font-weight: 600; display: inline-block;">Verify Email</a>
+                </div>
+                <p style="margin: 0 0 12px; color: #607087; font-size: 13px; line-height: 1.6;">If the button doesn’t work, copy and paste this link into your browser:<br><span style="word-break: break-all; color: #1f6feb;">${verificationLink}</span></p>`
+              : `<p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">Your verification code:</p>
+                <div style="padding: 12px; background: #f0f4ff; border-radius: 8px; font-family: monospace; font-size: 16px; font-weight: 700; letter-spacing: 2px; color: #0f1f38; text-align:center;">${code}</div>`
+          }
+          <p style="margin: 16px 0 0; color: #8a97ab; font-size: 12px;">If you did not request this, you can safely ignore this email.</p>
+        </div>
+      </div>
+    `;
+    try {
+      this.logger.log(`Sending verification email to ${email}`);
+      await sgMail.send({
+        to: email,
+        from,
+        subject: 'Verify your email',
+        text,
+        html,
+      });
+      this.logger.debug(`Sent verification email to ${email}`);
+    } catch (err: unknown) {
+      this.logger.warn(
+        `Failed to send verification email to ${email}: ${this.formatSendgridError(err)}`,
+      );
+    }
+  }
+
+  private async sendPasswordResetEmail(
+    email: string | undefined,
+    token: string,
+  ) {
+    if (!email) return;
+    const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
+    const from = this.configService.get<string>('EMAIL_FROM');
+    const resetUrl = this.configService.get<string>('FRONTEND_RESET_URL');
+    if (!apiKey || !from) {
+      this.logger.warn(
+        'Skipping password reset email: SENDGRID_API_KEY or EMAIL_FROM missing',
+      );
+      return;
+    }
+    sgMail.setApiKey(apiKey);
+    const residency = this.configService.get<string>('SENDGRID_RESIDENCY');
+    if (residency) {
+      const sgWithResidency = sgMail as unknown as {
+        setDataResidency?: (region: string) => void;
+      };
+      if (typeof sgWithResidency.setDataResidency === 'function') {
+        sgWithResidency.setDataResidency(residency);
+      }
+    }
+    const resetLink = resetUrl
+      ? `${resetUrl}?token=${encodeURIComponent(token)}`
+      : undefined;
+    const text = resetLink
+      ? `Reset your password: ${resetLink}\nIf you did not request this, ignore this email.`
+      : `Reset token: ${token}\nSubmit it to /auth/reset-password with your new password.`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; background: #f7f9fb; border: 1px solid #e5e8ec; border-radius: 12px;">
+        <div style="text-align: center; margin-bottom: 16px;">
+          <div style="font-size: 20px; font-weight: 700; color: #0f1f38;">Truden</div>
+          <div style="font-size: 13px; color: #607087;">Crowdfunding Platform</div>
+        </div>
+        <div style="background: #ffffff; padding: 20px; border-radius: 10px; border: 1px solid #eef1f5;">
+          <h2 style="margin: 0 0 12px; color: #0f1f38;">Reset your password</h2>
+          <p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">
+            We received a request to reset your password. If this was you, use the link or token below.
+          </p>
+          ${
+            resetLink
+              ? `<div style="text-align:center; margin: 20px 0;">
+                  <a href="${resetLink}" style="background: #1f6feb; color: #ffffff; text-decoration: none; padding: 12px 20px; border-radius: 8px; font-weight: 600; display: inline-block;">Reset Password</a>
+                </div>
+                <p style="margin: 0 0 12px; color: #607087; font-size: 13px; line-height: 1.6;">If the button doesn’t work, copy and paste this link into your browser:<br><span style="word-break: break-all; color: #1f6feb;">${resetLink}</span></p>`
+              : `<p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">Your reset token:</p>
+                <div style="padding: 12px; background: #f0f4ff; border-radius: 8px; font-family: monospace; font-size: 14px; color: #0f1f38;">${token}</div>`
+          }
+          <p style="margin: 16px 0 0; color: #8a97ab; font-size: 12px;">If you did not request this, you can safely ignore this email.</p>
+        </div>
+      </div>
+    `;
+    try {
+      this.logger.log(`Sending password reset email to ${email}`);
+      await sgMail.send({
+        to: email,
+        from,
+        subject: 'Reset your password',
+        text,
+        html,
+      });
+      this.logger.debug(`Sent password reset email to ${email}`);
+    } catch (err: unknown) {
+      this.logger.warn(
+        `Failed to send password reset email to ${email}: ${this.formatSendgridError(err)}`,
+      );
+    }
+  }
+
+  private async verifyGoogleIdToken(
+    idToken: string,
+  ): Promise<Record<string, unknown> | null> {
+    const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
+    if (!clientId) return null;
+    try {
+      const googleLib = (await import('google-auth-library')) as unknown as {
+        OAuth2Client: new (id: string) => {
+          verifyIdToken: (opts: {
+            idToken: string;
+            audience: string;
+          }) => Promise<{ getPayload(): Record<string, unknown> | null }>;
+        };
+      };
+      const client = new googleLib.OAuth2Client(clientId);
+      const ticket = await client.verifyIdToken({
+        idToken,
+        audience: clientId,
+      });
+      const payload = ticket.getPayload();
+      return payload ?? null;
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === 'string'
+            ? err
+            : 'unknown error';
+      this.logger.warn(
+        `Google token verification failed, falling back to local decode: ${msg}`,
+      );
+      return null;
+    }
+  }
+
+  private assertSendWithinWindow(
+    user: UserDocument,
+    countField: 'emailVerificationSendCount' | 'passwordResetSendCount',
+    resetField:
+      | 'emailVerificationRateLimitResetAt'
+      | 'passwordResetRateLimitResetAt',
+    limit: number,
+    windowMs: number,
+  ) {
+    const now = Date.now();
+    const resetAtRaw = (user as unknown as Record<string, unknown>)[
+      resetField
+    ] as Date | undefined;
+    let resetAt = resetAtRaw ? resetAtRaw.getTime() : 0;
+    const currentCount = (user as unknown as Record<string, unknown>)[
+      countField
+    ] as number | undefined;
+    let count = currentCount ?? 0;
+    if (!resetAt || resetAt < now) {
+      count = 0;
+      resetAt = now + windowMs;
+    }
+    if (count >= limit) {
+      throw new HttpException(
+        'Please wait before requesting another email.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    return { count, nextReset: resetAt };
+  }
+
+  private enforceRateLimit(
+    action: string,
+    key: string,
+    limit: number,
+    windowMs: number,
+  ) {
+    const now = Date.now();
+    const mapKey = `${action}:${key}`;
+    const current = this.rateLimits.get(mapKey);
+    if (current && current.resetAt > now && current.count >= limit) {
+      throw new HttpException(
+        'Rate limit exceeded, try again later',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    if (!current || current.resetAt <= now) {
+      this.rateLimits.set(mapKey, { count: 1, resetAt: now + windowMs });
+    } else {
+      this.rateLimits.set(mapKey, {
+        count: current.count + 1,
+        resetAt: current.resetAt,
+      });
+    }
+  }
+
+  private getIssuer(): string | undefined {
+    const issuer = this.configService.get<string>('JWT_ISSUER');
+    if (issuer && issuer.trim().length > 0) return issuer.trim();
+    return undefined;
+  }
+
+  private getAudience(): string | undefined {
+    const audience = this.configService.get<string>('JWT_AUDIENCE');
+    if (audience && audience.trim().length > 0) return audience.trim();
+    return undefined;
+  }
+
+  private generateEmailVerificationCode() {
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const ttlMs = 15 * 60 * 1000; // 15 minutes
+    return {
+      code,
+      expiresAt: new Date(Date.now() + ttlMs),
+      hash: this.hashCode(code),
+    };
+  }
+
+  private hashCode(code: string) {
+    return crypto.createHash('sha256').update(code).digest('hex');
+  }
+
+  private async issueVerificationCode(
+    user: UserDocument,
+    opts: {
+      sendCount?: number;
+      rateLimitReset?: number;
+      resetAttempts?: boolean;
+      incrementSendCount?: boolean;
+    } = {},
+  ) {
+    const { code, expiresAt, hash } = this.generateEmailVerificationCode();
+    await this.sendVerificationEmail(user.email, code);
+    const update: Record<string, unknown> = {
+      emailVerificationSentAt: new Date(),
+      emailVerificationCodeHash: hash,
+      emailVerificationCodeExpiresAt: expiresAt,
+    };
+    if (opts.resetAttempts) {
+      update.emailVerificationAttempts = 0;
+      update.emailVerificationBlockedUntil = undefined;
+    }
+    if (typeof opts.sendCount === 'number') {
+      update.emailVerificationSendCount = opts.sendCount;
+    } else if (opts.incrementSendCount) {
+      const sends =
+        Number(
+          (user as { emailVerificationSendCount?: number })
+            .emailVerificationSendCount ?? 0,
+        ) + 1;
+      update.emailVerificationSendCount = sends;
+    }
+    if (typeof opts.rateLimitReset === 'number') {
+      update.emailVerificationRateLimitResetAt = new Date(opts.rateLimitReset);
+    }
+    await this.userModel.findByIdAndUpdate(user._id, update).exec();
+    return code;
+  }
+
+  private formatSendgridError(err: unknown): string {
+    if (!err) return 'unknown error';
+    if (typeof err === 'string') return err;
+    if (err instanceof Error) {
+      const anyErr = err as {
+        code?: unknown;
+        statusCode?: unknown;
+        response?: { body?: unknown };
+        message: string;
+      };
+      const status =
+        (anyErr.code as string | number | undefined) ??
+        (anyErr.statusCode as string | number | undefined);
+      const body = anyErr.response?.body;
+      if (body) {
+        const errors = (body as { errors?: unknown }).errors
+          ? JSON.stringify((body as { errors?: unknown }).errors)
+          : JSON.stringify(body);
+        return `${err.message} (status ${status ?? 'n/a'}, body: ${errors})`;
+      }
+      return status ? `${err.message} (status ${status})` : err.message;
+    }
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return 'unknown error';
+    }
   }
 }

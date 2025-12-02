@@ -16,7 +16,7 @@ export class UsersRepository {
   }
 
   findById(id: string): Promise<UserDocument | null> {
-    return this.userModel.findById(id).exec();
+    return this.userModel.findById(id).select('-passwordHash').exec();
   }
 
   findByWallet(wallet: string): Promise<UserDocument | null> {
@@ -27,6 +27,14 @@ export class UsersRepository {
           { linkedWallets: wallet.toLowerCase() },
         ],
       })
+      .select('-passwordHash')
+      .exec();
+  }
+
+  findByEmail(email: string): Promise<UserDocument | null> {
+    return this.userModel
+      .findOne({ email: email.toLowerCase().trim() })
+      .select('-passwordHash')
       .exec();
   }
 
@@ -35,7 +43,12 @@ export class UsersRepository {
     limit = 25,
     skip = 0,
   ): Promise<UserDocument[]> {
-    return this.userModel.find(filter).skip(skip).limit(limit).exec();
+    return this.userModel
+      .find(filter)
+      .skip(skip)
+      .limit(limit)
+      .select('-passwordHash')
+      .exec();
   }
 
   count(filter: FilterQuery<UserDocument>): Promise<number> {
@@ -86,7 +99,28 @@ export class UsersRepository {
     kycStatus: KYCStatus,
   ): Promise<UserDocument | null> {
     return this.userModel
-      .findByIdAndUpdate(userId, { kycStatus }, { new: true })
+      .findByIdAndUpdate(
+        userId,
+        { kycStatus, 'kyc.status': kycStatus },
+        { new: true },
+      )
+      .exec();
+  }
+
+  updateCreatorVerificationStatus(
+    userId: string,
+    status: string,
+    reason?: string,
+  ): Promise<UserDocument | null> {
+    const setPayload: Record<string, unknown> = {
+      'creatorVerification.status': status,
+      'creatorVerification.failureReason': reason,
+    };
+    if (status === 'VERIFIED') {
+      setPayload['creatorVerification.verifiedAt'] = new Date();
+    }
+    return this.userModel
+      .findByIdAndUpdate(userId, { $set: setPayload }, { new: true })
       .exec();
   }
 }
