@@ -2,7 +2,9 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
+import * as bcrypt from 'bcryptjs';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { UserRole, KYCStatus } from '../../common/enums/role.enum';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -12,22 +14,93 @@ import { UpdateRoleDto } from './dto/update-role.dto';
 import { UpdateKycStatusDto } from './dto/update-kyc-status.dto';
 import { BlockUserDto } from './dto/block-user.dto';
 import { QueryUsersDto } from './dto/query-users.dto';
+import { SignupUserDto } from './dto/signup-user.dto';
+import { SubmitKycDto } from './dto/submit-kyc.dto';
+import { SubmitCreatorVerificationDto } from './dto/submit-creator-verification.dto';
+import { UpdateCreatorVerificationDto } from './dto/update-creator-verification.dto';
 import { buildUserQuery } from './utils/user-query.util';
 import { UsersRepository } from './repositories/users.repository';
 import { UserEvent } from './listeners/user.events';
 import type { UserEventPayload } from './listeners/user.events';
 import type { UserDocument } from './schemas/user.schema';
+import { CreatorVerificationStatus } from '../../common/enums/creator-verification-status.enum';
+import { AuthService } from '../auth/auth.service';
 
 @Injectable()
 export class UsersService {
   constructor(
     private readonly usersRepository: UsersRepository,
     private readonly events: EventEmitter2,
+    private readonly authService: AuthService,
   ) {}
 
+  async signup(dto: SignupUserDto) {
+    const primaryWallet = dto.primaryWallet?.toLowerCase();
+    if (primaryWallet) {
+      await this.ensureWalletAvailable(primaryWallet);
+    }
+    if (dto.email) {
+      await this.ensureEmailAvailable(dto.email);
+    }
+    const passwordHash = dto.password
+      ? await bcrypt.hash(dto.password, 10)
+      : undefined;
+
+    const linkedWallets = this.normalizeLinkedWallets(
+      dto.linkedWallets,
+      primaryWallet,
+    );
+    for (const wallet of linkedWallets) {
+      await this.ensureWalletAvailable(wallet);
+    }
+
+    const user: UserDocument = await this.usersRepository.create({
+      primaryWallet,
+      linkedWallets,
+      roles: [UserRole.INVESTOR],
+      kycStatus: KYCStatus.NOT_VERIFIED,
+      kyc: { status: KYCStatus.NOT_VERIFIED, evidenceUrls: [], accreditation: { isAccredited: false } },
+      email: dto.email?.toLowerCase(),
+      authProvider: passwordHash ? 'email' : 'email',
+      passwordHash,
+      isActive: true,
+      profile: {
+        displayName: dto.displayName,
+        avatarUrl: dto.avatarUrl,
+        country: dto.country,
+      },
+      residencyCountry: dto.residencyCountry,
+      notifications: { projectUpdates: true, approvals: true, marketing: false },
+      creatorVerification: {
+        status: CreatorVerificationStatus.NOT_SUBMITTED,
+        evidenceUrls: [],
+        attachments: [],
+      },
+      avatar: this.parseAvatar(dto.avatarBase64),
+    });
+
+    this.emitEvent(UserEvent.Created, {
+      userId: String(user.id),
+      primaryWallet: user.primaryWallet,
+    });
+
+    // Trigger email verification for email/password signups
+    await this.authService.triggerEmailVerification(user);
+
+    return this.sanitizeUser(user);
+  }
+
   async createUser(dto: CreateUserDto) {
-    const primaryWallet = dto.primaryWallet.toLowerCase();
-    await this.ensureWalletAvailable(primaryWallet);
+    const primaryWallet = dto.primaryWallet?.toLowerCase();
+    if (primaryWallet) {
+      await this.ensureWalletAvailable(primaryWallet);
+    }
+    if (dto.email) {
+      await this.ensureEmailAvailable(dto.email);
+    }
+    const passwordHash = dto.password
+      ? await bcrypt.hash(dto.password, 10)
+      : undefined;
 
     const linkedWallets = this.normalizeLinkedWallets(
       dto.linkedWallets,
@@ -42,13 +115,26 @@ export class UsersService {
       linkedWallets,
       roles: [dto.role ?? UserRole.INVESTOR],
       kycStatus: dto.kycStatus ?? KYCStatus.NOT_VERIFIED,
-      email: dto.email.toLowerCase(),
+      kyc: {
+        status: dto.kycStatus ?? KYCStatus.NOT_VERIFIED,
+        evidenceUrls: [],
+        accreditation: { isAccredited: false },
+      },
+      email: dto.email?.toLowerCase(),
+      authProvider: passwordHash ? 'email' : 'email',
+      passwordHash,
       isActive: true,
       profile: {
         displayName: dto.displayName,
         avatarUrl: dto.avatarUrl,
         country: dto.country,
       },
+      creatorVerification: {
+        status: dto.creatorVerificationStatus ?? CreatorVerificationStatus.NOT_SUBMITTED,
+        evidenceUrls: [],
+        attachments: [],
+      },
+      avatar: this.parseAvatar(dto.avatarBase64),
     });
 
     this.emitEvent(UserEvent.Created, {
@@ -56,7 +142,7 @@ export class UsersService {
       primaryWallet: user.primaryWallet,
     });
 
-    return user;
+    return this.sanitizeUser(user);
   }
 
   async getUserById(id: string) {
@@ -64,7 +150,7 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
-    return user;
+    return this.sanitizeUser(user);
   }
 
   async listUsers(query: QueryUsersDto) {
@@ -73,7 +159,7 @@ export class UsersService {
       this.usersRepository.query(filter, query.limit, query.skip),
       this.usersRepository.count(filter),
     ]);
-    return { users, total };
+    return { users: users.map((u) => this.sanitizeUser(u)), total };
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {
@@ -83,6 +169,8 @@ export class UsersService {
     if (dto.email !== undefined) setPayload['email'] = dto.email.toLowerCase();
     if (dto.avatarUrl !== undefined)
       setPayload['profile.avatarUrl'] = dto.avatarUrl;
+    if (dto.avatarBase64 !== undefined)
+      setPayload['avatar'] = this.parseAvatar(dto.avatarBase64);
     if (dto.country !== undefined) setPayload['profile.country'] = dto.country;
 
     const user: UserDocument | null = await this.usersRepository.updateById(
@@ -102,7 +190,7 @@ export class UsersService {
       changes: { profile: dto },
     });
 
-    return user;
+    return this.sanitizeUser(user);
   }
 
   async linkWallet(userId: string, dto: LinkWalletDto) {
@@ -130,7 +218,51 @@ export class UsersService {
       primaryWallet: user.primaryWallet,
       changes: { wallet },
     });
-    return user;
+    return this.sanitizeUser(user);
+  }
+
+  async submitKyc(userId: string, dto: SubmitKycDto) {
+    const user = await this.usersRepository.updateById(userId, {
+      $set: {
+        kycStatus: KYCStatus.PENDING,
+        'kyc.status': KYCStatus.PENDING,
+        'kyc.documentType': dto.documentType,
+        'kyc.documentCountry': dto.documentCountry,
+        'kyc.documentLast4': dto.documentLast4,
+        'kyc.evidenceUrls': dto.evidenceUrls ?? [],
+        'kyc.submittedAt': new Date(),
+        'kyc.failureReason': null,
+      },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    this.emitEvent(UserEvent.KycUpdated, {
+      userId: String(user.id),
+      primaryWallet: user.primaryWallet,
+      changes: { kycStatus: KYCStatus.PENDING },
+    });
+    return this.sanitizeUser(user);
+  }
+
+  async submitCreatorVerification(
+    userId: string,
+    dto: SubmitCreatorVerificationDto,
+  ) {
+    const user = await this.usersRepository.updateById(userId, {
+      $set: {
+        'creatorVerification.status': CreatorVerificationStatus.PENDING,
+        'creatorVerification.evidenceUrls': dto.evidenceUrls ?? [],
+        'creatorVerification.attachments': dto.attachments ?? [],
+        'creatorVerification.submittedAt': new Date(),
+        'creatorVerification.failureReason': null,
+      },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    this.emitEvent(UserEvent.KycUpdated, {
+      userId: String(user.id),
+      primaryWallet: user.primaryWallet,
+      changes: { creatorVerificationStatus: CreatorVerificationStatus.PENDING },
+    });
+    return this.sanitizeUser(user);
   }
 
   async unlinkWallet(userId: string, dto: LinkWalletDto) {
@@ -145,7 +277,7 @@ export class UsersService {
       primaryWallet: user.primaryWallet,
       changes: { wallet },
     });
-    return user;
+    return this.sanitizeUser(user);
   }
 
   async updateRole(userId: string, dto: UpdateRoleDto) {
@@ -161,7 +293,7 @@ export class UsersService {
       primaryWallet: user.primaryWallet,
       changes: { role: dto.role },
     });
-    return user;
+    return this.sanitizeUser(user);
   }
 
   async updateKycStatus(userId: string, dto: UpdateKycStatusDto) {
@@ -175,7 +307,29 @@ export class UsersService {
       primaryWallet: user.primaryWallet,
       changes: { kycStatus: dto.kycStatus },
     });
-    return user;
+    return this.sanitizeUser(user);
+  }
+
+  async updateCreatorVerificationStatus(
+    userId: string,
+    dto: UpdateCreatorVerificationDto,
+  ) {
+    const now = new Date();
+    const user = await this.usersRepository.updateById(userId, {
+      $set: {
+        'creatorVerification.status': dto.status,
+        'creatorVerification.failureReason': dto.reason,
+        'creatorVerification.verifiedAt':
+          dto.status === CreatorVerificationStatus.VERIFIED ? now : undefined,
+      },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    this.emitEvent(UserEvent.KycUpdated, {
+      userId: String(user.id),
+      primaryWallet: user.primaryWallet,
+      changes: { creatorVerificationStatus: dto.status },
+    });
+    return this.sanitizeUser(user);
   }
 
   async blockUser(userId: string, dto: BlockUserDto) {
@@ -193,7 +347,7 @@ export class UsersService {
       primaryWallet: user.primaryWallet,
       changes: { reason: dto.reason },
     });
-    return user;
+    return this.sanitizeUser(user);
   }
 
   async recordLogin(userId: string) {
@@ -209,7 +363,7 @@ export class UsersService {
         primaryWallet: user.primaryWallet,
       });
     }
-    return user;
+    return user ? this.sanitizeUser(user) : user;
   }
 
   private async ensureWalletAvailable(wallet: string, ownerId?: string) {
@@ -218,6 +372,14 @@ export class UsersService {
       await this.usersRepository.findByWallet(normalizedWallet);
     if (existing && existing.id !== ownerId) {
       throw new ConflictException('Wallet already linked to another user');
+    }
+  }
+
+  private async ensureEmailAvailable(email: string, ownerId?: string) {
+    const normalizedEmail = email.toLowerCase().trim();
+    const existing = await this.usersRepository.findByEmail(normalizedEmail);
+    if (existing && existing.id !== ownerId) {
+      throw new ConflictException('Email already in use');
     }
   }
 
@@ -251,5 +413,34 @@ export class UsersService {
       emit: (event: UserEvent, payload: UserEventPayload) => unknown;
     };
     emitter.emit(event, payload);
+  }
+
+  private sanitizeUser(user: UserDocument) {
+    const obj = user.toObject();
+    delete (obj as any).password;
+    delete (obj as any).passwordHash;
+    return obj;
+  }
+
+  private parseAvatar(base64?: string) {
+    if (!base64) return undefined;
+    let raw = base64.trim();
+    let mimeType: string | undefined;
+
+    const dataUrlMatch = raw.match(/^data:(.+);base64,(.*)$/);
+    if (dataUrlMatch) {
+      mimeType = dataUrlMatch[1];
+      raw = dataUrlMatch[2];
+    }
+
+    try {
+      const data = Buffer.from(raw, 'base64');
+      if (!data.length) {
+        throw new Error('empty');
+      }
+      return { data, mimeType };
+    } catch {
+      throw new BadRequestException('Invalid avatar base64 payload');
+    }
   }
 }

@@ -1,7 +1,6 @@
 import {
   IsArray,
   IsEmail,
-  IsEnum,
   IsOptional,
   IsString,
   IsUrl,
@@ -9,12 +8,10 @@ import {
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { BadRequestException } from '@nestjs/common';
-import { KYCStatus, UserRole } from '../../../common/enums/role.enum';
 import {
   ApiProperty,
   ApiPropertyOptional,
 } from '../../../common/swagger.decorators';
-import { CreatorVerificationStatus } from '../../../common/enums/creator-verification-status.enum';
 
 const toLowerCase = (value: unknown) =>
   typeof value === 'string' ? value.trim().toLowerCase() : value;
@@ -38,9 +35,9 @@ const normalizeWalletArray = (value: unknown): string[] | undefined => {
   return wallets;
 };
 
-export class CreateUserDto {
+export class SignupUserDto {
   @ApiProperty({
-    description: 'Primary wallet address used for SIWE authentication',
+    description: 'Primary wallet address used for authentication',
   })
   @IsOptional()
   @IsString()
@@ -89,24 +86,6 @@ export class CreateUserDto {
   @IsOptional()
   @IsString()
   residencyCountry?: string;
-
-  @ApiPropertyOptional({ enum: UserRole, default: UserRole.INVESTOR })
-  @IsOptional()
-  @IsEnum(UserRole)
-  role?: UserRole;
-
-  @ApiPropertyOptional({ enum: KYCStatus, default: KYCStatus.NOT_VERIFIED })
-  @IsOptional()
-  @IsEnum(KYCStatus)
-  kycStatus?: KYCStatus;
-
-  @ApiPropertyOptional({
-    enum: CreatorVerificationStatus,
-    default: CreatorVerificationStatus.NOT_SUBMITTED,
-  })
-  @IsOptional()
-  @IsEnum(CreatorVerificationStatus)
-  creatorVerificationStatus?: CreatorVerificationStatus;
 
   @ApiPropertyOptional({
     description: 'Additional wallets controlled by the user',

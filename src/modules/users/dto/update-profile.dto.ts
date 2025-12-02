@@ -1,4 +1,5 @@
 import { IsEmail, IsOptional, IsString, IsUrl, Length } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '../../../common/swagger.decorators';
 
 export class UpdateProfileDto {
@@ -16,7 +17,13 @@ export class UpdateProfileDto {
   @ApiPropertyOptional({ format: 'uri' })
   @IsOptional()
   @IsUrl()
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
   avatarUrl?: string;
+
+  @ApiPropertyOptional({ description: 'Avatar image as base64 (data URL or raw base64)' })
+  @IsOptional()
+  @IsString()
+  avatarBase64?: string;
 
   @ApiPropertyOptional({ description: 'Country code (ISO-3166 alpha 2)' })
   @IsOptional()

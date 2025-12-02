@@ -10,11 +10,15 @@ import {
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
-import { SiweNonceDto, SiweVerifyDto } from './dto/siwe.dto';
-import { LinkWalletDto } from './dto/link-wallet.dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { OAuthLoginDto } from './dto/oauth-login.dto';
+import { VerifyEmailDto } from './dto/verify-email.dto';
+import { AuthProvider } from './dto/oauth-login.dto';
+import { ResendEmailDto } from './dto/resend-email.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -34,29 +38,53 @@ export class AuthController {
   }
 
   @Public()
-  @Post('siwe/nonce')
+  @Post('login/oauth')
   @HttpCode(HttpStatus.OK)
-  async getSiweNonce(@Body() siweNonceDto: SiweNonceDto) {
-    const nonce = await this.authService.generateSiweNonce(
-      siweNonceDto.address,
-    );
-    return { nonce };
+  async oauthLogin(@Body() dto: OAuthLoginDto) {
+    return this.authService.oauthLogin(dto);
+  }
+
+  // Aliases to keep original naming familiar while supporting Google/Apple directly
+  @Public()
+  @Post('login/google')
+  @HttpCode(HttpStatus.OK)
+  async loginGoogle(@Body('idToken') idToken: string) {
+    return this.authService.oauthLogin({ provider: AuthProvider.GOOGLE, idToken });
   }
 
   @Public()
-  @Post('siwe/verify')
+  @Post('login/apple')
   @HttpCode(HttpStatus.OK)
-  async verifySiwe(@Body() siweVerifyDto: SiweVerifyDto) {
-    return this.authService.verifySiwe(siweVerifyDto);
+  async loginApple(@Body('idToken') idToken: string) {
+    return this.authService.oauthLogin({ provider: AuthProvider.APPLE, idToken });
   }
 
-  @UseGuards(JwtAuthGuard)
-  @Post('link-wallet')
-  async linkWallet(
-    @CurrentUser('sub') userId: string,
-    @Body() linkWalletDto: LinkWalletDto,
-  ) {
-    return this.authService.linkWallet(userId, linkWalletDto);
+  @Public()
+  @Post('verify-email')
+  @HttpCode(HttpStatus.OK)
+  async verifyEmail(@Body() dto: VerifyEmailDto) {
+    return this.authService.verifyEmail(dto);
+  }
+
+  @Public()
+  @Post('resend-email')
+  @HttpCode(HttpStatus.OK)
+  async resendEmail(@Body() dto: ResendEmailDto) {
+    return this.authService.resendVerificationEmail(dto.email);
+  }
+
+  @Public()
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto.email);
+  }
+
+  @Public()
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto.token, dto.newPassword);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -75,9 +103,8 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  async logout() {
-    return {
-      message: 'Logged out successfully',
-    };
+  logout() {
+    // No stateful logout (JWT); provided for API parity
+    return { message: 'Logged out successfully' };
   }
 }
