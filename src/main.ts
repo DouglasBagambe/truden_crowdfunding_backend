@@ -36,6 +36,9 @@ async function bootstrap() {
     `Users endpoints available at: http://localhost:${port}/api/users`,
   );
   console.log(
+    `Projects endpoints available at: http://localhost:${port}/api/projects`,
+  );
+  console.log(
     `Investments endpoints available at: http://localhost:${port}/api/investments`,
   );
 }
