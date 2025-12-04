@@ -14,6 +14,7 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import sgMail from '@sendgrid/mail';
 import { TokenExpiredError } from 'jsonwebtoken';
+import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose';
 import crypto from 'crypto';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -30,6 +31,9 @@ export class AuthService {
     string,
     { count: number; resetAt: number }
   >();
+  private readonly appleJwks = createRemoteJWKSet(
+    new URL('https://appleid.apple.com/auth/keys'),
+  );
   private readonly emailVerificationWindowMs = 60 * 60 * 1000; // 1 hour
   private readonly emailVerificationMaxSends = 3;
   private readonly emailVerificationMaxAttempts = 5;
@@ -149,20 +153,31 @@ export class AuthService {
     }
     const decoded =
       provider === AuthProvider.GOOGLE
-        ? ((await this.verifyGoogleIdToken(dto.idToken)) ??
-          this.decodeIdToken(dto.idToken))
-        : this.decodeIdToken(dto.idToken);
+        ? await this.verifyGoogleIdToken(dto.idToken)
+        : await this.verifyAppleIdToken(dto.idToken);
     const now = Math.floor(Date.now() / 1000);
-    if (decoded.exp && decoded.exp < now) {
+    const exp =
+      typeof decoded.exp === 'number'
+        ? decoded.exp
+        : typeof decoded.exp === 'string'
+          ? Number(decoded.exp)
+          : undefined;
+    if (exp && exp < now) {
       throw new UnauthorizedException('Token expired');
     }
     if (provider === AuthProvider.GOOGLE) {
       const aud = this.configService.get<string>('GOOGLE_CLIENT_ID');
-      if (aud && decoded.aud && decoded.aud !== aud) {
+      const audClaim = decoded.aud;
+      const audMismatch =
+        !!aud &&
+        ((typeof audClaim === 'string' && audClaim !== aud) ||
+          (Array.isArray(audClaim) && !audClaim.includes(aud)) ||
+          (!audClaim && !!aud));
+      if (audMismatch) {
         throw new UnauthorizedException('Invalid Google audience');
       }
       if (
-        decoded.iss &&
+        typeof decoded.iss === 'string' &&
         decoded.iss !== 'accounts.google.com' &&
         decoded.iss !== 'https://accounts.google.com'
       ) {
@@ -171,10 +186,19 @@ export class AuthService {
     }
     if (provider === AuthProvider.APPLE) {
       const aud = this.configService.get<string>('APPLE_CLIENT_ID');
-      if (aud && decoded.aud && decoded.aud !== aud) {
+      const audClaim = decoded.aud;
+      const audMismatch =
+        !!aud &&
+        ((typeof audClaim === 'string' && audClaim !== aud) ||
+          (Array.isArray(audClaim) && !audClaim.includes(aud)) ||
+          (!audClaim && !!aud));
+      if (audMismatch) {
         throw new UnauthorizedException('Invalid Apple audience');
       }
-      if (decoded.iss && decoded.iss !== 'https://appleid.apple.com') {
+      if (
+        typeof decoded.iss === 'string' &&
+        decoded.iss !== 'https://appleid.apple.com'
+      ) {
         throw new UnauthorizedException('Invalid Apple issuer');
       }
     }
@@ -186,7 +210,15 @@ export class AuthService {
     const email =
       typeof decoded.email === 'string'
         ? decoded.email.toLowerCase()
-        : dto.email?.toLowerCase();
+        : undefined;
+    const decodedDisplayName =
+      typeof decoded.name === 'string'
+        ? decoded.name
+        : [decoded.given_name, decoded.family_name]
+            .filter((val): val is string => typeof val === 'string')
+            .join(' ')
+            .trim();
+    const displayName = decodedDisplayName || email || providerSubject;
 
     let user = await this.userModel
       .findOne({
@@ -207,7 +239,7 @@ export class AuthService {
         isActive: true,
         isBlocked: false,
         profile: {
-          displayName: dto.displayName || email || providerSubject,
+          displayName,
         },
       });
     } else if (!user.isActive || user.isBlocked) {
@@ -523,17 +555,6 @@ export class AuthService {
     };
   }
 
-  private decodeIdToken(token: string): Record<string, any> {
-    try {
-      const [, payload] = token.split('.');
-      const json = Buffer.from(payload, 'base64').toString('utf8');
-      const parsed = JSON.parse(json) as Record<string, unknown>;
-      return parsed;
-    } catch {
-      throw new UnauthorizedException('Invalid id token');
-    }
-  }
-
   async triggerEmailVerification(user: UserDocument) {
     if (!user.email || user.emailVerifiedAt) return;
     const currentSends =
@@ -709,9 +730,14 @@ export class AuthService {
 
   private async verifyGoogleIdToken(
     idToken: string,
-  ): Promise<Record<string, unknown> | null> {
+  ): Promise<Record<string, unknown>> {
     const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
-    if (!clientId) return null;
+    if (!clientId) {
+      this.logger.error(
+        'GOOGLE_CLIENT_ID is not configured; rejecting Google OAuth login',
+      );
+      throw new UnauthorizedException('Google login is not configured');
+    }
     try {
       const googleLib = (await import('google-auth-library')) as unknown as {
         OAuth2Client: new (id: string) => {
@@ -727,7 +753,10 @@ export class AuthService {
         audience: clientId,
       });
       const payload = ticket.getPayload();
-      return payload ?? null;
+      if (!payload) {
+        throw new Error('Missing payload in Google token');
+      }
+      return payload;
     } catch (err: unknown) {
       const msg =
         err instanceof Error
@@ -735,10 +764,30 @@ export class AuthService {
           : typeof err === 'string'
             ? err
             : 'unknown error';
-      this.logger.warn(
-        `Google token verification failed, falling back to local decode: ${msg}`,
+      this.logger.warn(`Google token verification failed: ${msg}`);
+      throw new UnauthorizedException('Invalid Google id token');
+    }
+  }
+
+  private async verifyAppleIdToken(idToken: string): Promise<JWTPayload> {
+    const clientId = this.configService.get<string>('APPLE_CLIENT_ID');
+    if (!clientId) {
+      this.logger.error(
+        'APPLE_CLIENT_ID is not configured; rejecting Apple OAuth login',
       );
-      return null;
+      throw new UnauthorizedException('Apple login is not configured');
+    }
+    try {
+      const { payload } = await jwtVerify(idToken, this.appleJwks, {
+        issuer: 'https://appleid.apple.com',
+        audience: clientId,
+      });
+      return payload;
+    } catch (err: unknown) {
+      this.logger.warn(
+        `Apple token verification failed: ${this.formatJoseError(err)}`,
+      );
+      throw new UnauthorizedException('Invalid Apple id token');
     }
   }
 
@@ -888,5 +937,11 @@ export class AuthService {
     } catch {
       return 'unknown error';
     }
+  }
+
+  private formatJoseError(err: unknown) {
+    if (err instanceof Error) return err.message;
+    if (typeof err === 'string') return err;
+    return 'unknown error';
   }
 }

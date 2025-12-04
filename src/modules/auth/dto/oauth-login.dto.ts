@@ -1,5 +1,5 @@
-import { IsEnum, IsOptional, IsString } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '../../../common/swagger.decorators';
+import { IsEnum, IsString } from 'class-validator';
+import { ApiProperty } from '../../../common/swagger.decorators';
 
 export enum AuthProvider {
   EMAIL = 'email',
@@ -15,14 +15,4 @@ export class OAuthLoginDto {
   @ApiProperty({ description: 'Provider id token or access token' })
   @IsString()
   idToken!: string;
-
-  @ApiPropertyOptional({ description: 'Email returned by provider (optional)' })
-  @IsOptional()
-  @IsString()
-  email?: string;
-
-  @ApiPropertyOptional({ description: 'Display name returned by provider (optional)' })
-  @IsOptional()
-  @IsString()
-  displayName?: string;
 }
