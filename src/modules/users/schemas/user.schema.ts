@@ -190,6 +190,12 @@ export class User {
   residencyCountry?: string;
 
   @Prop({ trim: true })
+  signupIp?: string;
+
+  @Prop({ trim: true })
+  lastLoginIp?: string;
+
+  @Prop({ trim: true })
   phone?: string;
 
   @Prop({ type: Date })

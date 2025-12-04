@@ -6,7 +6,9 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  Req,
 } from '@nestjs/common';
+import type { Request as ExpressRequest } from 'express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -26,37 +28,55 @@ export class AuthController {
 
   @Public()
   @Post('register')
-  async register(@Body() registerDto: RegisterDto) {
-    return this.authService.register(registerDto);
+  async register(
+    @Body() registerDto: RegisterDto,
+    @Req() req: ExpressRequest,
+  ) {
+    return this.authService.register(registerDto, this.getClientIp(req));
   }
 
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async login(@Body() loginDto: LoginDto) {
-    return this.authService.login(loginDto);
+  async login(
+    @Body() loginDto: LoginDto,
+    @Req() req: ExpressRequest,
+  ) {
+    return this.authService.login(loginDto, this.getClientIp(req));
   }
 
   @Public()
   @Post('login/oauth')
   @HttpCode(HttpStatus.OK)
-  async oauthLogin(@Body() dto: OAuthLoginDto) {
-    return this.authService.oauthLogin(dto);
+  async oauthLogin(@Body() dto: OAuthLoginDto, @Req() req: ExpressRequest) {
+    return this.authService.oauthLogin(dto, this.getClientIp(req));
   }
 
   // Aliases to keep original naming familiar while supporting Google/Apple directly
   @Public()
   @Post('login/google')
   @HttpCode(HttpStatus.OK)
-  async loginGoogle(@Body('idToken') idToken: string) {
-    return this.authService.oauthLogin({ provider: AuthProvider.GOOGLE, idToken });
+  async loginGoogle(
+    @Body('idToken') idToken: string,
+    @Req() req: ExpressRequest,
+  ) {
+    return this.authService.oauthLogin(
+      { provider: AuthProvider.GOOGLE, idToken },
+      this.getClientIp(req),
+    );
   }
 
   @Public()
   @Post('login/apple')
   @HttpCode(HttpStatus.OK)
-  async loginApple(@Body('idToken') idToken: string) {
-    return this.authService.oauthLogin({ provider: AuthProvider.APPLE, idToken });
+  async loginApple(
+    @Body('idToken') idToken: string,
+    @Req() req: ExpressRequest,
+  ) {
+    return this.authService.oauthLogin(
+      { provider: AuthProvider.APPLE, idToken },
+      this.getClientIp(req),
+    );
   }
 
   @Public()
@@ -106,5 +126,31 @@ export class AuthController {
   logout() {
     // No stateful logout (JWT); provided for API parity
     return { message: 'Logged out successfully' };
+  }
+
+  private getClientIp(req: ExpressRequest): string | undefined {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (typeof forwarded === 'string' && forwarded.length > 0) {
+      return this.normalizeIp(forwarded.split(',')[0].trim());
+    }
+    if (Array.isArray(forwarded) && forwarded.length > 0) {
+      return this.normalizeIp(forwarded[0]);
+    }
+    return this.normalizeIp(
+      req.ip ||
+        (req.socket?.remoteAddress ??
+          (req.connection as { remoteAddress?: string })?.remoteAddress),
+    );
+  }
+
+  private normalizeIp(ip?: string): string | undefined {
+    if (!ip) return undefined;
+    // Handle IPv6 localhost and IPv4-mapped IPv6 addresses
+    if (ip === '::1') return '127.0.0.1';
+    if (ip.startsWith('::ffff:')) return ip.replace('::ffff:', '');
+    // Strip IPv6 zone index if present
+    const zoneIndex = ip.indexOf('%');
+    if (zoneIndex !== -1) return ip.slice(0, zoneIndex);
+    return ip;
   }
 }

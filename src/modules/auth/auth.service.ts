@@ -15,6 +15,7 @@ import * as bcrypt from 'bcryptjs';
 import sgMail from '@sendgrid/mail';
 import { TokenExpiredError } from 'jsonwebtoken';
 import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose';
+import geoip from 'geoip-lite';
 import crypto from 'crypto';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -46,7 +47,7 @@ export class AuthService {
     private rolesService: RolesService,
   ) {}
 
-  async register(registerDto: RegisterDto) {
+  async register(registerDto: RegisterDto, ipAddress?: string) {
     const { email, password, firstName, lastName, role } = registerDto;
     this.enforceRateLimit('register', email, 5, 5 * 60 * 1000);
     const isTestEnv = this.configService.get<string>('NODE_ENV') === 'test';
@@ -64,6 +65,9 @@ export class AuthService {
       email: email.toLowerCase(),
       passwordHash,
       authProvider: AuthProvider.EMAIL,
+      signupIp: ipAddress,
+      lastLoginIp: ipAddress,
+      lastLoginAt: new Date(),
       emailVerifiedAt: isTestEnv ? new Date() : null,
       emailVerificationSentAt: undefined,
       emailVerificationSendCount: 0,
@@ -98,7 +102,7 @@ export class AuthService {
     };
   }
 
-  async login(loginDto: LoginDto) {
+  async login(loginDto: LoginDto, ipAddress?: string) {
     const { email, password } = loginDto;
     this.enforceRateLimit('login', email, 10, 5 * 60 * 1000);
 
@@ -126,7 +130,10 @@ export class AuthService {
     }
 
     await this.userModel
-      .findByIdAndUpdate(user._id, { lastLoginAt: new Date() })
+      .findByIdAndUpdate(user._id, {
+        lastLoginAt: new Date(),
+        ...(ipAddress ? { lastLoginIp: ipAddress } : {}),
+      })
       .exec();
 
     const permissions = await this.rolesService.getPermissionsForRoles(
@@ -140,7 +147,7 @@ export class AuthService {
     };
   }
 
-  async oauthLogin(dto: OAuthLoginDto) {
+  async oauthLogin(dto: OAuthLoginDto, ipAddress?: string) {
     this.enforceRateLimit(
       'oauthLogin',
       dto.idToken.slice(-12),
@@ -219,6 +226,9 @@ export class AuthService {
             .join(' ')
             .trim();
     const displayName = decodedDisplayName || email || providerSubject;
+    const locale =
+      typeof decoded.locale === 'string' ? decoded.locale : undefined;
+    const geoCountry = this.lookupCountryFromIp(ipAddress);
 
     let user = await this.userModel
       .findOne({
@@ -238,21 +248,33 @@ export class AuthService {
         roles: [UserRole.INVESTOR],
         isActive: true,
         isBlocked: false,
+        signupIp: ipAddress,
+        lastLoginIp: ipAddress,
+        lastLoginAt: new Date(),
         profile: {
           displayName,
+          country: geoCountry,
+          locale,
         },
       });
     } else if (!user.isActive || user.isBlocked) {
       throw new UnauthorizedException('Account is deactivated');
-    } else if (emailVerified && !user.emailVerifiedAt) {
-      await this.userModel
-        .findByIdAndUpdate(user._id, { emailVerifiedAt: new Date() })
-        .exec();
+    } else {
+      const update: Record<string, unknown> = { lastLoginAt: new Date() };
+      if (ipAddress) {
+        update.lastLoginIp = ipAddress;
+      }
+      if (emailVerified && !user.emailVerifiedAt) {
+        update.emailVerifiedAt = new Date();
+      }
+      if (geoCountry && !user.profile?.country) {
+        update['profile.country'] = geoCountry;
+      }
+      if (locale && !user.profile?.locale) {
+        update['profile.locale'] = locale;
+      }
+      await this.userModel.findByIdAndUpdate(user._id, update).exec();
     }
-
-    await this.userModel
-      .findByIdAndUpdate(user._id, { lastLoginAt: new Date() })
-      .exec();
 
     const permissions = await this.rolesService.getPermissionsForRoles(
       user.roles,
@@ -943,5 +965,20 @@ export class AuthService {
     if (err instanceof Error) return err.message;
     if (typeof err === 'string') return err;
     return 'unknown error';
+  }
+
+  private lookupCountryFromIp(ipAddress?: string): string | undefined {
+    if (!ipAddress) return undefined;
+    try {
+      const geo = geoip.lookup(ipAddress);
+      if (geo?.country && typeof geo.country === 'string') {
+        return geo.country;
+      }
+    } catch (err: unknown) {
+      this.logger.debug(
+        `GeoIP lookup failed for ${ipAddress}: ${this.formatJoseError(err)}`,
+      );
+    }
+    return undefined;
   }
 }
