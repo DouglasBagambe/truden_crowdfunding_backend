@@ -36,6 +36,7 @@ import appConfig from './config/app.config';
       },
     }),
     EventEmitterModule.forRoot(),
+    EventEmitterModule.forRoot(),
     AuthModule,
     RolesModule,
     UsersModule,

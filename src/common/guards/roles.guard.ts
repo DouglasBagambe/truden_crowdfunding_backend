@@ -17,12 +17,19 @@ export class RolesGuard implements CanActivate {
       return true;
     }
 
+<<<<<<< HEAD
     const { user } = context.switchToHttp().getRequest();
     const userRoles: UserRole[] = Array.isArray(user?.roles)
       ? user.roles
       : user?.role
       ? [user.role]
       : [];
+=======
+    const request = context
+      .switchToHttp()
+      .getRequest<{ user?: { roles?: UserRole[] } }>();
+    const user = request.user;
+>>>>>>> escrow
 
     if (userRoles.includes(UserRole.SUPERADMIN)) {
       return true;

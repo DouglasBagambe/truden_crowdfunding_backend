@@ -55,6 +55,7 @@ export class CreateUserDto {
   @IsString()
   @Length(2, 64)
   displayName!: string;
+  displayName!: string;
 
   @ApiProperty({ description: 'Contact email for notifications' })
   @IsOptional()
