@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { EscrowController } from './escrow.controller';
-import { EscrowService } from './escrow.service';
+import { EscrowController } from './controllers/escrow.controller';
+import { EscrowService } from './services/escrow.service';
 import {
   Deposit,
   DepositSchema,

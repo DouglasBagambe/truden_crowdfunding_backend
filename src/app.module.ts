@@ -7,6 +7,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { RolesModule } from './modules/roles/roles.module';
 import { ProjectsModule } from './modules/projects/projects.module';
+import { InvestmentsModule } from './modules/investments/investments.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
@@ -41,6 +42,7 @@ import appConfig from './config/app.config';
     RolesModule,
     UsersModule,
     ProjectsModule,
+    InvestmentsModule,
   ],
   providers: [
     {
