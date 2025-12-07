@@ -71,6 +71,9 @@ async function bootstrap() {
   console.log(
     `Investments endpoints available at: http://localhost:${port}/api/investments`,
   );
+  console.log(
+    `NFT endpoints available at: http://localhost:${port}/api/nfts`,
+  );
 }
 
 bootstrap().catch((error) => {
