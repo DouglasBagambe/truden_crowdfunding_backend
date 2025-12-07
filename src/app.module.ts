@@ -8,6 +8,7 @@ import { EscrowModule } from './modules/escrow/escrow.module';
 import { DealRoomModule } from './modules/deal-room/deal-room.module';
 import { UsersModule } from './modules/users/users.module';
 import { InvestmentsModule } from './modules/investments/investments.module';
+import { NftModule } from './modules/nfts/nft.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import appConfig from './config/app.config';
 
@@ -34,6 +35,7 @@ import appConfig from './config/app.config';
     DealRoomModule,
     UsersModule,
     InvestmentsModule,
+    NftModule,
   ],
   providers: [
     {
