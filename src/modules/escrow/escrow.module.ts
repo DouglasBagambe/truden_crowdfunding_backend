@@ -15,6 +15,7 @@ import {
 import { EscrowRepository } from './escrow.repository';
 import { EscrowWeb3Service } from './escrow.web3';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { ProjectsModule } from '../projects/projects.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
       { name: EscrowEventLog.name, schema: EscrowEventLogSchema },
       { name: MilestoneLock.name, schema: MilestoneLockSchema },
     ]),
+    ProjectsModule,
   ],
   controllers: [EscrowController],
   providers: [EscrowService, EscrowRepository, EscrowWeb3Service, RolesGuard],

@@ -14,6 +14,7 @@ import { ViemNftClient } from './helpers/viem-nft-client';
 import type { NftMetadataView, NftView } from './interfaces/nft.interface';
 import { UserRole } from '../../common/enums/role.enum';
 import type { JwtPayload } from '../../common/interfaces/user.interface';
+import { ProjectsService } from '../projects/projects.service';
 
 @Injectable()
 export class NftService {
@@ -21,6 +22,7 @@ export class NftService {
     @InjectModel(Nft.name)
     private readonly nftModel: Model<NftDocument>,
     private readonly viemNftClient: ViemNftClient,
+    private readonly projectsService: ProjectsService,
   ) {}
 
   private parseObjectId(id: string, fieldName: string): Types.ObjectId {
@@ -157,6 +159,8 @@ export class NftService {
     const investorObjectId = this.parseObjectId(dto.investorId, 'investorId');
     const wallet = dto.walletAddress.toLowerCase();
 
+    const project = await this.projectsService.ensureProjectExists(dto.projectId);
+
     const amountWei = BigInt(Math.floor(amountNumber * 1e18));
 
     const { hash, receipt } = await this.viemNftClient.mintInvestmentNft({
@@ -167,7 +171,8 @@ export class NftService {
 
     const tokenId = this.parseMintEvent(receipt);
 
-    const projectName: string | undefined = undefined;
+    const projectName: string | undefined =
+      (project as any).name ?? (project as any).title;
 
     const metadata = await this.buildMetadata({
       tokenId,

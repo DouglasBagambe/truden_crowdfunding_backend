@@ -50,9 +50,6 @@ export class AuthService {
     const existingUser = await this.userModel
       .findOne({ email: email.toLowerCase() })
       .exec();
-    const existingUser = await this.userModel
-      .findOne({ email: email.toLowerCase() })
-      .exec();
     if (existingUser) {
       throw new ConflictException('User with this email already exists');
     }
@@ -472,7 +469,6 @@ export class AuthService {
     const roles = Array.isArray(user.roles) ? user.roles : [];
     const permissions = await this.rolesService.getPermissionsForRoles(roles);
     const payload: JwtPayload = {
-      sub: String(user._id),
       sub: String(user._id),
       email: user.email,
       primaryWallet: user.primaryWallet,

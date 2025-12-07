@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { DealRoomController } from './deal-room.controller';
-import { DealRoomService } from './deal-room.service';
+import { DealRoomController } from './controllers/deal-room.controller';
+import { DealRoomService } from './services/deal-room.service';
 import {
   DealDocument,
   DealDocumentSchema,
@@ -9,7 +9,7 @@ import {
   FolderSchema,
   AccessLog,
   AccessLogSchema,
-} from './deal-room.schema';
+} from './schemas/deal-room.schema';
 import { DealRoomRepository } from './deal-room.repository';
 import { DealRoomStorageService } from './deal-room.storage';
 import { DealRoomPolicy } from './deal-room.policy';

@@ -5,16 +5,16 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Types } from 'mongoose';
-import type { JwtPayload } from '../../common/interfaces/user.interface';
-import { DealRoomRepository } from './deal-room.repository';
-import { DealRoomStorageService } from './deal-room.storage';
-import { DealRoomPolicy } from './deal-room.policy';
-import { UploadDto } from './dto/upload.dto';
-import { SearchDto } from './dto/search.dto';
-import { GrantAccessDto } from './dto/grant-access.dto';
-import { RevokeAccessDto } from './dto/revoke-access.dto';
-import { AccessAction, AccessLevel, DocumentState } from './types';
-import { DealRoomEvents } from './events';
+import type { JwtPayload } from '../../../common/interfaces/user.interface';
+import { DealRoomRepository } from '../deal-room.repository';
+import { DealRoomStorageService } from '../deal-room.storage';
+import { DealRoomPolicy } from '../deal-room.policy';
+import { UploadDto } from '../dto/upload.dto';
+import { SearchDto } from '../dto/search.dto';
+import { GrantAccessDto } from '../dto/grant-access.dto';
+import { RevokeAccessDto } from '../dto/revoke-access.dto';
+import { AccessAction, AccessLevel, DocumentState } from '../types';
+import { DealRoomEvents } from '../events';
 
 type UploadedFile = {
   originalname: string;

@@ -4,8 +4,8 @@ import {
   Schema as MongooseSchema,
   Types,
 } from 'mongoose';
-import type { DocumentMetadata } from './types';
-import { AccessAction, DocumentState } from './types';
+import type { DocumentMetadata } from '../types';
+import { AccessAction, DocumentState } from '../types';
 
 export type DealDocumentDocument = DealDocument & MongooseDocument;
 export type FolderDocument = Folder & MongooseDocument;

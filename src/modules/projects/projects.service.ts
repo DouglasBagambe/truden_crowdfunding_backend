@@ -399,6 +399,43 @@ export class ProjectsService {
     return { project: this.withProgress(project), milestones };
   }
 
+  async ensureProjectExists(projectId: string): Promise<ProjectDocument> {
+    this.ensureValidObjectId(projectId);
+    const project = await this.projectsRepo.findById(projectId);
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+    return project;
+  }
+
+  async ensureProjectIsOpenForInvestment(projectId: string) {
+    this.ensureValidObjectId(projectId);
+    const project = await this.projectsRepo.findById(projectId);
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+    if (project.status !== ProjectStatus.FUNDING) {
+      throw new BadRequestException('Project is not accepting investments');
+    }
+    const target = project.targetAmount || 0;
+    if (target <= 0) {
+      throw new BadRequestException('Project has invalid funding target');
+    }
+    return project;
+  }
+
+  async incrementFunding(projectId: string, amount: number) {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Invalid amount');
+    }
+
+    await this.ensureProjectIsOpenForInvestment(projectId);
+
+    await this.projectsRepo.updateById(projectId, {
+      $inc: { raisedAmount: amount, backerCount: 1 },
+    });
+  }
+
   private normalizeProjectType(type: unknown): ProjectType | undefined {
     if (type === ProjectType.ROI || type === ProjectType.CHARITY) {
       return type;

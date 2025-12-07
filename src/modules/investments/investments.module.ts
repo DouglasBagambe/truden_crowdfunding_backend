@@ -5,6 +5,7 @@ import { InvestmentsService } from './services/investments.service';
 import { Investment, InvestmentSchema } from './schemas/investment.schema';
 import { AuthModule } from '../auth/auth.module';
 import { EscrowModule } from '../escrow/escrow.module';
+import { ProjectsModule } from '../projects/projects.module';
 import { RolesGuard } from '../../common/guards/roles.guard';
 
 @Module({
@@ -14,6 +15,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
     ]),
     AuthModule,
     EscrowModule,
+    ProjectsModule,
   ],
   controllers: [InvestmentsController],
   providers: [InvestmentsService, RolesGuard],

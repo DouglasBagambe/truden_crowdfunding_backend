@@ -27,6 +27,7 @@ import {
 } from '../interfaces/investment.interface';
 import { AuthService } from '../../auth/auth.service';
 import { EscrowService } from '../../escrow/services/escrow.service';
+import { ProjectsService } from '../../projects/projects.service';
 import { EscrowCurrency, FundingSource } from '../../escrow/types';
 import type { DepositDto } from '../../escrow/dto/deposit.dto';
 import { KYCStatus, UserRole } from '../../../common/enums/role.enum';
@@ -86,6 +87,7 @@ export class InvestmentsService {
     private readonly investmentModel: Model<InvestmentDocument>,
     private readonly authService: AuthService,
     private readonly escrowService: EscrowService,
+    private readonly projectsService: ProjectsService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -111,7 +113,7 @@ export class InvestmentsService {
   }
 
   private async loadAuthUser(userId: string): Promise<AuthUserView> {
-    const profile = (await this.authService.getProfile(userId)) as AuthUserView;
+    const profile = (await this.authService.getProfile(userId)) as unknown as AuthUserView;
     return profile;
   }
 
@@ -383,18 +385,18 @@ export class InvestmentsService {
       throw new BadRequestException('Invalid projectId');
     }
 
-    const _config = this.configService.get('blockchain');
-    void _config;
-    await Promise.resolve();
+    await this.projectsService.ensureProjectIsOpenForInvestment(projectId);
   }
 
   private async incrementProjectRaised(
     projectId: string,
     amount: number,
   ): Promise<void> {
-    void projectId;
-    void amount;
-    await Promise.resolve();
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Invalid amount');
+    }
+
+    await this.projectsService.incrementFunding(projectId, amount);
   }
 
   private getBlockchainClients() {
@@ -525,7 +527,7 @@ export class InvestmentsService {
     userId: string,
   ): Promise<AuthUserView | null> {
     try {
-      const profile = (await this.authService.getProfile(userId)) as AuthUserView;
+      const profile = (await this.authService.getProfile(userId)) as unknown as AuthUserView;
       return profile;
     } catch {
       return null;

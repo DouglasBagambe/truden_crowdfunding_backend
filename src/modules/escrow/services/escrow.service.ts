@@ -1,21 +1,27 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Types } from 'mongoose';
-import { EscrowRepository } from './escrow.repository';
-import { DepositDto } from './dto/deposit.dto';
-import { ReleaseDto } from './dto/release.dto';
-import { RefundDto } from './dto/refund.dto';
-import { DisputeDto } from './dto/dispute.dto';
-import { DepositStatus } from './types';
-import { EscrowEvents } from './events';
+import { EscrowRepository } from '../escrow.repository';
+import { DepositDto } from '../dto/deposit.dto';
+import { ReleaseDto } from '../dto/release.dto';
+import { RefundDto } from '../dto/refund.dto';
+import { DisputeDto } from '../dto/dispute.dto';
+import { DepositStatus } from '../types';
+import { EscrowEvents } from '../events';
+import { ProjectsService } from '../../projects/projects.service';
 
 @Injectable()
 export class EscrowService {
-  constructor(private readonly escrowRepository: EscrowRepository) {}
+  constructor(
+    private readonly escrowRepository: EscrowRepository,
+    private readonly projectsService: ProjectsService,
+  ) {}
 
   async createDeposit(dto: DepositDto, investorId: string) {
     if (!Types.ObjectId.isValid(dto.projectId)) {
       throw new BadRequestException('Invalid projectId');
     }
+
+    await this.projectsService.ensureProjectIsOpenForInvestment(dto.projectId);
 
     const projectObjectId = new Types.ObjectId(dto.projectId);
     const investorObjectId = new Types.ObjectId(investorId);
@@ -47,6 +53,8 @@ export class EscrowService {
     const depositId = deposit._id;
 
     await this.escrowRepository.attachDepositToEscrow(escrowId, depositId);
+
+    await this.escrowRepository.incrementEscrowLocked(escrowId, amount);
 
     await this.escrowRepository.createEventLog({
       escrowId: escrowId,

@@ -13,16 +13,16 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import type { JwtPayload } from '../../common/interfaces/user.interface';
-import { DealRoomService } from './deal-room.service';
-import { UploadDto } from './dto/upload.dto';
-import { SearchDto } from './dto/search.dto';
-import { GrantAccessDto } from './dto/grant-access.dto';
-import { RevokeAccessDto } from './dto/revoke-access.dto';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { Roles } from '../../common/decorators/roles.decorator';
-import { RolesGuard } from '../../common/guards/roles.guard';
-import { UserRole } from '../../common/enums/role.enum';
+import type { JwtPayload } from '../../../common/interfaces/user.interface';
+import { DealRoomService } from '../services/deal-room.service';
+import { UploadDto } from '../dto/upload.dto';
+import { SearchDto } from '../dto/search.dto';
+import { GrantAccessDto } from '../dto/grant-access.dto';
+import { RevokeAccessDto } from '../dto/revoke-access.dto';
+import { CurrentUser } from '../../../common/decorators/current-user.decorator';
+import { Roles } from '../../../common/decorators/roles.decorator';
+import { RolesGuard } from '../../../common/guards/roles.guard';
+import { UserRole } from '../../../common/enums/role.enum';
 
 @Controller('deal-room')
 @UseGuards(RolesGuard)

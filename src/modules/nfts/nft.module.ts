@@ -5,10 +5,12 @@ import { NftService } from './nft.service';
 import { Nft, NftSchema } from './schemas/nft.schema';
 import { ViemNftClient } from './helpers/viem-nft-client';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { ProjectsModule } from '../projects/projects.module';
 
 @Module({
   imports: [
     MongooseModule.forFeature([{ name: Nft.name, schema: NftSchema }]),
+    ProjectsModule,
   ],
   controllers: [NftController],
   providers: [NftService, ViemNftClient, RolesGuard],

@@ -8,7 +8,7 @@ import {
   FolderDocument,
   AccessLog,
   AccessLogDocument,
-} from './deal-room.schema';
+} from './schemas/deal-room.schema';
 import { AccessAction, DocumentCategory, DocumentState } from './types';
 import type { AclEntry } from './types';
 
