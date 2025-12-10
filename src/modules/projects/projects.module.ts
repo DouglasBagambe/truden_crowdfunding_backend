@@ -15,9 +15,11 @@ import {
 } from './schemas/project.schema';
 import { Milestone, MilestoneSchema } from './schemas/milestone.schema';
 import { ProjectType } from '../../common/enums/project-type.enum';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
+    UsersModule,
     MongooseModule.forFeature([
       {
         name: Project.name,

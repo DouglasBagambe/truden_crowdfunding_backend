@@ -21,6 +21,9 @@ import { CharitySubcategory } from '../../common/enums/charity-subcategory.enum'
 import { ROIIndustry } from '../../common/enums/roi-industry.enum';
 import { UseOfFundsDto } from './dto/use-of-funds.dto';
 import { CreateVerificationLogDto } from './dto/create-verification-log.dto';
+import { UsersRepository } from '../users/repositories/users.repository';
+import { KYCStatus } from '../../common/enums/role.enum';
+import { CreatorVerificationStatus } from '../../common/enums/creator-verification-status.enum';
 
 const PUBLIC_STATUSES: ProjectStatus[] = [
   ProjectStatus.APPROVED,
@@ -29,11 +32,18 @@ const PUBLIC_STATUSES: ProjectStatus[] = [
   ProjectStatus.FUNDING_FAILED,
 ];
 
+const OWNER_EDITABLE_STATUSES: ProjectStatus[] = [
+  ProjectStatus.DRAFT,
+  ProjectStatus.PENDING_REVIEW,
+  ProjectStatus.CHANGES_REQUESTED,
+];
+
 @Injectable()
 export class ProjectsService {
   constructor(
     private readonly projectsRepo: ProjectsRepository,
     private readonly milestonesRepo: MilestonesRepository,
+    private readonly usersRepo: UsersRepository,
   ) {}
 
   async createProject(creatorId: string, dto: CreateProjectDto) {
@@ -128,11 +138,7 @@ export class ProjectsService {
     if (project.creatorId !== creatorId) {
       throw new ForbiddenException('You can only edit your own projects');
     }
-    if (
-      ![ProjectStatus.DRAFT, ProjectStatus.PENDING_REVIEW].includes(
-        project.status,
-      )
-    ) {
+    if (!OWNER_EDITABLE_STATUSES.includes(project.status)) {
       throw new BadRequestException(
         'Project cannot be edited in the current status',
       );
@@ -248,13 +254,22 @@ export class ProjectsService {
     if (project.creatorId !== creatorId) {
       throw new ForbiddenException('You can only submit your own projects');
     }
-    if (project.status !== ProjectStatus.DRAFT) {
-      throw new BadRequestException('Only DRAFT projects can be submitted');
+    if (
+      ![ProjectStatus.DRAFT, ProjectStatus.CHANGES_REQUESTED].includes(
+        project.status,
+      )
+    ) {
+      throw new BadRequestException(
+        'Only draft or change-requested projects can be submitted',
+      );
     }
+
+    await this.ensureCreatorEligibleForSubmission(creatorId);
 
     const updated = await this.projectsRepo.setStatus(
       projectId,
       ProjectStatus.PENDING_REVIEW,
+      null,
     );
     if (!updated) throw new NotFoundException('Project not found');
     return this.getProjectWithMilestones(projectId);
@@ -368,17 +383,20 @@ export class ProjectsService {
       throw new BadRequestException('Project is not pending review');
     }
     if (
-      ![ProjectStatus.APPROVED, ProjectStatus.REJECTED].includes(
-        dto.finalStatus,
-      )
+      ![
+        ProjectStatus.APPROVED,
+        ProjectStatus.REJECTED,
+        ProjectStatus.CHANGES_REQUESTED,
+      ].includes(dto.finalStatus)
     ) {
       throw new BadRequestException(
-        'Final status must be APPROVED or REJECTED',
+        'Final status must be APPROVED, REJECTED, or CHANGES_REQUESTED',
       );
     }
 
     if (dto.finalStatus === ProjectStatus.APPROVED) {
       this.ensureVerificationLogExists(project.verificationLogs);
+      await this.ensureCreatorEligibleForSubmission(project.creatorId);
     }
 
     const updated = await this.projectsRepo.setStatus(
@@ -524,6 +542,40 @@ export class ProjectsService {
     if (!logs || logs.length === 0) {
       throw new BadRequestException(
         'Verification log is required before approval',
+      );
+    }
+  }
+
+  async getProjectOwnerView(projectId: string, ownerId: string) {
+    this.ensureValidObjectId(projectId);
+    const project = await this.projectsRepo.findById(projectId);
+    if (!project) throw new NotFoundException('Project not found');
+    if (project.creatorId !== ownerId) {
+      throw new ForbiddenException('You can only view your own project');
+    }
+    return this.getProjectWithMilestones(projectId);
+  }
+
+  private async ensureCreatorEligibleForSubmission(creatorId: string) {
+    const creator = await this.usersRepo.findById(creatorId);
+    if (!creator) {
+      throw new NotFoundException('Creator not found');
+    }
+    if (creator.isBlocked === true || creator.isActive === false) {
+      throw new ForbiddenException('Creator account is not active');
+    }
+    const kycStatus =
+      (creator.kyc && creator.kyc.status) || creator.kycStatus || KYCStatus.NOT_VERIFIED;
+    if (kycStatus !== KYCStatus.VERIFIED) {
+      throw new ForbiddenException(
+        'Complete and verify KYC before submitting a project',
+      );
+    }
+    const creatorVerificationStatus =
+      creator.creatorVerification?.status ?? CreatorVerificationStatus.NOT_SUBMITTED;
+    if (creatorVerificationStatus !== CreatorVerificationStatus.VERIFIED) {
+      throw new ForbiddenException(
+        'Creator verification must be VERIFIED before submitting a project',
       );
     }
   }
