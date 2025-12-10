@@ -54,6 +54,9 @@ export class KycData {
   @Prop({ type: String, enum: KYCStatus, default: KYCStatus.NOT_VERIFIED })
   status!: KYCStatus;
 
+  @Prop({ type: Date })
+  dateOfBirth?: Date;
+
   @Prop({ trim: true })
   documentType?: string;
 
@@ -63,8 +66,44 @@ export class KycData {
   @Prop({ trim: true })
   documentLast4?: string;
 
-  @Prop({ type: [String], default: [] })
-  evidenceUrls!: string[];
+  @Prop({
+    type: {
+      line1: { type: String, trim: true },
+      line2: { type: String, trim: true },
+      city: { type: String, trim: true },
+      state: { type: String, trim: true },
+      postalCode: { type: String, trim: true },
+      country: { type: String, trim: true },
+    },
+  })
+  homeAddress?:
+    | {
+        line1?: string;
+        line2?: string;
+        city?: string;
+        state?: string;
+        postalCode?: string;
+        country?: string;
+      }
+    | null;
+
+  @Prop({
+    type: [
+      {
+        title: { type: String, required: true, trim: true },
+        url: { type: String, required: true, trim: true },
+        type: { type: String, trim: true },
+        isRequired: { type: Boolean, default: false },
+      },
+    ],
+    default: [],
+  })
+  attachments!: Array<{
+    title: string;
+    url: string;
+    type?: string;
+    isRequired?: boolean;
+  }>;
 
   @Prop({ type: Date })
   submittedAt?: Date;
