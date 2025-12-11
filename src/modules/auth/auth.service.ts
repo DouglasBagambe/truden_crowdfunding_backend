@@ -56,7 +56,8 @@ export class AuthService {
 
   async register(registerDto: RegisterDto, ipAddress?: string) {
     const { email, password, firstName, lastName, role } = registerDto;
-    this.enforceRateLimit('register', email, 5, 5 * 60 * 1000);
+    this.enforceRateLimit('register', email, 3, 10 * 60 * 1000);
+    this.enforceRateLimitForIp('register', ipAddress, 20, 10 * 60 * 1000);
     const isTestEnv = this.configService.get<string>('NODE_ENV') === 'test';
 
     const existingUser = await this.userModel
@@ -111,7 +112,8 @@ export class AuthService {
 
   async login(loginDto: LoginDto, ipAddress?: string) {
     const { email, password } = loginDto;
-    this.enforceRateLimit('login', email, 10, 5 * 60 * 1000);
+    this.enforceRateLimit('login', email, 5, 60 * 1000);
+    this.enforceRateLimitForIp('login', ipAddress, 30, 10 * 60 * 1000);
 
     const user = await this.userModel
       .findOne({ email: email.toLowerCase() })
@@ -393,18 +395,14 @@ export class AuthService {
     // Legacy token path removed
   }
 
-  async resendVerificationEmail(email: string) {
+  async resendVerificationEmail(email: string, ipAddress?: string) {
     const normalizedEmail = email.trim().toLowerCase();
     const isTestEnv = this.configService.get<string>('NODE_ENV') === 'test';
     if (isTestEnv) {
       return { message: 'Verification email sent' };
     }
-    this.enforceRateLimit(
-      'resendEmail',
-      normalizedEmail,
-      3,
-      this.emailVerificationWindowMs,
-    );
+    this.enforceRateLimit('resendEmail', normalizedEmail, 3, this.emailVerificationWindowMs);
+    this.enforceRateLimitForIp('resendEmail', ipAddress, 10, this.emailVerificationWindowMs);
 
     const user = await this.userModel
       .findOne({ email: normalizedEmail })
@@ -438,9 +436,10 @@ export class AuthService {
     };
   }
 
-  async forgotPassword(email: string) {
+  async forgotPassword(email: string, ipAddress?: string) {
     const normalizedEmail = email.trim().toLowerCase();
     this.enforceRateLimit('forgotPassword', normalizedEmail, 3, 60 * 60 * 1000);
+    this.enforceRateLimitForIp('forgotPassword', ipAddress, 10, 60 * 60 * 1000);
     const user = await this.userModel
       .findOne({ email: normalizedEmail })
       .select('+passwordHash')
@@ -1053,6 +1052,16 @@ export class AuthService {
         resetAt: current.resetAt,
       });
     }
+  }
+
+  private enforceRateLimitForIp(
+    action: string,
+    ip: string | undefined,
+    limit: number,
+    windowMs: number,
+  ) {
+    if (!ip) return;
+    this.enforceRateLimit(action, ip, limit, windowMs);
   }
 
   private getIssuer(): string | undefined {

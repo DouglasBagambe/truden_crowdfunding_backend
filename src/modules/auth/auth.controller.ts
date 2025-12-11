@@ -91,15 +91,15 @@ export class AuthController {
   @Public()
   @Post('resend-email')
   @HttpCode(HttpStatus.OK)
-  async resendEmail(@Body() dto: ResendEmailDto) {
-    return this.authService.resendVerificationEmail(dto.email);
+  async resendEmail(@Body() dto: ResendEmailDto, @Req() req: ExpressRequest) {
+    return this.authService.resendVerificationEmail(dto.email, this.getClientIp(req));
   }
 
   @Public()
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
-  async forgotPassword(@Body() dto: ForgotPasswordDto) {
-    return this.authService.forgotPassword(dto.email);
+  async forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: ExpressRequest) {
+    return this.authService.forgotPassword(dto.email, this.getClientIp(req));
   }
 
   @Public()
