@@ -23,22 +23,16 @@ import { Permissions } from '../../../common/decorators/permissions.decorator';
 import { Permission } from '../../../common/enums/permission.enum';
 import { RoleMetadataOr } from '../../../common/decorators/role-or.decorator';
 import { Public } from '../../../common/decorators/public.decorator';
-import { SignupUserDto } from '../dto/signup-user.dto';
 import { SubmitKycDto } from '../dto/submit-kyc.dto';
 import { SubmitCreatorVerificationDto } from '../dto/submit-creator-verification.dto';
 import { UpdateCreatorVerificationDto } from '../dto/update-creator-verification.dto';
+import { CreateKycSessionDto } from '../dto/create-kyc-session.dto';
 
 @ApiTags('users')
 @ApiBearerAuth()
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
-
-  @Public()
-  @Post('signup')
-  signup(@Body() dto: SignupUserDto) {
-    return this.usersService.signup(dto);
-  }
 
   @Post()
   @RoleMetadataOr(UserRole.ADMIN)
@@ -77,6 +71,14 @@ export class UsersController {
   @Patch('me/kyc')
   submitKyc(@CurrentUser('sub') userId: string, @Body() dto: SubmitKycDto) {
     return this.usersService.submitKyc(userId, dto);
+  }
+
+  @Post('me/kyc/session')
+  createKycSession(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: CreateKycSessionDto,
+  ) {
+    return this.usersService.createSmileKycSession(userId, dto);
   }
 
   @Patch('me/creator-verification')

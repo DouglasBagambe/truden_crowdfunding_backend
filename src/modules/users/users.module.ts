@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { User, UserSchema } from './schemas/user.schema';
 import { UsersController } from './controllers/users.controller';
+import { KycWebhookController } from './controllers/kyc-webhook.controller';
 import { UsersService } from './users.service';
 import { UsersRepository } from './repositories/users.repository';
 import { UserEventsListener } from './listeners/user-events.listener';
@@ -12,7 +13,7 @@ import { AuthModule } from '../auth/auth.module';
     MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
     AuthModule,
   ],
-  controllers: [UsersController],
+  controllers: [UsersController, KycWebhookController],
   providers: [
     UsersService,
     UsersRepository,

@@ -58,6 +58,24 @@ export class KycData {
   dateOfBirth?: Date;
 
   @Prop({ trim: true })
+  provider?: string; // e.g., 'smile_id'
+
+  @Prop({ trim: true })
+  providerSessionId?: string; // Smile job_id
+
+  @Prop({ trim: true })
+  providerStatus?: string; // IN_PROGRESS | VERIFIED | REJECTED | FAILED
+
+  @Prop({ trim: true })
+  providerResultUrl?: string;
+
+  @Prop({ trim: true })
+  providerFailureReason?: string;
+
+  @Prop({ type: Date })
+  verifiedAt?: Date;
+
+  @Prop({ trim: true })
   documentType?: string;
 
   @Prop({ trim: true })
@@ -107,9 +125,6 @@ export class KycData {
 
   @Prop({ type: Date })
   submittedAt?: Date;
-
-  @Prop({ type: Date })
-  verifiedAt?: Date;
 
   @Prop({ trim: true })
   failureReason?: string;
