@@ -11,6 +11,7 @@ import { RolesModule } from '../roles/roles.module';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
       { name: RefreshToken.name, schema: RefreshTokenSchema },
     ]),
     RolesModule,
+    AuditModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],

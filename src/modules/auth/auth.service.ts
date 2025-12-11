@@ -29,6 +29,7 @@ import {
   RefreshTokenDocument,
 } from './schemas/refresh-token.schema';
 import { RolesService } from '../roles/roles.service';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class AuthService {
@@ -52,6 +53,7 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private rolesService: RolesService,
+    private readonly auditService: AuditService,
   ) {}
 
   async register(registerDto: RegisterDto, ipAddress?: string) {
@@ -161,6 +163,16 @@ export class AuthService {
       user.roles,
     );
     const tokens = await this.generateTokens(user, { ip: ipAddress });
+
+    await this.auditService.log({
+      action: 'auth.login',
+      actorId: String(user._id),
+      actorRoles: user.roles ?? [],
+      targetType: 'user',
+      targetId: String(user._id),
+      metadata: { provider: AuthProvider.EMAIL },
+      ip: ipAddress,
+    });
 
     return {
       user: { ...this.sanitizeUser(user), permissions },
@@ -301,6 +313,16 @@ export class AuthService {
       user.roles,
     );
     const tokens = await this.generateTokens(user);
+
+    await this.auditService.log({
+      action: 'auth.login',
+      actorId: String(user._id),
+      actorRoles: user.roles ?? [],
+      targetType: 'user',
+      targetId: String(user._id),
+      metadata: { provider },
+      ip: ipAddress,
+    });
 
     return {
       user: { ...this.sanitizeUser(user), permissions },

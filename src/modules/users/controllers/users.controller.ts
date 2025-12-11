@@ -112,15 +112,25 @@ export class UsersController {
   @Patch(':id/role')
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.MANAGE_USERS)
-  updateRole(@Param('id') id: string, @Body() dto: UpdateRoleDto) {
-    return this.usersService.updateRole(id, dto);
+  updateRole(
+    @Param('id') id: string,
+    @Body() dto: UpdateRoleDto,
+    @CurrentUser('sub') actorId: string,
+    @CurrentUser('roles') actorRoles: string[],
+  ) {
+    return this.usersService.updateRole(id, dto, actorId, actorRoles);
   }
 
   @Patch(':id/kyc')
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.MANAGE_USERS)
-  updateKyc(@Param('id') id: string, @Body() dto: UpdateKycStatusDto) {
-    return this.usersService.updateKycStatus(id, dto);
+  updateKyc(
+    @Param('id') id: string,
+    @Body() dto: UpdateKycStatusDto,
+    @CurrentUser('sub') actorId: string,
+    @CurrentUser('roles') actorRoles: string[],
+  ) {
+    return this.usersService.updateKycStatus(id, dto, actorId, actorRoles);
   }
 
   @Patch(':id/creator-verification')
@@ -129,14 +139,26 @@ export class UsersController {
   updateCreatorVerification(
     @Param('id') id: string,
     @Body() dto: UpdateCreatorVerificationDto,
+    @CurrentUser('sub') actorId: string,
+    @CurrentUser('roles') actorRoles: string[],
   ) {
-    return this.usersService.updateCreatorVerificationStatus(id, dto);
+    return this.usersService.updateCreatorVerificationStatus(
+      id,
+      dto,
+      actorId,
+      actorRoles,
+    );
   }
 
   @Patch(':id/block')
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.MANAGE_USERS)
-  blockUser(@Param('id') id: string, @Body() dto: BlockUserDto) {
-    return this.usersService.blockUser(id, dto);
+  blockUser(
+    @Param('id') id: string,
+    @Body() dto: BlockUserDto,
+    @CurrentUser('sub') actorId: string,
+    @CurrentUser('roles') actorRoles: string[],
+  ) {
+    return this.usersService.blockUser(id, dto, actorId, actorRoles);
   }
 }

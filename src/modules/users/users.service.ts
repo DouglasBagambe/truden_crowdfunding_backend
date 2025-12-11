@@ -28,6 +28,7 @@ import { CreatorVerificationStatus } from '../../common/enums/creator-verificati
 import { AuthService } from '../auth/auth.service';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class UsersService {
@@ -36,6 +37,7 @@ export class UsersService {
     private readonly events: EventEmitter2,
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
+    private readonly auditService: AuditService,
   ) {}
 
   async createUser(dto: CreateUserDto) {
@@ -344,7 +346,12 @@ export class UsersService {
     return this.sanitizeUser(user);
   }
 
-  async updateRole(userId: string, dto: UpdateRoleDto) {
+  async updateRole(
+    userId: string,
+    dto: UpdateRoleDto,
+    actorId?: string,
+    actorRoles?: string[],
+  ) {
     const user: UserDocument | null = await this.usersRepository.updateRole(
       userId,
       dto.role,
@@ -357,10 +364,23 @@ export class UsersService {
       primaryWallet: user.primaryWallet,
       changes: { role: dto.role },
     });
+    await this.auditService.log({
+      action: 'user.role.update',
+      actorId: actorId ?? userId,
+      actorRoles: actorRoles ?? [],
+      targetType: 'user',
+      targetId: String(user.id),
+      metadata: { role: dto.role },
+    });
     return this.sanitizeUser(user);
   }
 
-  async updateKycStatus(userId: string, dto: UpdateKycStatusDto) {
+  async updateKycStatus(
+    userId: string,
+    dto: UpdateKycStatusDto,
+    actorId?: string,
+    actorRoles?: string[],
+  ) {
     const user: UserDocument | null =
       await this.usersRepository.updateKycStatus(userId, dto.kycStatus);
     if (!user) {
@@ -371,12 +391,22 @@ export class UsersService {
       primaryWallet: user.primaryWallet,
       changes: { kycStatus: dto.kycStatus },
     });
+    await this.auditService.log({
+      action: 'kyc.status.update',
+      actorId: actorId ?? userId,
+      actorRoles: actorRoles ?? [],
+      targetType: 'user',
+      targetId: String(user.id),
+      metadata: { kycStatus: dto.kycStatus },
+    });
     return this.sanitizeUser(user);
   }
 
   async updateCreatorVerificationStatus(
     userId: string,
     dto: UpdateCreatorVerificationDto,
+    actorId?: string,
+    actorRoles?: string[],
   ) {
     const now = new Date();
     const user = await this.usersRepository.updateById(userId, {
@@ -393,10 +423,23 @@ export class UsersService {
       primaryWallet: user.primaryWallet,
       changes: { creatorVerificationStatus: dto.status },
     });
+    await this.auditService.log({
+      action: 'creator.status.update',
+      actorId: actorId ?? userId,
+      actorRoles: actorRoles ?? [],
+      targetType: 'user',
+      targetId: String(user.id),
+      metadata: { status: dto.status, reason: dto.reason },
+    });
     return this.sanitizeUser(user);
   }
 
-  async blockUser(userId: string, dto: BlockUserDto) {
+  async blockUser(
+    userId: string,
+    dto: BlockUserDto,
+    actorId?: string,
+    actorRoles?: string[],
+  ) {
     const user: UserDocument | null = await this.usersRepository.updateById(
       userId,
       {
@@ -410,6 +453,14 @@ export class UsersService {
       userId: String(user.id),
       primaryWallet: user.primaryWallet,
       changes: { reason: dto.reason },
+    });
+    await this.auditService.log({
+      action: dto.isBlocked ? 'user.block' : 'user.unblock',
+      actorId: actorId ?? userId,
+      actorRoles: actorRoles ?? [],
+      targetType: 'user',
+      targetId: String(user.id),
+      metadata: { reason: dto.reason },
     });
     return this.sanitizeUser(user);
   }
