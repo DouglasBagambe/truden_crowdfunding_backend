@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -29,15 +30,21 @@ import { AuthService } from '../auth/auth.service';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { AuditService } from '../audit/audit.service';
+import { encryptObject, decryptObject, getEncryptionKey } from '../../common/utils/encryption.util';
+import { HttpService } from '@nestjs/axios';
+import { lastValueFrom } from 'rxjs';
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     private readonly usersRepository: UsersRepository,
     private readonly events: EventEmitter2,
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
     private readonly auditService: AuditService,
+    private readonly http: HttpService,
   ) {}
 
   async createUser(dto: CreateUserDto) {
@@ -68,8 +75,6 @@ export class UsersService {
       kyc: {
         status: dto.kycStatus ?? KYCStatus.NOT_VERIFIED,
         accreditation: { isAccredited: false },
-        homeAddress: null,
-        attachments: [],
       },
       email: dto.email?.toLowerCase(),
       authProvider: passwordHash ? 'email' : 'email',
@@ -173,16 +178,24 @@ export class UsersService {
   }
 
   async submitKyc(userId: string, dto: SubmitKycDto) {
+    const key = getEncryptionKey();
+    const piiEncrypted = encryptObject(
+      {
+        dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth).toISOString() : null,
+        homeAddress: dto.homeAddress ?? null,
+        documentType: dto.documentType,
+        documentCountry: dto.documentCountry,
+        documentLast4: dto.documentLast4,
+      },
+      key,
+    );
+    const attachmentsEncrypted = encryptObject(dto.attachments ?? [], key);
     const user = await this.usersRepository.updateById(userId, {
       $set: {
         kycStatus: KYCStatus.PENDING,
         'kyc.status': KYCStatus.PENDING,
-        'kyc.dateOfBirth': dto.dateOfBirth ? new Date(dto.dateOfBirth) : null,
-        'kyc.documentType': dto.documentType,
-        'kyc.documentCountry': dto.documentCountry,
-        'kyc.documentLast4': dto.documentLast4,
-        'kyc.homeAddress': dto.homeAddress ?? null,
-        'kyc.attachments': dto.attachments ?? [],
+        'kyc.piiEncrypted': JSON.stringify(piiEncrypted),
+        'kyc.attachmentsEncrypted': JSON.stringify(attachmentsEncrypted),
         'kyc.submittedAt': new Date(),
         'kyc.failureReason': null,
       },
@@ -203,7 +216,7 @@ export class UsersService {
     const signature = this.buildSmileSignature(cfg.partnerId, jobId, timestamp, cfg.apiKey);
 
     const payload = {
-      job_type: 1, // Document verification; add selfie/liveness in Smile config
+      job_type: 1, // Document verification; Smile will handle selfie/liveness per configuration
       partner_params: {
         user_id: userId,
         job_id: jobId,
@@ -215,7 +228,21 @@ export class UsersService {
       },
     };
 
-    // If you need to call Smile's API from the backend, inject HttpService again and restore the call.
+    try {
+      await lastValueFrom(
+        this.http.post(`${cfg.baseUrl}/jobs`, payload, {
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Partner-ID': cfg.partnerId,
+            'X-Signature': signature,
+            'X-Timestamp': timestamp,
+          },
+        }),
+      );
+    } catch (error) {
+      this.logger?.error?.('Smile job creation failed', error);
+      throw new BadRequestException('Failed to start Smile ID job');
+    }
 
     const user = await this.usersRepository.startKycSession(userId, {
       $set: {
@@ -280,19 +307,29 @@ export class UsersService {
       setPayload['kyc.providerResultUrl'] = result.ResultURL;
     }
     const dob = result?.DOB || result?.dob;
-    if (dob) {
-      setPayload['kyc.dateOfBirth'] = new Date(dob);
-    }
     const address = result?.Address || result?.address;
-    if (address) {
-      setPayload['kyc.homeAddress'] = {
-        line1: address?.Street || address?.line1,
-        line2: address?.line2,
-        city: address?.City || address?.city,
-        state: address?.State || address?.state,
-        postalCode: address?.PostalCode || address?.postalCode,
-        country: address?.Country || address?.country,
-      };
+    const key = this.safeGetEncryptionKey();
+    if (key) {
+      const piiEncrypted = encryptObject(
+        {
+          dateOfBirth: dob ? new Date(dob).toISOString() : null,
+          homeAddress: address
+            ? {
+                line1: address?.Street || address?.line1,
+                line2: address?.line2,
+                city: address?.City || address?.city,
+                state: address?.State || address?.state,
+                postalCode: address?.PostalCode || address?.postalCode,
+                country: address?.Country || address?.country,
+              }
+            : null,
+          documentType: undefined,
+          documentCountry: undefined,
+          documentLast4: undefined,
+        },
+        key,
+      );
+      setPayload['kyc.piiEncrypted'] = JSON.stringify(piiEncrypted);
     }
 
     const user = await this.usersRepository.applyKycResult(userId, {
@@ -564,6 +601,14 @@ export class UsersService {
       .digest('hex');
   }
 
+  private safeGetEncryptionKey() {
+    try {
+      return getEncryptionKey();
+    } catch {
+      return undefined;
+    }
+  }
+
   private safeParseJson(value: unknown) {
     if (typeof value !== 'string') return undefined;
     try {
@@ -577,6 +622,34 @@ export class UsersService {
     const obj = user.toObject();
     delete (obj as any).password;
     delete (obj as any).passwordHash;
+    // Decrypt KYC PII for runtime use; keep encrypted data at rest
+    if (obj.kyc?.piiEncrypted || obj.kyc?.attachmentsEncrypted) {
+      const key = this.safeGetEncryptionKey();
+      if (key) {
+        const decrypted = decryptObject<{
+          dateOfBirth?: string | null;
+          homeAddress?: unknown;
+          documentType?: string;
+          documentCountry?: string;
+          documentLast4?: string;
+        }>(obj.kyc.piiEncrypted, key);
+        const attachments = decryptObject<unknown[]>(obj.kyc.attachmentsEncrypted, key);
+        if (decrypted) {
+          (obj.kyc as any).dateOfBirth = decrypted.dateOfBirth
+            ? new Date(decrypted.dateOfBirth)
+            : undefined;
+          (obj.kyc as any).homeAddress = decrypted.homeAddress;
+          (obj.kyc as any).documentType = decrypted.documentType;
+          (obj.kyc as any).documentCountry = decrypted.documentCountry;
+          (obj.kyc as any).documentLast4 = decrypted.documentLast4;
+        }
+        if (attachments) {
+          (obj.kyc as any).attachments = attachments;
+        }
+      }
+      delete (obj.kyc as any).piiEncrypted;
+      delete (obj.kyc as any).attachmentsEncrypted;
+    }
     return obj;
   }
 

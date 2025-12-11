@@ -8,10 +8,12 @@ import { UsersRepository } from './repositories/users.repository';
 import { UserEventsListener } from './listeners/user-events.listener';
 import { AuthModule } from '../auth/auth.module';
 import { AuditModule } from '../audit/audit.module';
+import { HttpModule } from '@nestjs/axios';
 
 @Module({
   imports: [
     MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
+    HttpModule,
     AuthModule,
     AuditModule,
   ],

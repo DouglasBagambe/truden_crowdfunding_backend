@@ -131,6 +131,18 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    const roles = Array.isArray(user.roles) ? user.roles : [];
+    const isAdmin = roles.includes(UserRole.ADMIN) || roles.includes(UserRole.SUPERADMIN);
+    if (isAdmin) {
+      const allowedIps = this.getAdminAllowedIps();
+      if (allowedIps && ipAddress && !allowedIps.has(ipAddress)) {
+        throw new UnauthorizedException('Admin login not allowed from this IP');
+      }
+      if (!user.mfa?.enabled) {
+        throw new UnauthorizedException('Admin MFA required');
+      }
+    }
+
     const requiresMfa = this.requiresMfa(user);
     if (requiresMfa) {
       if (!loginDto.otp) {
@@ -773,6 +785,18 @@ export class AuthService {
 
   private requiresMfa(user: UserDocument) {
     return Boolean(user.mfa?.enabled);
+  }
+
+  private getAdminAllowedIps(): Set<string> | null {
+    const raw = this.configService.get<string>('ADMIN_ALLOWED_IPS');
+    if (!raw) return null;
+    const set = new Set(
+      raw
+        .split(',')
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0),
+    );
+    return set.size ? set : null;
   }
 
   private verifyTotp(secret: string, token: string) {

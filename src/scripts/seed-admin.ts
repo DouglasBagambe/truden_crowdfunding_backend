@@ -58,8 +58,6 @@ async function seedAdmin() {
       providerFailureReason: undefined,
       submittedAt: existing.kyc?.submittedAt ?? now,
       verifiedAt: now,
-      attachments: existing.kyc?.attachments ?? [],
-      homeAddress: existing.kyc?.homeAddress ?? null,
       accreditation: existing.kyc?.accreditation ?? { isAccredited: false },
     };
     existing.creatorVerification = {
@@ -94,8 +92,6 @@ async function seedAdmin() {
         providerFailureReason: undefined,
         submittedAt: now,
         verifiedAt: now,
-        attachments: [],
-        homeAddress: null,
         accreditation: { isAccredited: false },
       },
       profile: {
