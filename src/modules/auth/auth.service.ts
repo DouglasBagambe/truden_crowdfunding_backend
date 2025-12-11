@@ -8,7 +8,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
@@ -23,6 +23,10 @@ import { OAuthLoginDto, AuthProvider } from './dto/oauth-login.dto';
 import { JwtPayload } from '../../common/interfaces/user.interface';
 import { UserRole } from '../../common/enums/role.enum';
 import { User, UserDocument } from '../users/schemas/user.schema';
+import {
+  RefreshToken,
+  RefreshTokenDocument,
+} from './schemas/refresh-token.schema';
 import { RolesService } from '../roles/roles.service';
 
 @Injectable()
@@ -42,6 +46,8 @@ export class AuthService {
 
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(RefreshToken.name)
+    private refreshTokenModel: Model<RefreshTokenDocument>,
     private jwtService: JwtService,
     private configService: ConfigService,
     private rolesService: RolesService,
@@ -139,7 +145,7 @@ export class AuthService {
     const permissions = await this.rolesService.getPermissionsForRoles(
       user.roles,
     );
-    const tokens = await this.generateTokens(user);
+    const tokens = await this.generateTokens(user, { ip: ipAddress });
 
     return {
       user: { ...this.sanitizeUser(user), permissions },
@@ -474,6 +480,7 @@ export class AuthService {
           passwordUpdatedAt: new Date(),
         })
         .exec();
+      await this.revokeAllRefreshTokensForUser(String(user._id));
       return { message: 'Password reset successful' };
     } catch (err: unknown) {
       if (err instanceof TokenExpiredError) {
@@ -494,13 +501,46 @@ export class AuthService {
     return { ...this.sanitizeUser(user), permissions };
   }
 
+  async logout(userId: string) {
+    await this.revokeAllRefreshTokensForUser(userId);
+    return { message: 'Logged out successfully' };
+  }
+
   async refreshToken(refreshToken: string) {
     try {
-      const payload = this.jwtService.verify<{ sub: string }>(refreshToken, {
-        secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
-        issuer: this.getIssuer(),
-        audience: this.getAudience(),
-      });
+      const payload = this.jwtService.verify<{ sub: string; jti?: string }>(
+        refreshToken,
+        {
+          secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
+          issuer: this.getIssuer(),
+          audience: this.getAudience(),
+        },
+      );
+
+      if (!payload.jti) {
+        throw new UnauthorizedException('Invalid refresh token: missing jti');
+      }
+
+      const tokenHash = this.hashToken(refreshToken);
+      const record = await this.refreshTokenModel
+        .findOne({
+          userId: payload.sub,
+          jti: payload.jti,
+        })
+        .exec();
+
+      if (!record || record.revoked || record.tokenHash !== tokenHash) {
+        throw new UnauthorizedException('Invalid refresh token');
+      }
+      if (record.expiresAt.getTime() <= Date.now()) {
+        throw new UnauthorizedException('Refresh token expired');
+      }
+
+      // rotate: revoke old token
+      await this.refreshTokenModel.updateOne(
+        { _id: record._id },
+        { $set: { revoked: true, revokedAt: new Date() } },
+      );
 
       const user = await this.userModel.findById(payload.sub).exec();
       if (!user || !user.isActive || user.isBlocked) {
@@ -519,9 +559,13 @@ export class AuthService {
     }
   }
 
-  private async generateTokens(user: UserDocument) {
+  private async generateTokens(
+    user: UserDocument,
+    options: { ip?: string; userAgent?: string } = {},
+  ) {
     const roles = Array.isArray(user.roles) ? user.roles : [];
     const permissions = await this.rolesService.getPermissionsForRoles(roles);
+    const jti = crypto.randomUUID();
     const payload: JwtPayload = {
       sub: String(user._id),
       email: user.email,
@@ -529,6 +573,7 @@ export class AuthService {
       walletAddress: user.primaryWallet,
       roles,
       permissions,
+      jti,
     };
 
     const accessExpiresIn = (this.configService.get<string>('JWT_EXPIRY') ||
@@ -554,10 +599,55 @@ export class AuthService {
       }),
     ]);
 
+    // persist refresh token for rotation/revocation
+    const expiresAt = this.computeExpiryDate(refreshExpiresIn);
+    const tokenHash = this.hashToken(refreshToken);
+    await this.refreshTokenModel.create({
+      userId: new Types.ObjectId(user._id),
+      jti,
+      tokenHash,
+      expiresAt,
+      revoked: false,
+      ip: options.ip,
+      userAgent: options.userAgent,
+    });
+
     return {
       accessToken,
       refreshToken,
     };
+  }
+
+  private async revokeAllRefreshTokensForUser(userId: string) {
+    await this.refreshTokenModel.updateMany(
+      { userId: new Types.ObjectId(userId), revoked: false },
+      { $set: { revoked: true, revokedAt: new Date() } },
+    );
+  }
+
+  private hashToken(token: string) {
+    return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  private computeExpiryDate(expiresIn: JwtSignOptions['expiresIn']) {
+    if (typeof expiresIn === 'number') {
+      return new Date(Date.now() + expiresIn * 1000);
+    }
+    // handle strings like "15m", "7d"
+    const match = /^(\d+)([smhd])$/.exec(expiresIn as string);
+    if (!match) {
+      // fallback: 7 days
+      return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    }
+    const value = parseInt(match[1], 10);
+    const unit = match[2];
+    const multipliers: Record<string, number> = {
+      s: 1000,
+      m: 60 * 1000,
+      h: 60 * 60 * 1000,
+      d: 24 * 60 * 60 * 1000,
+    };
+    return new Date(Date.now() + value * multipliers[unit]);
   }
 
   private sanitizeUser(user: UserDocument) {

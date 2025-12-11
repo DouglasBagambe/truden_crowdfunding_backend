@@ -123,9 +123,8 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  logout() {
-    // No stateful logout (JWT); provided for API parity
-    return { message: 'Logged out successfully' };
+  logout(@CurrentUser('sub') userId: string) {
+    return this.authService.logout(userId);
   }
 
   private getClientIp(req: ExpressRequest): string | undefined {
