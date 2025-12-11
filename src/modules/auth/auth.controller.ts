@@ -21,6 +21,8 @@ import { AuthProvider } from './dto/oauth-login.dto';
 import { ResendEmailDto } from './dto/resend-email.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { EnableMfaDto } from './dto/enable-mfa.dto';
+import { DisableMfaDto } from './dto/disable-mfa.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -125,6 +127,27 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   logout(@CurrentUser('sub') userId: string) {
     return this.authService.logout(userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('mfa/setup')
+  @HttpCode(HttpStatus.OK)
+  startMfa(@CurrentUser('sub') userId: string) {
+    return this.authService.startMfaSetup(userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('mfa/enable')
+  @HttpCode(HttpStatus.OK)
+  enableMfa(@CurrentUser('sub') userId: string, @Body() dto: EnableMfaDto) {
+    return this.authService.enableMfa(userId, dto.token);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('mfa/disable')
+  @HttpCode(HttpStatus.OK)
+  disableMfa(@CurrentUser('sub') userId: string, @Body() dto: DisableMfaDto) {
+    return this.authService.disableMfa(userId, dto.token);
   }
 
   private getClientIp(req: ExpressRequest): string | undefined {

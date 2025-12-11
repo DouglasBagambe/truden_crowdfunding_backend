@@ -172,6 +172,20 @@ export class CreatorVerification {
   verifiedAt?: Date;
 }
 
+export class MfaSettings {
+  @Prop({ type: Boolean, default: false })
+  enabled!: boolean;
+
+  @Prop({ type: String, select: false, trim: true })
+  secret?: string;
+
+  @Prop({ type: String, select: false, trim: true })
+  setupSecret?: string;
+
+  @Prop({ type: Date })
+  verifiedAt?: Date;
+}
+
 export class UserAvatar {
   @Prop({ type: Buffer })
   data!: Buffer;
@@ -236,6 +250,9 @@ export class User {
 
   @Prop({ type: CreatorVerification, default: {} })
   creatorVerification!: CreatorVerification;
+
+  @Prop({ type: MfaSettings, default: {} })
+  mfa!: MfaSettings;
 
   @Prop({ type: UserAvatar })
   avatar?: UserAvatar;

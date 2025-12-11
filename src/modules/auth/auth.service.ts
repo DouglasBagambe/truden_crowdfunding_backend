@@ -17,6 +17,7 @@ import { TokenExpiredError } from 'jsonwebtoken';
 import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose';
 import geoip from 'geoip-lite';
 import crypto from 'crypto';
+import * as speakeasy from 'speakeasy';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { OAuthLoginDto, AuthProvider } from './dto/oauth-login.dto';
@@ -114,7 +115,7 @@ export class AuthService {
 
     const user = await this.userModel
       .findOne({ email: email.toLowerCase() })
-      .select('+passwordHash')
+      .select('+passwordHash +mfa.secret +mfa.setupSecret')
       .exec();
     const provider = user?.authProvider as AuthProvider | undefined;
     if (!user || !user.passwordHash || provider !== AuthProvider.EMAIL) {
@@ -124,6 +125,18 @@ export class AuthService {
     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const requiresMfa = this.requiresMfa(user);
+    if (requiresMfa) {
+      if (!loginDto.otp) {
+        throw new UnauthorizedException('MFA code required');
+      }
+      const secret = user.mfa?.secret;
+      const valid = secret ? this.verifyTotp(secret, loginDto.otp) : false;
+      if (!valid) {
+        throw new UnauthorizedException('Invalid MFA code');
+      }
     }
 
     const isTestEnv = this.configService.get<string>('NODE_ENV') === 'test';
@@ -559,6 +572,76 @@ export class AuthService {
     }
   }
 
+  async startMfaSetup(userId: string) {
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+    const secret = speakeasy.generateSecret({
+      length: 20,
+      name: `Truden (${user.email ?? userId})`,
+    });
+    user.mfa = {
+      ...(user.mfa || {}),
+      setupSecret: secret.base32,
+      enabled: user.mfa?.enabled ?? false,
+    };
+    await user.save();
+    return {
+      secret: secret.base32,
+      otpauthUrl: secret.otpauth_url,
+      note: 'Scan in authenticator app, then call /auth/mfa/enable with the 6-digit code.',
+    };
+  }
+
+  async enableMfa(userId: string, token: string) {
+    const user = await this.userModel
+      .findById(userId)
+      .select('+mfa.secret +mfa.setupSecret')
+      .exec();
+    if (!user) throw new UnauthorizedException('User not found');
+    const secret = user.mfa?.setupSecret;
+    if (!secret) {
+      throw new BadRequestException('No MFA setup in progress');
+    }
+    const verified = this.verifyTotp(secret, token);
+    if (!verified) {
+      throw new UnauthorizedException('Invalid MFA code');
+    }
+    user.mfa = {
+      enabled: true,
+      secret,
+      setupSecret: undefined,
+      verifiedAt: new Date(),
+    };
+    await user.save();
+    return { message: 'MFA enabled' };
+  }
+
+  async disableMfa(userId: string, token: string) {
+    const user = await this.userModel
+      .findById(userId)
+      .select('+mfa.secret +mfa.setupSecret')
+      .exec();
+    if (!user) throw new UnauthorizedException('User not found');
+    const secret = user.mfa?.secret;
+    if (!secret || !user.mfa?.enabled) {
+      throw new BadRequestException('MFA is not enabled');
+    }
+    const verified = this.verifyTotp(secret, token);
+    if (!verified) {
+      throw new UnauthorizedException('Invalid MFA code');
+    }
+    user.mfa = {
+      enabled: false,
+      secret: undefined,
+      setupSecret: undefined,
+      verifiedAt: undefined,
+    };
+    await user.save();
+    return { message: 'MFA disabled' };
+  }
+
   private async generateTokens(
     user: UserDocument,
     options: { ip?: string; userAgent?: string } = {},
@@ -665,6 +748,19 @@ export class AuthService {
       walletAddress: primaryWallet,
       id: String(user._id),
     };
+  }
+
+  private requiresMfa(user: UserDocument) {
+    return Boolean(user.mfa?.enabled);
+  }
+
+  private verifyTotp(secret: string, token: string) {
+    return speakeasy.totp.verify({
+      secret,
+      encoding: 'base32',
+      token,
+      window: 1,
+    });
   }
 
   async triggerEmailVerification(user: UserDocument) {
