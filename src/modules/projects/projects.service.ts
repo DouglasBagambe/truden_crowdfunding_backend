@@ -24,6 +24,8 @@ import { CreateVerificationLogDto } from './dto/create-verification-log.dto';
 import { UsersRepository } from '../users/repositories/users.repository';
 import { KYCStatus } from '../../common/enums/role.enum';
 import { CreatorVerificationStatus } from '../../common/enums/creator-verification-status.enum';
+import { AgreementTemplatesService } from './services/agreement-templates.service';
+import { AgreementTemplateDocument } from './schemas/agreement-template.schema';
 
 const PUBLIC_STATUSES: ProjectStatus[] = [
   ProjectStatus.APPROVED,
@@ -44,6 +46,7 @@ export class ProjectsService {
     private readonly projectsRepo: ProjectsRepository,
     private readonly milestonesRepo: MilestonesRepository,
     private readonly usersRepo: UsersRepository,
+    private readonly agreementTemplatesService: AgreementTemplatesService,
   ) {}
 
   async createProject(creatorId: string, dto: CreateProjectDto) {
@@ -56,16 +59,16 @@ export class ProjectsService {
       { ...dto, type: projectType },
       { requireType: true },
     );
-    const agreementsPayload: AgreementRuleDto[] = this.resolveAgreements(
-      projectType,
-      {
+    const agreementsPayload: AgreementRuleDto[] =
+      await this.resolveAgreementsWithTemplates(projectType, {
         agreements: this.normalizeAgreementArray(dto.agreements ?? []),
         roiAgreements: this.normalizeAgreementArray(dto.roiAgreements ?? []),
         charityAgreements: this.normalizeAgreementArray(
           dto.charityAgreements ?? [],
         ),
-      },
-    );
+        category: dto.category,
+        industry: dto.industry,
+      });
 
     const project = await this.projectsRepo.create({
       creatorId,
@@ -204,19 +207,33 @@ export class ProjectsService {
     if (dto.highlights !== undefined)
       setPayload.highlights = this.normalizeStringArray(dto.highlights);
 
-    if (
+    const shouldRefreshAgreements =
       dto.agreements !== undefined ||
       dto.roiAgreements !== undefined ||
-      dto.charityAgreements !== undefined
-    ) {
+      dto.charityAgreements !== undefined ||
+      dto.category !== undefined ||
+      dto.industry !== undefined ||
+      dto.type !== undefined;
+
+    if (shouldRefreshAgreements) {
       const updatedType = inferredType ?? currentType;
-      const agreementsPayload = this.resolveAgreements(updatedType, {
-        agreements: this.normalizeAgreementArray(dto.agreements ?? []),
-        roiAgreements: this.normalizeAgreementArray(dto.roiAgreements ?? []),
-        charityAgreements: this.normalizeAgreementArray(
-          dto.charityAgreements ?? [],
-        ),
-      });
+      const agreementsPayload = await this.resolveAgreementsWithTemplates(
+        updatedType,
+        {
+          agreements: this.normalizeAgreementArray(
+            dto.agreements ?? (project.agreements as AgreementRuleDto[]),
+          ),
+          roiAgreements: this.normalizeAgreementArray(
+            dto.roiAgreements ?? (project.roiAgreements as AgreementRuleDto[]),
+          ),
+          charityAgreements: this.normalizeAgreementArray(
+            dto.charityAgreements ??
+              (project.charityAgreements as AgreementRuleDto[]),
+          ),
+          category: dto.category ?? project.category,
+          industry: dto.industry ?? project.industry,
+        },
+      );
       setPayload.agreements = agreementsPayload;
       setPayload.roiAgreements =
         updatedType === ProjectType.ROI ? agreementsPayload : [];
@@ -475,6 +492,47 @@ export class ProjectsService {
       return dto.agreements ?? [];
     }
     return dto.agreements ?? [];
+  }
+
+  private async resolveAgreementsWithTemplates(
+    type: ProjectType | undefined,
+    dto: {
+      agreements?: AgreementRuleDto[];
+      roiAgreements?: AgreementRuleDto[];
+      charityAgreements?: AgreementRuleDto[];
+      category?: string;
+      industry?: string;
+    },
+  ): Promise<AgreementRuleDto[]> {
+    const base = this.resolveAgreements(type, dto);
+    if (!type) return base;
+
+    const templates: AgreementTemplateDocument[] =
+      await this.agreementTemplatesService.findApplicable(
+        type,
+        dto.category,
+        dto.industry,
+      );
+
+    const templateAgreements: AgreementRuleDto[] = templates.map((t) => ({
+      title: t.title,
+      description: t.description,
+      requiresAcceptance: t.requiresAcceptance,
+      templateId: String(t._id),
+      templateVersion: t.version,
+    }));
+
+    // Merge template agreements with user-provided, preferring templates on duplicate templateId/title
+    const merged = [...templateAgreements];
+    for (const item of base) {
+      const duplicate =
+        item.templateId &&
+        merged.some((m) => m.templateId && m.templateId === item.templateId);
+      const duplicateTitle = merged.some((m) => m.title === item.title);
+      if (duplicate || duplicateTitle) continue;
+      merged.push(item);
+    }
+    return merged;
   }
 
   private normalizeAgreementArray(value: unknown): AgreementRuleDto[] {
