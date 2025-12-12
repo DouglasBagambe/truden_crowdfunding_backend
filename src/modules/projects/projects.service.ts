@@ -29,19 +29,23 @@ import { AgreementTemplateDocument } from './schemas/agreement-template.schema';
 import { AttachmentRequirementsService } from './services/attachment-requirements.service';
 import { AttachmentRequirementDocument } from './schemas/attachment-requirement.schema';
 import { RequestAttachmentDto } from './dto/request-attachment.dto';
+import { AttachmentFilesRepository } from './repositories/attachment-files.repository';
+import { UploadAttachmentDto } from './dto/upload-attachment.dto';
+import { StreamableFile } from '@nestjs/common';
+type MulterFile = Express.Multer.File;
 
-const PUBLIC_STATUSES: ProjectStatus[] = [
+const PUBLIC_STATUSES = [
   ProjectStatus.APPROVED,
   ProjectStatus.FUNDING,
   ProjectStatus.FUNDED,
   ProjectStatus.FUNDING_FAILED,
-];
+] as const satisfies ProjectStatus[];
 
-const OWNER_EDITABLE_STATUSES: ProjectStatus[] = [
+const OWNER_EDITABLE_STATUSES = [
   ProjectStatus.DRAFT,
   ProjectStatus.PENDING_REVIEW,
   ProjectStatus.CHANGES_REQUESTED,
-];
+] as const satisfies ProjectStatus[];
 
 @Injectable()
 export class ProjectsService {
@@ -51,6 +55,7 @@ export class ProjectsService {
     private readonly usersRepo: UsersRepository,
     private readonly agreementTemplatesService: AgreementTemplatesService,
     private readonly attachmentRequirementsService: AttachmentRequirementsService,
+    private readonly attachmentFilesRepo: AttachmentFilesRepository,
   ) {}
 
   async createProject(creatorId: string, dto: CreateProjectDto) {
@@ -58,7 +63,7 @@ export class ProjectsService {
       throw new BadRequestException('Projects can only be created as DRAFT');
     }
 
-    const projectType = dto.type ?? (dto as any).projectType;
+    const projectType = dto.type;
     this.validateProjectType(
       { ...dto, type: projectType },
       { requireType: true },
@@ -77,8 +82,11 @@ export class ProjectsService {
       dto.category,
       dto.subcategory,
       dto.industry,
-      dto.attachments ?? [],
+      this.normalizeAttachmentArray(dto.attachments ?? []),
     );
+
+    const risksValue: string | undefined =
+      this.toOptionalString(dto.risks) ?? this.toOptionalString(dto.challenges);
 
     const project = await this.projectsRepo.create({
       creatorId,
@@ -93,7 +101,7 @@ export class ProjectsService {
       category: dto.category,
       subcategory: dto.subcategory,
       industry: dto.industry,
-      risks: dto.risks ?? dto.challenges,
+      risks: risksValue,
       status: ProjectStatus.DRAFT,
       targetAmount: dto.targetAmount,
       currency: dto.currency,
@@ -151,7 +159,10 @@ export class ProjectsService {
     if (project.creatorId !== creatorId) {
       throw new ForbiddenException('You can only edit your own projects');
     }
-    if (!OWNER_EDITABLE_STATUSES.includes(project.status)) {
+    const isOwnerEditable = OWNER_EDITABLE_STATUSES.some(
+      (status) => status === project.status,
+    );
+    if (!isOwnerEditable) {
       throw new BadRequestException(
         'Project cannot be edited in the current status',
       );
@@ -190,7 +201,11 @@ export class ProjectsService {
     if (dto.subcategory !== undefined) setPayload.subcategory = dto.subcategory;
     if (dto.industry !== undefined) setPayload.industry = dto.industry;
     if (dto.risks !== undefined || dto.challenges !== undefined) {
-      setPayload.risks = dto.risks ?? dto.challenges ?? project.risks;
+      const risksUpdate =
+        this.toOptionalString(dto.risks) ??
+        this.toOptionalString(dto.challenges) ??
+        this.toOptionalString(project.risks);
+      setPayload.risks = risksUpdate;
     }
     if (dto.riskFactors !== undefined)
       setPayload.riskFactors = this.normalizeStringArray(dto.riskFactors);
@@ -209,7 +224,8 @@ export class ProjectsService {
       setPayload.fundingStartDate = dto.fundingStartDate;
     if (dto.fundingEndDate !== undefined)
       setPayload.fundingEndDate = dto.fundingEndDate;
-    if (dto.attachments !== undefined) setPayload.attachments = dto.attachments;
+    if (dto.attachments !== undefined)
+      setPayload.attachments = this.normalizeAttachmentArray(dto.attachments);
     if (dto.useOfFunds !== undefined)
       setPayload.useOfFunds = this.normalizeUseOfFundsArray(dto.useOfFunds);
     if (dto.verificationBadges !== undefined)
@@ -252,21 +268,26 @@ export class ProjectsService {
       dto.type !== undefined
     ) {
       const updatedType = inferredType ?? currentType;
+      const normalizedAttachments = this.normalizeAttachmentArray(
+        dto.attachments ??
+          (project.attachments as Array<{
+            title: string;
+            url?: string;
+            fileId?: string;
+            type?: string;
+            isRequired?: boolean;
+            templateId?: string;
+            templateVersion?: number;
+            requestedBy?: string;
+            requestedAt?: Date;
+          }>),
+      );
       setPayload.attachments = await this.applyAttachmentRequirementsAsync(
         updatedType,
         dto.category ?? project.category,
         dto.subcategory ?? project.subcategory,
         dto.industry ?? project.industry,
-        dto.attachments ??
-          (project.attachments as Array<{
-            title: string;
-            url: string;
-            type?: string;
-            isRequired?: boolean;
-            templateId?: string;
-            templateVersion?: number;
-          }>) ??
-          [],
+        normalizedAttachments,
       );
     }
 
@@ -333,9 +354,13 @@ export class ProjectsService {
   }
 
   async listPublicProjects(query: QueryProjectsDto) {
+    const statuses: ProjectStatus[] = query.statuses?.length
+      ? [...query.statuses]
+      : PUBLIC_STATUSES;
+
     const filter: Record<string, unknown> = {
       status: {
-        $in: query.statuses?.length ? query.statuses : PUBLIC_STATUSES,
+        $in: statuses,
       },
     };
     if (query.category) {
@@ -375,7 +400,10 @@ export class ProjectsService {
     this.ensureValidObjectId(id);
     const project = await this.projectsRepo.findById(id);
     if (!project) throw new NotFoundException('Project not found');
-    if (!PUBLIC_STATUSES.includes(project.status)) {
+    const isPublic = PUBLIC_STATUSES.some(
+      (status) => status === project.status,
+    );
+    if (!isPublic) {
       throw new NotFoundException('Project not available');
     }
     return this.getProjectWithMilestones(id);
@@ -385,7 +413,10 @@ export class ProjectsService {
     this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
-    if (!PUBLIC_STATUSES.includes(project.status)) {
+    const isPublic = PUBLIC_STATUSES.some(
+      (status) => status === project.status,
+    );
+    if (!isPublic) {
       throw new NotFoundException('Project not available');
     }
     return this.milestonesRepo.findByProject(projectId);
@@ -487,15 +518,18 @@ export class ProjectsService {
     const payload = {
       title: normalizedTitle,
       description: dto.description,
-      url: existingIndex >= 0 ? project.attachments?.[existingIndex].url ?? '' : '',
+      url:
+        existingIndex >= 0
+          ? (project.attachments?.[existingIndex].url ?? '')
+          : '',
       isRequired: dto.isRequired ?? true,
       requestedBy: 'admin',
       requestedAt: now,
     };
 
     if (existingIndex >= 0) {
-      project.attachments![existingIndex] = {
-        ...project.attachments![existingIndex],
+      project.attachments[existingIndex] = {
+        ...project.attachments[existingIndex],
         ...payload,
       };
     } else {
@@ -509,6 +543,89 @@ export class ProjectsService {
     return project.attachments;
   }
 
+  async uploadAttachment(
+    projectId: string,
+    userId: string,
+    dto: UploadAttachmentDto,
+    file?: MulterFile,
+  ) {
+    this.ensureValidObjectId(projectId);
+    const project = await this.projectsRepo.findById(projectId);
+    if (!project) throw new NotFoundException('Project not found');
+    if (project.creatorId !== userId) {
+      throw new ForbiddenException(
+        'Only the project owner can upload attachments',
+      );
+    }
+    const fileBuffer = file?.buffer;
+    const fileName = file?.originalname;
+    const fileMime = file?.mimetype;
+    const fileSize = file?.size;
+    if (!file || !fileBuffer || !fileName) {
+      throw new BadRequestException('File is required');
+    }
+
+    const stored = await this.attachmentFilesRepo.create({
+      projectId: new Types.ObjectId(projectId),
+      filename: fileName,
+      mimeType: fileMime,
+      size: fileSize,
+      data: fileBuffer,
+    });
+
+    const normalizedTitle = dto.title.trim();
+    const existingAttachments = project.attachments ?? [];
+    const existingIndex = existingAttachments.findIndex((att) => {
+      const titleMatch =
+        att.title?.trim().toLowerCase() === normalizedTitle.toLowerCase();
+      return titleMatch;
+    });
+
+    const attachment = {
+      title: normalizedTitle,
+      type: dto.type,
+      isRequired: dto.isRequired ?? false,
+      fileId: String(stored._id),
+      url: '',
+    };
+
+    const updatedAttachments = [...existingAttachments];
+    if (existingIndex >= 0) {
+      updatedAttachments[existingIndex] = {
+        ...updatedAttachments[existingIndex],
+        ...attachment,
+      };
+    } else {
+      updatedAttachments.push(attachment);
+    }
+    await this.projectsRepo.updateById(projectId, {
+      $set: { attachments: updatedAttachments },
+    });
+
+    return {
+      fileId: String(stored._id),
+      filename: stored.filename,
+      mimeType: stored.mimeType,
+      size: stored.size,
+    };
+  }
+
+  async downloadAttachment(projectId: string, fileId: string) {
+    this.ensureValidObjectId(projectId);
+    const project = await this.projectsRepo.findById(projectId);
+    if (!project) throw new NotFoundException('Project not found');
+
+    const file = await this.attachmentFilesRepo.findById(fileId);
+    if (!file || String(file.projectId) !== String(projectId)) {
+      throw new NotFoundException('Attachment not found');
+    }
+
+    return new StreamableFile(file.data, {
+      disposition: `attachment; filename="${file.filename}"`,
+      type: file.mimeType ?? 'application/octet-stream',
+    });
+  }
+
   private ensureRequiredAttachments(
     projectType: ProjectType | undefined,
     category: string | undefined,
@@ -517,6 +634,7 @@ export class ProjectsService {
     attachments: Array<{
       title: string;
       url?: string;
+      fileId?: string;
       templateId?: string;
     }>,
   ) {
@@ -534,9 +652,10 @@ export class ProjectsService {
               req.title.trim().toLowerCase();
             const templateMatch =
               att.templateId && String(att.templateId) === String(req._id);
-            const hasUrl =
-              typeof att.url === 'string' && att.url.trim().length > 0;
-            return hasUrl && (titleMatch || templateMatch);
+            const hasFile =
+              (typeof att.url === 'string' && att.url.trim().length > 0) ||
+              (typeof att.fileId === 'string' && att.fileId.trim().length > 0);
+            return hasFile && (titleMatch || templateMatch);
           });
         });
         if (missing.length) {
@@ -638,7 +757,7 @@ export class ProjectsService {
     }));
 
     // Merge template agreements with user-provided, preferring templates on duplicate templateId/title
-    const merged = [...templateAgreements];
+    const merged: AgreementRuleDto[] = [...templateAgreements];
     for (const item of base) {
       const duplicate =
         item.templateId &&
@@ -657,11 +776,14 @@ export class ProjectsService {
     industry: string | undefined,
     attachments: Array<{
       title: string;
-      url: string;
+      url?: string;
+      fileId?: string;
       type?: string;
       isRequired?: boolean;
       templateId?: string;
       templateVersion?: number;
+      requestedBy?: string;
+      requestedAt?: Date;
     }>,
   ) {
     if (!type) return attachments;
@@ -710,6 +832,58 @@ export class ProjectsService {
     return Array.isArray(value) ? (value as AgreementRuleDto[]) : [];
   }
 
+  private normalizeAttachmentArray(
+    value:
+      | Array<{
+          title: string;
+          url?: string;
+          fileId?: string;
+          type?: string;
+          isRequired?: boolean;
+          templateId?: string;
+          templateVersion?: number;
+          requestedBy?: string;
+          requestedAt?: Date;
+        }>
+      | unknown,
+  ) {
+    if (!Array.isArray(value)) return [];
+    return value.map(
+      (att: {
+        title?: unknown;
+        url?: unknown;
+        fileId?: unknown;
+        type?: unknown;
+        isRequired?: unknown;
+        templateId?: unknown;
+        templateVersion?: unknown;
+        requestedBy?: unknown;
+        requestedAt?: unknown;
+      }) => ({
+        title: typeof att.title === 'string' ? att.title : '',
+        url: typeof att.url === 'string' ? att.url : undefined,
+        fileId: typeof att.fileId === 'string' ? att.fileId : undefined,
+        type: typeof att.type === 'string' ? att.type : undefined,
+        isRequired:
+          typeof att.isRequired === 'boolean' ? att.isRequired : undefined,
+        templateId:
+          typeof att.templateId === 'string' ? att.templateId : undefined,
+        templateVersion:
+          typeof att.templateVersion === 'number'
+            ? att.templateVersion
+            : undefined,
+        requestedBy:
+          typeof att.requestedBy === 'string' ? att.requestedBy : undefined,
+        requestedAt:
+          att.requestedAt instanceof Date ? att.requestedAt : undefined,
+      }),
+    );
+  }
+
+  private toOptionalString(value: unknown): string | undefined {
+    return typeof value === 'string' ? value : undefined;
+  }
+
   private normalizeStringArray(value: unknown): string[] {
     return Array.isArray(value) ? (value as string[]) : [];
   }
@@ -728,7 +902,7 @@ export class ProjectsService {
     dto: Partial<CreateProjectDto>,
     options: { requireType?: boolean } = {},
   ) {
-    const projectType = dto.type ?? (dto as any).projectType;
+    const projectType = dto.type;
     if (options.requireType && !projectType) {
       throw new BadRequestException('Project type is required');
     }

@@ -116,7 +116,7 @@ export class Project {
     type: [
       {
         title: { type: String, required: true, trim: true },
-        url: { type: String, required: true, trim: true },
+        url: { type: String, trim: true },
         type: { type: String, trim: true },
         isRequired: { type: Boolean, default: false },
         templateId: { type: String, trim: true },
@@ -129,7 +129,8 @@ export class Project {
   })
   attachments!: Array<{
     title: string;
-    url: string;
+    url?: string;
+    fileId?: string;
     type?: string;
     isRequired?: boolean;
     templateId?: string;

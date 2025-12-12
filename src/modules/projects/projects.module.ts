@@ -16,6 +16,11 @@ import { AttachmentRequirementsRepository } from './repositories/attachment-requ
 import { AttachmentRequirementsService } from './services/attachment-requirements.service';
 import { AdminAttachmentsController } from './controllers/admin-attachments.controller';
 import {
+  ProjectAttachmentFile,
+  ProjectAttachmentFileSchema,
+} from './schemas/attachment-file.schema';
+import { AttachmentFilesRepository } from './repositories/attachment-files.repository';
+import {
   Project,
   ProjectSchema,
   ROIProjectSchema,
@@ -47,6 +52,10 @@ import {
         name: AttachmentRequirement.name,
         schema: AttachmentRequirementSchema,
       },
+      {
+        name: ProjectAttachmentFile.name,
+        schema: ProjectAttachmentFileSchema,
+      },
     ]),
   ],
   controllers: [
@@ -63,11 +72,13 @@ import {
     AgreementTemplatesService,
     AttachmentRequirementsRepository,
     AttachmentRequirementsService,
+    AttachmentFilesRepository,
   ],
   exports: [
     ProjectsService,
     AgreementTemplatesService,
     AttachmentRequirementsService,
+    AttachmentFilesRepository,
   ],
 })
 export class ProjectsModule {}
