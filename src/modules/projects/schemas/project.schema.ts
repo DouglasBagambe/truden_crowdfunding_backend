@@ -121,6 +121,8 @@ export class Project {
         isRequired: { type: Boolean, default: false },
         templateId: { type: String, trim: true },
         templateVersion: { type: Number },
+        requestedBy: { type: String, trim: true },
+        requestedAt: { type: Date },
       },
     ],
     default: [],
@@ -132,6 +134,8 @@ export class Project {
     isRequired?: boolean;
     templateId?: string;
     templateVersion?: number;
+    requestedBy?: string;
+    requestedAt?: Date;
   }>;
 
   @Prop({

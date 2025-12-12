@@ -5,6 +5,7 @@ import { UserRole } from '../../../common/enums/role.enum';
 import { ProjectsService } from '../projects.service';
 import { ProjectDecisionDto } from '../dto/decision.dto';
 import { CreateVerificationLogDto } from '../dto/create-verification-log.dto';
+import { RequestAttachmentDto } from '../dto/request-attachment.dto';
 
 @ApiTags('Admin Projects')
 @Controller('admin/projects')
@@ -36,5 +37,14 @@ export class AdminProjectsController {
   @Get(':id/verification-logs')
   getVerificationLogs(@Param('id') id: string) {
     return this.projectsService.listVerificationLogs(id);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN, UserRole.APPROVER)
+  @Post(':id/attachment-requests')
+  requestAttachment(
+    @Param('id') id: string,
+    @Body() dto: RequestAttachmentDto,
+  ) {
+    return this.projectsService.requestAttachment(id, dto);
   }
 }

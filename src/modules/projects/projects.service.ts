@@ -28,6 +28,7 @@ import { AgreementTemplatesService } from './services/agreement-templates.servic
 import { AgreementTemplateDocument } from './schemas/agreement-template.schema';
 import { AttachmentRequirementsService } from './services/attachment-requirements.service';
 import { AttachmentRequirementDocument } from './schemas/attachment-requirement.schema';
+import { RequestAttachmentDto } from './dto/request-attachment.dto';
 
 const PUBLIC_STATUSES: ProjectStatus[] = [
   ProjectStatus.APPROVED,
@@ -467,6 +468,45 @@ export class ProjectsService {
     ]);
     if (!project) throw new NotFoundException('Project not found');
     return { project: this.withProgress(project), milestones };
+  }
+
+  async requestAttachment(projectId: string, dto: RequestAttachmentDto) {
+    this.ensureValidObjectId(projectId);
+    const project = await this.projectsRepo.findById(projectId);
+    if (!project) throw new NotFoundException('Project not found');
+
+    const normalizedTitle = dto.title.trim();
+    const now = new Date();
+
+    const existingIndex = (project.attachments ?? []).findIndex((att) => {
+      const titleMatch =
+        att.title?.trim().toLowerCase() === normalizedTitle.toLowerCase();
+      return titleMatch;
+    });
+
+    const payload = {
+      title: normalizedTitle,
+      description: dto.description,
+      url: existingIndex >= 0 ? project.attachments?.[existingIndex].url ?? '' : '',
+      isRequired: dto.isRequired ?? true,
+      requestedBy: 'admin',
+      requestedAt: now,
+    };
+
+    if (existingIndex >= 0) {
+      project.attachments![existingIndex] = {
+        ...project.attachments![existingIndex],
+        ...payload,
+      };
+    } else {
+      project.attachments = [...(project.attachments ?? []), payload];
+    }
+
+    await this.projectsRepo.updateById(projectId, {
+      $set: { attachments: project.attachments },
+    });
+
+    return project.attachments;
   }
 
   private ensureRequiredAttachments(
