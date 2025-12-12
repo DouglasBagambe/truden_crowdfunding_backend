@@ -218,9 +218,27 @@ export class StatisticsService {
       match.createdAt = dateMatch;
     }
 
-    return this.investmentTrend(match, {
-      interval: query.interval ?? 'day',
+    const interval = query.interval ?? 'day';
+    const points = await this.investmentTrend(match, {
+      interval,
     });
+
+    const totals = points.reduce(
+      (acc, point) => {
+        acc.amount += point.amount;
+        acc.count += point.count;
+        return acc;
+      },
+      { amount: 0, count: 0 },
+    );
+
+    return {
+      interval,
+      from: query.from ?? null,
+      to: query.to ?? null,
+      totals,
+      points,
+    };
   }
 
   private async aggregateInvestmentsByStatus(
