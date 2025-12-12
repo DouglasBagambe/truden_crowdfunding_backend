@@ -26,6 +26,8 @@ import { KYCStatus } from '../../common/enums/role.enum';
 import { CreatorVerificationStatus } from '../../common/enums/creator-verification-status.enum';
 import { AgreementTemplatesService } from './services/agreement-templates.service';
 import { AgreementTemplateDocument } from './schemas/agreement-template.schema';
+import { AttachmentRequirementsService } from './services/attachment-requirements.service';
+import { AttachmentRequirementDocument } from './schemas/attachment-requirement.schema';
 
 const PUBLIC_STATUSES: ProjectStatus[] = [
   ProjectStatus.APPROVED,
@@ -47,6 +49,7 @@ export class ProjectsService {
     private readonly milestonesRepo: MilestonesRepository,
     private readonly usersRepo: UsersRepository,
     private readonly agreementTemplatesService: AgreementTemplatesService,
+    private readonly attachmentRequirementsService: AttachmentRequirementsService,
   ) {}
 
   async createProject(creatorId: string, dto: CreateProjectDto) {
@@ -61,14 +64,20 @@ export class ProjectsService {
     );
     const agreementsPayload: AgreementRuleDto[] =
       await this.resolveAgreementsWithTemplates(projectType, {
-        agreements: this.normalizeAgreementArray(dto.agreements ?? []),
-        roiAgreements: this.normalizeAgreementArray(dto.roiAgreements ?? []),
-        charityAgreements: this.normalizeAgreementArray(
-          dto.charityAgreements ?? [],
-        ),
+        agreements: [],
+        roiAgreements: [],
+        charityAgreements: [],
         category: dto.category,
         industry: dto.industry,
       });
+
+    const attachmentsPayload = await this.applyAttachmentRequirementsAsync(
+      projectType,
+      dto.category,
+      dto.subcategory,
+      dto.industry,
+      dto.attachments ?? [],
+    );
 
     const project = await this.projectsRepo.create({
       creatorId,
@@ -83,7 +92,7 @@ export class ProjectsService {
       category: dto.category,
       subcategory: dto.subcategory,
       industry: dto.industry,
-      risks: dto.risks,
+      risks: dto.risks ?? dto.challenges,
       status: ProjectStatus.DRAFT,
       targetAmount: dto.targetAmount,
       currency: dto.currency,
@@ -93,7 +102,7 @@ export class ProjectsService {
       videoUrls: dto.videoUrls ?? [],
       socialLinks: dto.socialLinks ?? [],
       website: dto.website,
-      attachments: dto.attachments ?? [],
+      attachments: attachmentsPayload,
       agreements: agreementsPayload,
       roiAgreements: projectType === ProjectType.ROI ? agreementsPayload : [],
       charityAgreements:
@@ -179,7 +188,9 @@ export class ProjectsService {
     if (dto.category !== undefined) setPayload.category = dto.category;
     if (dto.subcategory !== undefined) setPayload.subcategory = dto.subcategory;
     if (dto.industry !== undefined) setPayload.industry = dto.industry;
-    if (dto.risks !== undefined) setPayload.risks = dto.risks;
+    if (dto.risks !== undefined || dto.challenges !== undefined) {
+      setPayload.risks = dto.risks ?? dto.challenges ?? project.risks;
+    }
     if (dto.riskFactors !== undefined)
       setPayload.riskFactors = this.normalizeStringArray(dto.riskFactors);
     if (dto.disclosures !== undefined)
@@ -208,10 +219,8 @@ export class ProjectsService {
       setPayload.highlights = this.normalizeStringArray(dto.highlights);
 
     const shouldRefreshAgreements =
-      dto.agreements !== undefined ||
-      dto.roiAgreements !== undefined ||
-      dto.charityAgreements !== undefined ||
       dto.category !== undefined ||
+      dto.subcategory !== undefined ||
       dto.industry !== undefined ||
       dto.type !== undefined;
 
@@ -220,16 +229,9 @@ export class ProjectsService {
       const agreementsPayload = await this.resolveAgreementsWithTemplates(
         updatedType,
         {
-          agreements: this.normalizeAgreementArray(
-            dto.agreements ?? (project.agreements as AgreementRuleDto[]),
-          ),
-          roiAgreements: this.normalizeAgreementArray(
-            dto.roiAgreements ?? (project.roiAgreements as AgreementRuleDto[]),
-          ),
-          charityAgreements: this.normalizeAgreementArray(
-            dto.charityAgreements ??
-              (project.charityAgreements as AgreementRuleDto[]),
-          ),
+          agreements: [],
+          roiAgreements: [],
+          charityAgreements: [],
           category: dto.category ?? project.category,
           industry: dto.industry ?? project.industry,
         },
@@ -239,6 +241,32 @@ export class ProjectsService {
         updatedType === ProjectType.ROI ? agreementsPayload : [];
       setPayload.charityAgreements =
         updatedType === ProjectType.CHARITY ? agreementsPayload : [];
+    }
+
+    if (
+      dto.attachments !== undefined ||
+      dto.category !== undefined ||
+      dto.subcategory !== undefined ||
+      dto.industry !== undefined ||
+      dto.type !== undefined
+    ) {
+      const updatedType = inferredType ?? currentType;
+      setPayload.attachments = await this.applyAttachmentRequirementsAsync(
+        updatedType,
+        dto.category ?? project.category,
+        dto.subcategory ?? project.subcategory,
+        dto.industry ?? project.industry,
+        dto.attachments ??
+          (project.attachments as Array<{
+            title: string;
+            url: string;
+            type?: string;
+            isRequired?: boolean;
+            templateId?: string;
+            templateVersion?: number;
+          }>) ??
+          [],
+      );
     }
 
     if (dto.requiresAgreement !== undefined)
@@ -282,6 +310,13 @@ export class ProjectsService {
     }
 
     await this.ensureCreatorEligibleForSubmission(creatorId);
+    await this.ensureRequiredAttachments(
+      this.normalizeProjectType(project.projectType),
+      project.category,
+      project.subcategory,
+      project.industry,
+      project.attachments ?? [],
+    );
 
     const updated = await this.projectsRepo.setStatus(
       projectId,
@@ -434,6 +469,46 @@ export class ProjectsService {
     return { project: this.withProgress(project), milestones };
   }
 
+  private ensureRequiredAttachments(
+    projectType: ProjectType | undefined,
+    category: string | undefined,
+    subcategory: string | undefined,
+    industry: string | undefined,
+    attachments: Array<{
+      title: string;
+      url?: string;
+      templateId?: string;
+    }>,
+  ) {
+    if (!projectType) {
+      throw new BadRequestException('Project type is required before submit');
+    }
+    return this.attachmentRequirementsService
+      .findApplicable(projectType, category, subcategory, industry)
+      .then((requirements) => {
+        const missing = requirements.filter((req) => {
+          if (!req.isRequired) return false;
+          return !attachments.some((att) => {
+            const titleMatch =
+              att.title?.trim().toLowerCase() ===
+              req.title.trim().toLowerCase();
+            const templateMatch =
+              att.templateId && String(att.templateId) === String(req._id);
+            const hasUrl =
+              typeof att.url === 'string' && att.url.trim().length > 0;
+            return hasUrl && (titleMatch || templateMatch);
+          });
+        });
+        if (missing.length) {
+          throw new BadRequestException(
+            `Missing required attachments: ${missing
+              .map((m) => m.title)
+              .join(', ')}`,
+          );
+        }
+      });
+  }
+
   private normalizeProjectType(type: unknown): ProjectType | undefined {
     if (type === ProjectType.ROI || type === ProjectType.CHARITY) {
       return type;
@@ -535,6 +610,62 @@ export class ProjectsService {
     return merged;
   }
 
+  private async applyAttachmentRequirementsAsync(
+    type: ProjectType | undefined,
+    category: string | undefined,
+    subcategory: string | undefined,
+    industry: string | undefined,
+    attachments: Array<{
+      title: string;
+      url: string;
+      type?: string;
+      isRequired?: boolean;
+      templateId?: string;
+      templateVersion?: number;
+    }>,
+  ) {
+    if (!type) return attachments;
+    const requirements: AttachmentRequirementDocument[] =
+      await this.attachmentRequirementsService.findApplicable(
+        type,
+        category,
+        subcategory,
+        industry,
+      );
+
+    const normalized = [...attachments];
+    for (const req of requirements) {
+      const existingIndex = normalized.findIndex((att) => {
+        const titleMatch =
+          att.title?.trim().toLowerCase() === req.title.trim().toLowerCase();
+        const templateMatch =
+          att.templateId && String(att.templateId) === String(req._id);
+        return titleMatch || templateMatch;
+      });
+
+      const templateData = {
+        templateId: String(req._id),
+        templateVersion: req.version,
+        isRequired: req.isRequired ?? true,
+      };
+
+      if (existingIndex >= 0) {
+        normalized[existingIndex] = {
+          ...normalized[existingIndex],
+          ...templateData,
+          title: req.title,
+        };
+      } else {
+        normalized.push({
+          title: req.title,
+          url: '',
+          ...templateData,
+        });
+      }
+    }
+    return normalized;
+  }
+
   private normalizeAgreementArray(value: unknown): AgreementRuleDto[] {
     return Array.isArray(value) ? (value as AgreementRuleDto[]) : [];
   }
@@ -623,14 +754,17 @@ export class ProjectsService {
       throw new ForbiddenException('Creator account is not active');
     }
     const kycStatus =
-      (creator.kyc && creator.kyc.status) || creator.kycStatus || KYCStatus.NOT_VERIFIED;
+      (creator.kyc && creator.kyc.status) ||
+      creator.kycStatus ||
+      KYCStatus.NOT_VERIFIED;
     if (kycStatus !== KYCStatus.VERIFIED) {
       throw new ForbiddenException(
         'Complete and verify KYC before submitting a project',
       );
     }
     const creatorVerificationStatus =
-      creator.creatorVerification?.status ?? CreatorVerificationStatus.NOT_SUBMITTED;
+      creator.creatorVerification?.status ??
+      CreatorVerificationStatus.NOT_SUBMITTED;
     if (creatorVerificationStatus !== CreatorVerificationStatus.VERIFIED) {
       throw new ForbiddenException(
         'Creator verification must be VERIFIED before submitting a project',

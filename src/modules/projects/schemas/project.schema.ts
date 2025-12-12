@@ -119,6 +119,8 @@ export class Project {
         url: { type: String, required: true, trim: true },
         type: { type: String, trim: true },
         isRequired: { type: Boolean, default: false },
+        templateId: { type: String, trim: true },
+        templateVersion: { type: Number },
       },
     ],
     default: [],
@@ -128,6 +130,8 @@ export class Project {
     url: string;
     type?: string;
     isRequired?: boolean;
+    templateId?: string;
+    templateVersion?: number;
   }>;
 
   @Prop({

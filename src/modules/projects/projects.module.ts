@@ -9,11 +9,16 @@ import { AgreementTemplatesRepository } from './repositories/agreement-templates
 import { AgreementTemplatesService } from './services/agreement-templates.service';
 import { AdminAgreementsController } from './controllers/admin-agreements.controller';
 import {
+  AttachmentRequirement,
+  AttachmentRequirementSchema,
+} from './schemas/attachment-requirement.schema';
+import { AttachmentRequirementsRepository } from './repositories/attachment-requirements.repository';
+import { AttachmentRequirementsService } from './services/attachment-requirements.service';
+import { AdminAttachmentsController } from './controllers/admin-attachments.controller';
+import {
   Project,
   ProjectSchema,
-  ROIProject,
   ROIProjectSchema,
-  CharityProject,
   CharityProjectSchema,
 } from './schemas/project.schema';
 import { Milestone, MilestoneSchema } from './schemas/milestone.schema';
@@ -38,12 +43,17 @@ import {
       },
       { name: Milestone.name, schema: MilestoneSchema },
       { name: AgreementTemplate.name, schema: AgreementTemplateSchema },
+      {
+        name: AttachmentRequirement.name,
+        schema: AttachmentRequirementSchema,
+      },
     ]),
   ],
   controllers: [
     ProjectsController,
     AdminProjectsController,
     AdminAgreementsController,
+    AdminAttachmentsController,
   ],
   providers: [
     ProjectsService,
@@ -51,7 +61,13 @@ import {
     MilestonesRepository,
     AgreementTemplatesRepository,
     AgreementTemplatesService,
+    AttachmentRequirementsRepository,
+    AttachmentRequirementsService,
   ],
-  exports: [ProjectsService, AgreementTemplatesService],
+  exports: [
+    ProjectsService,
+    AgreementTemplatesService,
+    AttachmentRequirementsService,
+  ],
 })
 export class ProjectsModule {}

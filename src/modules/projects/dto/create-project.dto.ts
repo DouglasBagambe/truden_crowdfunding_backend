@@ -166,6 +166,13 @@ export class CreateProjectDto {
   @Length(0, 4000)
   risks?: string;
 
+  @ApiPropertyOptional({ description: 'Key challenges (CHARITY projects)' })
+  @ValidateIf((o: CreateProjectDto) => o.type === ProjectType.CHARITY)
+  @IsOptional()
+  @IsString()
+  @Length(0, 4000)
+  challenges?: string;
+
   @ApiProperty({ description: 'Target amount required for funding' })
   @IsNumber()
   @Min(0)
@@ -213,38 +220,23 @@ export class CreateProjectDto {
 
   @ApiPropertyOptional({
     description:
-      'Rules/agreements investors must accept for this project (type-specific preferred)',
-    type: [AgreementRuleDto],
+      'Agreements are auto-applied from admin templates; user-supplied agreements are ignored.',
+    deprecated: true,
   })
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(20)
-  @ValidateNested({ each: true })
-  @Type(() => AgreementRuleDto)
   agreements?: AgreementRuleDto[];
 
   @ApiPropertyOptional({
-    description: 'Agreements for ROI projects',
-    type: [AgreementRuleDto],
+    description:
+      'Agreements are auto-applied from admin templates; user-supplied agreements are ignored.',
+    deprecated: true,
   })
-  @ValidateIf((o: CreateProjectDto) => o.type === ProjectType.ROI)
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(20)
-  @ValidateNested({ each: true })
-  @Type(() => AgreementRuleDto)
   roiAgreements?: AgreementRuleDto[];
 
   @ApiPropertyOptional({
-    description: 'Agreements for Charity projects',
-    type: [AgreementRuleDto],
+    description:
+      'Agreements are auto-applied from admin templates; user-supplied agreements are ignored.',
+    deprecated: true,
   })
-  @ValidateIf((o: CreateProjectDto) => o.type === ProjectType.CHARITY)
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(20)
-  @ValidateNested({ each: true })
-  @Type(() => AgreementRuleDto)
   charityAgreements?: AgreementRuleDto[];
 
   @ApiPropertyOptional({
