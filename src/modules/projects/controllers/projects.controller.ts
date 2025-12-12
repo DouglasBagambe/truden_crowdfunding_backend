@@ -1,11 +1,11 @@
 import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
-import { ApiTags } from '../../common/swagger.decorators';
-import { Public } from '../../common/decorators/public.decorator';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { CreateProjectDto } from './dto/create-project.dto';
-import { UpdateProjectDto } from './dto/update-project.dto';
-import { QueryProjectsDto } from './dto/query-projects.dto';
-import { ProjectsService } from './projects.service';
+import { ApiTags } from '../../../common/swagger.decorators';
+import { Public } from '../../../common/decorators/public.decorator';
+import { CurrentUser } from '../../../common/decorators/current-user.decorator';
+import { CreateProjectDto } from '../dto/create-project.dto';
+import { UpdateProjectDto } from '../dto/update-project.dto';
+import { QueryProjectsDto } from '../dto/query-projects.dto';
+import { ProjectsService } from '../projects.service';
 
 @ApiTags('Projects')
 @Controller('projects')

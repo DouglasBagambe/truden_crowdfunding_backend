@@ -1,10 +1,10 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
-import { ApiTags } from '../../common/swagger.decorators';
-import { Roles } from '../../common/decorators/roles.decorator';
-import { UserRole } from '../../common/enums/role.enum';
-import { ProjectsService } from './projects.service';
-import { ProjectDecisionDto } from './dto/decision.dto';
-import { CreateVerificationLogDto } from './dto/create-verification-log.dto';
+import { ApiTags } from '../../../common/swagger.decorators';
+import { Roles } from '../../../common/decorators/roles.decorator';
+import { UserRole } from '../../../common/enums/role.enum';
+import { ProjectsService } from '../projects.service';
+import { ProjectDecisionDto } from '../dto/decision.dto';
+import { CreateVerificationLogDto } from '../dto/create-verification-log.dto';
 
 @ApiTags('Admin Projects')
 @Controller('admin/projects')

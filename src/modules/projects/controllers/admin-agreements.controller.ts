@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { Roles } from '../../../common/decorators/roles.decorator';
 import { UserRole } from '../../../common/enums/role.enum';
 import { ApiTags } from '../../../common/swagger.decorators';
@@ -10,9 +18,7 @@ import { ProjectType } from '../../../common/enums/project-type.enum';
 @ApiTags('Admin Project Agreements')
 @Controller('admin/projects/agreements')
 export class AdminAgreementsController {
-  constructor(
-    private readonly templatesService: AgreementTemplatesService,
-  ) {}
+  constructor(private readonly templatesService: AgreementTemplatesService) {}
 
   @Roles(UserRole.ADMIN, UserRole.SUPERADMIN, UserRole.APPROVER)
   @Post()
@@ -29,7 +35,9 @@ export class AdminAgreementsController {
     @Query('isActive') isActive?: string,
   ) {
     const activeFlag =
-      isActive === undefined ? undefined : isActive === 'true' || isActive === '1';
+      isActive === undefined
+        ? undefined
+        : isActive === 'true' || isActive === '1';
     return this.templatesService.list({
       projectType,
       category,
