@@ -507,19 +507,24 @@ export class AuthService {
   }
 
   private sanitizeUser(user: UserDocument) {
-    const userObj = user.toObject();
+    const raw: any =
+      user && typeof (user as any).toObject === 'function'
+        ? (user as any).toObject()
+        : { ...(user as any) };
+
     // Drop passwordHash/nonce/__v from responses
-    const { passwordHash, nonce, __v, ...sanitized } = userObj;
-    const primaryWallet = userObj.primaryWallet;
-    const roles = Array.isArray(userObj.roles) ? userObj.roles : [];
+    const { passwordHash, nonce, __v, ...sanitized } = raw;
+    const primaryWallet = raw.primaryWallet;
+    const roles = Array.isArray(raw.roles) ? raw.roles : [];
     void passwordHash;
     void nonce;
     void __v;
+    const id = raw._id != null ? String(raw._id) : undefined;
     return {
       ...sanitized,
       roles,
       walletAddress: primaryWallet,
-      id: String(user._id),
+      id,
     };
   }
 
@@ -569,24 +574,30 @@ export class AuthService {
 
   private async sendVerificationEmail(email: string | undefined, code: string) {
     if (!email) return;
+    const nodeEnv =
+      this.configService.get<string>('NODE_ENV') || process.env.NODE_ENV;
     const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
     const from = this.configService.get<string>('EMAIL_FROM');
     const verifyUrl = this.configService.get<string>('FRONTEND_VERIFY_URL');
+    const isTestEnv = nodeEnv === 'test';
+
     if (!apiKey || !from) {
-      this.logger.warn(
-        'Skipping verification email: SENDGRID_API_KEY or EMAIL_FROM missing',
-      );
-      return;
-    }
-    sgMail.setApiKey(apiKey);
-    const residency = this.configService.get<string>('SENDGRID_RESIDENCY');
-    if (residency) {
-      // Optional: route via regional subuser if configured
-      const sgWithResidency = sgMail as unknown as {
-        setDataResidency?: (region: string) => void;
-      };
-      if (typeof sgWithResidency.setDataResidency === 'function') {
-        sgWithResidency.setDataResidency(residency);
+      if (!isTestEnv) {
+        this.logger.warn(
+          'Skipping verification email: SENDGRID_API_KEY or EMAIL_FROM missing',
+        );
+        return;
+      }
+    } else {
+      sgMail.setApiKey(apiKey);
+      const residency = this.configService.get<string>('SENDGRID_RESIDENCY');
+      if (residency) {
+        const sgWithResidency = sgMail as unknown as {
+          setDataResidency?: (region: string) => void;
+        };
+        if (typeof sgWithResidency.setDataResidency === 'function') {
+          sgWithResidency.setDataResidency(residency);
+        }
       }
     }
     const verificationLink = verifyUrl
@@ -620,10 +631,11 @@ export class AuthService {
       </div>
     `;
     try {
+      const fromAddress = from || 'test@example.com';
       this.logger.log(`Sending verification email to ${email}`);
       await sgMail.send({
         to: email,
-        from,
+        from: fromAddress,
         subject: 'Verify your email',
         text,
         html,
