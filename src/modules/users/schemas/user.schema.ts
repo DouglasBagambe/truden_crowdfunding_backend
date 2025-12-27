@@ -55,22 +55,31 @@ export class KycData {
   status!: KYCStatus;
 
   @Prop({ trim: true })
-  documentType?: string;
+  provider?: string; // e.g., 'smile_id'
 
   @Prop({ trim: true })
-  documentCountry?: string;
+  providerSessionId?: string; // Smile job_id
 
   @Prop({ trim: true })
-  documentLast4?: string;
+  providerStatus?: string; // IN_PROGRESS | VERIFIED | REJECTED | FAILED
 
-  @Prop({ type: [String], default: [] })
-  evidenceUrls!: string[];
+  @Prop({ trim: true })
+  providerResultUrl?: string;
 
-  @Prop({ type: Date })
-  submittedAt?: Date;
+  @Prop({ trim: true })
+  providerFailureReason?: string;
 
   @Prop({ type: Date })
   verifiedAt?: Date;
+
+  @Prop({ type: String, select: false })
+  piiEncrypted?: string; // DOB, homeAddress, document meta
+
+  @Prop({ type: String, select: false })
+  attachmentsEncrypted?: string;
+
+  @Prop({ type: Date })
+  submittedAt?: Date;
 
   @Prop({ trim: true })
   failureReason?: string;
@@ -113,6 +122,20 @@ export class CreatorVerification {
 
   @Prop({ type: Date })
   submittedAt?: Date;
+
+  @Prop({ type: Date })
+  verifiedAt?: Date;
+}
+
+export class MfaSettings {
+  @Prop({ type: Boolean, default: false })
+  enabled!: boolean;
+
+  @Prop({ type: String, select: false, trim: true })
+  secret?: string;
+
+  @Prop({ type: String, select: false, trim: true })
+  setupSecret?: string;
 
   @Prop({ type: Date })
   verifiedAt?: Date;
@@ -183,11 +206,20 @@ export class User {
   @Prop({ type: CreatorVerification, default: {} })
   creatorVerification!: CreatorVerification;
 
+  @Prop({ type: MfaSettings, default: {} })
+  mfa!: MfaSettings;
+
   @Prop({ type: UserAvatar })
   avatar?: UserAvatar;
 
   @Prop({ trim: true })
   residencyCountry?: string;
+
+  @Prop({ trim: true })
+  signupIp?: string;
+
+  @Prop({ trim: true })
+  lastLoginIp?: string;
 
   @Prop({ trim: true })
   phone?: string;
