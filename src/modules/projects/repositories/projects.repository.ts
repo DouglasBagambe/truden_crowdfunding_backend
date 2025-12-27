@@ -12,6 +12,16 @@ export class ProjectsRepository {
   ) {}
 
   create(payload: Partial<Project>): Promise<ProjectDocument> {
+    const discriminatorType = payload.projectType;
+    const discriminatorModel =
+      discriminatorType && this.projectModel.discriminators
+        ? this.projectModel.discriminators[discriminatorType]
+        : null;
+
+    if (discriminatorModel) {
+      return (discriminatorModel as Model<ProjectDocument>).create(payload);
+    }
+
     return this.projectModel.create(payload);
   }
 
@@ -58,12 +68,12 @@ export class ProjectsRepository {
   setStatus(
     id: string,
     status: ProjectStatus,
-    reason?: string,
+    reason?: string | null,
   ): Promise<ProjectDocument | null> {
     const setPayload: UpdateQuery<ProjectDocument> = {
       $set: { status },
     };
-    if (reason !== undefined && setPayload.$set) {
+    if (reason !== undefined && reason !== null && setPayload.$set) {
       (setPayload.$set as Partial<Project>).decisionReason = reason;
     }
     return this.updateById(id, setPayload);

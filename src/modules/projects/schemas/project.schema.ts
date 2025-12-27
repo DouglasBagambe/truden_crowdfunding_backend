@@ -51,11 +51,17 @@ export class Project {
   @Prop({ type: [String], default: [] })
   tags!: string[];
 
-  // Type-only hints for discriminator properties; actual schema is on child classes
-  declare category?: string;
-  declare subcategory?: string;
-  declare industry?: string;
-  declare risks?: string;
+  @Prop({ trim: true, enum: CharityCategory })
+  category?: CharityCategory;
+
+  @Prop({ trim: true, enum: CharitySubcategory })
+  subcategory?: CharitySubcategory;
+
+  @Prop({ trim: true, enum: ROIIndustry })
+  industry?: ROIIndustry;
+
+  @Prop({ trim: true })
+  risks?: string;
 
   @Prop({ type: [String], default: [] })
   videoUrls!: string[];
@@ -110,18 +116,27 @@ export class Project {
     type: [
       {
         title: { type: String, required: true, trim: true },
-        url: { type: String, required: true, trim: true },
+        url: { type: String, trim: true },
         type: { type: String, trim: true },
         isRequired: { type: Boolean, default: false },
+        templateId: { type: String, trim: true },
+        templateVersion: { type: Number },
+        requestedBy: { type: String, trim: true },
+        requestedAt: { type: Date },
       },
     ],
     default: [],
   })
   attachments!: Array<{
     title: string;
-    url: string;
+    url?: string;
+    fileId?: string;
     type?: string;
     isRequired?: boolean;
+    templateId?: string;
+    templateVersion?: number;
+    requestedBy?: string;
+    requestedAt?: Date;
   }>;
 
   @Prop({

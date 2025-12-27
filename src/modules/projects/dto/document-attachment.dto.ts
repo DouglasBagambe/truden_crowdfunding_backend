@@ -1,4 +1,4 @@
-import { IsBoolean, IsOptional, IsString, IsUrl, Length } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, IsUrl, Length, ValidateIf } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '../../../common/swagger.decorators';
 
 export class DocumentAttachmentDto {
@@ -7,9 +7,16 @@ export class DocumentAttachmentDto {
   @Length(2, 128)
   title!: string;
 
-  @ApiProperty({ description: 'Attachment URL (IPFS, S3, etc.)' })
+  @ApiPropertyOptional({ description: 'Attachment URL (legacy/optional; use fileId for uploaded files)' })
+  @IsOptional()
+  @ValidateIf((o: DocumentAttachmentDto) => !o.fileId || o.url !== undefined)
   @IsUrl()
-  url!: string;
+  url?: string;
+
+  @ApiPropertyOptional({ description: 'Stored file id (preferred for uploaded attachments)' })
+  @IsOptional()
+  @IsString()
+  fileId?: string;
 
   @ApiPropertyOptional({ description: 'Optional type/label (e.g., pitch, deck, audit)' })
   @IsOptional()
