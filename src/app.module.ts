@@ -10,6 +10,7 @@ import { ProjectsModule } from './modules/projects/projects.module';
 import { InvestmentsModule } from './modules/investments/investments.module';
 import { NftModule } from './modules/nfts/nft.module';
 import { TreasuryModule } from './modules/treasury/treasury.module';
+import { KycModule } from './modules/kyc/kyc.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
@@ -45,6 +46,8 @@ import appConfig from './config/app.config';
     ProjectsModule,
     InvestmentsModule,
     NftModule,
+    TreasuryModule,
+    KycModule,
   ],
   providers: [
     {

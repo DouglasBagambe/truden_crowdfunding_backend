@@ -74,6 +74,12 @@ async function bootstrap() {
   console.log(
     `NFT endpoints available at: http://localhost:${port}/api/nfts`,
   );
+  console.log(
+    `Treasury endpoints available at: http://localhost:${port}/api/treasury`,
+  );
+  console.log(
+    `KYC endpoints available at: http://localhost:${port}/api/kyc`,
+  );
 }
 
 bootstrap().catch((error) => {
