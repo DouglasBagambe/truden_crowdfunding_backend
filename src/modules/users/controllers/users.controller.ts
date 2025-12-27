@@ -23,22 +23,16 @@ import { Permissions } from '../../../common/decorators/permissions.decorator';
 import { Permission } from '../../../common/enums/permission.enum';
 import { RoleMetadataOr } from '../../../common/decorators/role-or.decorator';
 import { Public } from '../../../common/decorators/public.decorator';
-import { SignupUserDto } from '../dto/signup-user.dto';
 import { SubmitKycDto } from '../dto/submit-kyc.dto';
 import { SubmitCreatorVerificationDto } from '../dto/submit-creator-verification.dto';
 import { UpdateCreatorVerificationDto } from '../dto/update-creator-verification.dto';
+import { CreateKycSessionDto } from '../dto/create-kyc-session.dto';
 
 @ApiTags('users')
 @ApiBearerAuth()
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
-
-  @Public()
-  @Post('signup')
-  signup(@Body() dto: SignupUserDto) {
-    return this.usersService.signup(dto);
-  }
 
   @Post()
   @RoleMetadataOr(UserRole.ADMIN)
@@ -79,6 +73,14 @@ export class UsersController {
     return this.usersService.submitKyc(userId, dto);
   }
 
+  @Post('me/kyc/session')
+  createKycSession(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: CreateKycSessionDto,
+  ) {
+    return this.usersService.createSmileKycSession(userId, dto);
+  }
+
   @Patch('me/creator-verification')
   submitCreatorVerification(
     @CurrentUser('sub') userId: string,
@@ -110,15 +112,25 @@ export class UsersController {
   @Patch(':id/role')
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.MANAGE_USERS)
-  updateRole(@Param('id') id: string, @Body() dto: UpdateRoleDto) {
-    return this.usersService.updateRole(id, dto);
+  updateRole(
+    @Param('id') id: string,
+    @Body() dto: UpdateRoleDto,
+    @CurrentUser('sub') actorId: string,
+    @CurrentUser('roles') actorRoles: string[],
+  ) {
+    return this.usersService.updateRole(id, dto, actorId, actorRoles);
   }
 
   @Patch(':id/kyc')
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.MANAGE_USERS)
-  updateKyc(@Param('id') id: string, @Body() dto: UpdateKycStatusDto) {
-    return this.usersService.updateKycStatus(id, dto);
+  updateKyc(
+    @Param('id') id: string,
+    @Body() dto: UpdateKycStatusDto,
+    @CurrentUser('sub') actorId: string,
+    @CurrentUser('roles') actorRoles: string[],
+  ) {
+    return this.usersService.updateKycStatus(id, dto, actorId, actorRoles);
   }
 
   @Patch(':id/creator-verification')
@@ -127,14 +139,26 @@ export class UsersController {
   updateCreatorVerification(
     @Param('id') id: string,
     @Body() dto: UpdateCreatorVerificationDto,
+    @CurrentUser('sub') actorId: string,
+    @CurrentUser('roles') actorRoles: string[],
   ) {
-    return this.usersService.updateCreatorVerificationStatus(id, dto);
+    return this.usersService.updateCreatorVerificationStatus(
+      id,
+      dto,
+      actorId,
+      actorRoles,
+    );
   }
 
   @Patch(':id/block')
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.MANAGE_USERS)
-  blockUser(@Param('id') id: string, @Body() dto: BlockUserDto) {
-    return this.usersService.blockUser(id, dto);
+  blockUser(
+    @Param('id') id: string,
+    @Body() dto: BlockUserDto,
+    @CurrentUser('sub') actorId: string,
+    @CurrentUser('roles') actorRoles: string[],
+  ) {
+    return this.usersService.blockUser(id, dto, actorId, actorRoles);
   }
 }

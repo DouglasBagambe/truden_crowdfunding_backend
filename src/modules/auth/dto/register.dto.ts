@@ -2,9 +2,9 @@ import {
   IsEmail,
   IsString,
   MinLength,
-  IsOptional,
   IsEnum,
   Matches,
+  IsOptional,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { UserRole } from '../../../common/enums/role.enum';

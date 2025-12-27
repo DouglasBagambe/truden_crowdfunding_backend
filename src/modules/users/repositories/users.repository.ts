@@ -62,6 +62,20 @@ export class UsersRepository {
     return this.userModel.findByIdAndUpdate(id, update, { new: true }).exec();
   }
 
+  startKycSession(
+    id: string,
+    update: UpdateQuery<UserDocument>,
+  ): Promise<UserDocument | null> {
+    return this.updateById(id, update);
+  }
+
+  applyKycResult(
+    id: string,
+    update: UpdateQuery<UserDocument>,
+  ): Promise<UserDocument | null> {
+    return this.updateById(id, update);
+  }
+
   addLinkedWallet(
     userId: string,
     wallet: string,

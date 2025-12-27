@@ -8,20 +8,28 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import sgMail from '@sendgrid/mail';
 import { TokenExpiredError } from 'jsonwebtoken';
+import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose';
+import geoip from 'geoip-lite';
 import crypto from 'crypto';
+import * as speakeasy from 'speakeasy';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { OAuthLoginDto, AuthProvider } from './dto/oauth-login.dto';
 import { JwtPayload } from '../../common/interfaces/user.interface';
 import { UserRole } from '../../common/enums/role.enum';
 import { User, UserDocument } from '../users/schemas/user.schema';
+import {
+  RefreshToken,
+  RefreshTokenDocument,
+} from './schemas/refresh-token.schema';
 import { RolesService } from '../roles/roles.service';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class AuthService {
@@ -30,6 +38,9 @@ export class AuthService {
     string,
     { count: number; resetAt: number }
   >();
+  private readonly appleJwks = createRemoteJWKSet(
+    new URL('https://appleid.apple.com/auth/keys'),
+  );
   private readonly emailVerificationWindowMs = 60 * 60 * 1000; // 1 hour
   private readonly emailVerificationMaxSends = 3;
   private readonly emailVerificationMaxAttempts = 5;
@@ -37,14 +48,18 @@ export class AuthService {
 
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(RefreshToken.name)
+    private refreshTokenModel: Model<RefreshTokenDocument>,
     private jwtService: JwtService,
     private configService: ConfigService,
     private rolesService: RolesService,
+    private readonly auditService: AuditService,
   ) {}
 
-  async register(registerDto: RegisterDto) {
+  async register(registerDto: RegisterDto, ipAddress?: string) {
     const { email, password, firstName, lastName, role } = registerDto;
-    this.enforceRateLimit('register', email, 5, 5 * 60 * 1000);
+    this.enforceRateLimit('register', email, 3, 10 * 60 * 1000);
+    this.enforceRateLimitForIp('register', ipAddress, 20, 10 * 60 * 1000);
     const isTestEnv = this.configService.get<string>('NODE_ENV') === 'test';
 
     const existingUser = await this.userModel
@@ -60,6 +75,9 @@ export class AuthService {
       email: email.toLowerCase(),
       passwordHash,
       authProvider: AuthProvider.EMAIL,
+      signupIp: ipAddress,
+      lastLoginIp: ipAddress,
+      lastLoginAt: new Date(),
       emailVerifiedAt: isTestEnv ? new Date() : null,
       emailVerificationSentAt: undefined,
       emailVerificationSendCount: 0,
@@ -94,13 +112,14 @@ export class AuthService {
     };
   }
 
-  async login(loginDto: LoginDto) {
+  async login(loginDto: LoginDto, ipAddress?: string) {
     const { email, password } = loginDto;
-    this.enforceRateLimit('login', email, 10, 5 * 60 * 1000);
+    this.enforceRateLimit('login', email, 5, 60 * 1000);
+    this.enforceRateLimitForIp('login', ipAddress, 30, 10 * 60 * 1000);
 
     const user = await this.userModel
       .findOne({ email: email.toLowerCase() })
-      .select('+passwordHash')
+      .select('+passwordHash +mfa.secret +mfa.setupSecret')
       .exec();
     const provider = user?.authProvider as AuthProvider | undefined;
     if (!user || !user.passwordHash || provider !== AuthProvider.EMAIL) {
@@ -110,6 +129,30 @@ export class AuthService {
     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const roles = Array.isArray(user.roles) ? user.roles : [];
+    const isAdmin = roles.includes(UserRole.ADMIN) || roles.includes(UserRole.SUPERADMIN);
+    if (isAdmin) {
+      const allowedIps = this.getAdminAllowedIps();
+      if (allowedIps && ipAddress && !allowedIps.has(ipAddress)) {
+        throw new UnauthorizedException('Admin login not allowed from this IP');
+      }
+      if (!user.mfa?.enabled) {
+        throw new UnauthorizedException('Admin MFA required');
+      }
+    }
+
+    const requiresMfa = this.requiresMfa(user);
+    if (requiresMfa) {
+      if (!loginDto.otp) {
+        throw new UnauthorizedException('MFA code required');
+      }
+      const secret = user.mfa?.secret;
+      const valid = secret ? this.verifyTotp(secret, loginDto.otp) : false;
+      if (!valid) {
+        throw new UnauthorizedException('Invalid MFA code');
+      }
     }
 
     const isTestEnv = this.configService.get<string>('NODE_ENV') === 'test';
@@ -122,13 +165,26 @@ export class AuthService {
     }
 
     await this.userModel
-      .findByIdAndUpdate(user._id, { lastLoginAt: new Date() })
+      .findByIdAndUpdate(user._id, {
+        lastLoginAt: new Date(),
+        ...(ipAddress ? { lastLoginIp: ipAddress } : {}),
+      })
       .exec();
 
     const permissions = await this.rolesService.getPermissionsForRoles(
       user.roles,
     );
-    const tokens = await this.generateTokens(user);
+    const tokens = await this.generateTokens(user, { ip: ipAddress });
+
+    await this.auditService.log({
+      action: 'auth.login',
+      actorId: String(user._id),
+      actorRoles: user.roles ?? [],
+      targetType: 'user',
+      targetId: String(user._id),
+      metadata: { provider: AuthProvider.EMAIL },
+      ip: ipAddress,
+    });
 
     return {
       user: { ...this.sanitizeUser(user), permissions },
@@ -136,7 +192,7 @@ export class AuthService {
     };
   }
 
-  async oauthLogin(dto: OAuthLoginDto) {
+  async oauthLogin(dto: OAuthLoginDto, ipAddress?: string) {
     this.enforceRateLimit(
       'oauthLogin',
       dto.idToken.slice(-12),
@@ -149,20 +205,31 @@ export class AuthService {
     }
     const decoded =
       provider === AuthProvider.GOOGLE
-        ? ((await this.verifyGoogleIdToken(dto.idToken)) ??
-          this.decodeIdToken(dto.idToken))
-        : this.decodeIdToken(dto.idToken);
+        ? await this.verifyGoogleIdToken(dto.idToken)
+        : await this.verifyAppleIdToken(dto.idToken);
     const now = Math.floor(Date.now() / 1000);
-    if (decoded.exp && decoded.exp < now) {
+    const exp =
+      typeof decoded.exp === 'number'
+        ? decoded.exp
+        : typeof decoded.exp === 'string'
+          ? Number(decoded.exp)
+          : undefined;
+    if (exp && exp < now) {
       throw new UnauthorizedException('Token expired');
     }
     if (provider === AuthProvider.GOOGLE) {
       const aud = this.configService.get<string>('GOOGLE_CLIENT_ID');
-      if (aud && decoded.aud && decoded.aud !== aud) {
+      const audClaim = decoded.aud;
+      const audMismatch =
+        !!aud &&
+        ((typeof audClaim === 'string' && audClaim !== aud) ||
+          (Array.isArray(audClaim) && !audClaim.includes(aud)) ||
+          (!audClaim && !!aud));
+      if (audMismatch) {
         throw new UnauthorizedException('Invalid Google audience');
       }
       if (
-        decoded.iss &&
+        typeof decoded.iss === 'string' &&
         decoded.iss !== 'accounts.google.com' &&
         decoded.iss !== 'https://accounts.google.com'
       ) {
@@ -171,10 +238,19 @@ export class AuthService {
     }
     if (provider === AuthProvider.APPLE) {
       const aud = this.configService.get<string>('APPLE_CLIENT_ID');
-      if (aud && decoded.aud && decoded.aud !== aud) {
+      const audClaim = decoded.aud;
+      const audMismatch =
+        !!aud &&
+        ((typeof audClaim === 'string' && audClaim !== aud) ||
+          (Array.isArray(audClaim) && !audClaim.includes(aud)) ||
+          (!audClaim && !!aud));
+      if (audMismatch) {
         throw new UnauthorizedException('Invalid Apple audience');
       }
-      if (decoded.iss && decoded.iss !== 'https://appleid.apple.com') {
+      if (
+        typeof decoded.iss === 'string' &&
+        decoded.iss !== 'https://appleid.apple.com'
+      ) {
         throw new UnauthorizedException('Invalid Apple issuer');
       }
     }
@@ -186,7 +262,18 @@ export class AuthService {
     const email =
       typeof decoded.email === 'string'
         ? decoded.email.toLowerCase()
-        : dto.email?.toLowerCase();
+        : undefined;
+    const decodedDisplayName =
+      typeof decoded.name === 'string'
+        ? decoded.name
+        : [decoded.given_name, decoded.family_name]
+            .filter((val): val is string => typeof val === 'string')
+            .join(' ')
+            .trim();
+    const displayName = decodedDisplayName || email || providerSubject;
+    const locale =
+      typeof decoded.locale === 'string' ? decoded.locale : undefined;
+    const geoCountry = this.lookupCountryFromIp(ipAddress);
 
     let user = await this.userModel
       .findOne({
@@ -206,26 +293,48 @@ export class AuthService {
         roles: [UserRole.INVESTOR],
         isActive: true,
         isBlocked: false,
+        signupIp: ipAddress,
+        lastLoginIp: ipAddress,
+        lastLoginAt: new Date(),
         profile: {
-          displayName: dto.displayName || email || providerSubject,
+          displayName,
+          country: geoCountry,
+          locale,
         },
       });
     } else if (!user.isActive || user.isBlocked) {
       throw new UnauthorizedException('Account is deactivated');
-    } else if (emailVerified && !user.emailVerifiedAt) {
-      await this.userModel
-        .findByIdAndUpdate(user._id, { emailVerifiedAt: new Date() })
-        .exec();
+    } else {
+      const update: Record<string, unknown> = { lastLoginAt: new Date() };
+      if (ipAddress) {
+        update.lastLoginIp = ipAddress;
+      }
+      if (emailVerified && !user.emailVerifiedAt) {
+        update.emailVerifiedAt = new Date();
+      }
+      if (geoCountry && !user.profile?.country) {
+        update['profile.country'] = geoCountry;
+      }
+      if (locale && !user.profile?.locale) {
+        update['profile.locale'] = locale;
+      }
+      await this.userModel.findByIdAndUpdate(user._id, update).exec();
     }
-
-    await this.userModel
-      .findByIdAndUpdate(user._id, { lastLoginAt: new Date() })
-      .exec();
 
     const permissions = await this.rolesService.getPermissionsForRoles(
       user.roles,
     );
     const tokens = await this.generateTokens(user);
+
+    await this.auditService.log({
+      action: 'auth.login',
+      actorId: String(user._id),
+      actorRoles: user.roles ?? [],
+      targetType: 'user',
+      targetId: String(user._id),
+      metadata: { provider },
+      ip: ipAddress,
+    });
 
     return {
       user: { ...this.sanitizeUser(user), permissions },
@@ -320,18 +429,14 @@ export class AuthService {
     // Legacy token path removed
   }
 
-  async resendVerificationEmail(email: string) {
+  async resendVerificationEmail(email: string, ipAddress?: string) {
     const normalizedEmail = email.trim().toLowerCase();
     const isTestEnv = this.configService.get<string>('NODE_ENV') === 'test';
     if (isTestEnv) {
       return { message: 'Verification email sent' };
     }
-    this.enforceRateLimit(
-      'resendEmail',
-      normalizedEmail,
-      3,
-      this.emailVerificationWindowMs,
-    );
+    this.enforceRateLimit('resendEmail', normalizedEmail, 3, this.emailVerificationWindowMs);
+    this.enforceRateLimitForIp('resendEmail', ipAddress, 10, this.emailVerificationWindowMs);
 
     const user = await this.userModel
       .findOne({ email: normalizedEmail })
@@ -365,9 +470,10 @@ export class AuthService {
     };
   }
 
-  async forgotPassword(email: string) {
+  async forgotPassword(email: string, ipAddress?: string) {
     const normalizedEmail = email.trim().toLowerCase();
     this.enforceRateLimit('forgotPassword', normalizedEmail, 3, 60 * 60 * 1000);
+    this.enforceRateLimitForIp('forgotPassword', ipAddress, 10, 60 * 60 * 1000);
     const user = await this.userModel
       .findOne({ email: normalizedEmail })
       .select('+passwordHash')
@@ -420,6 +526,7 @@ export class AuthService {
           passwordUpdatedAt: new Date(),
         })
         .exec();
+      await this.revokeAllRefreshTokensForUser(String(user._id));
       return { message: 'Password reset successful' };
     } catch (err: unknown) {
       if (err instanceof TokenExpiredError) {
@@ -440,13 +547,46 @@ export class AuthService {
     return { ...this.sanitizeUser(user), permissions };
   }
 
+  async logout(userId: string) {
+    await this.revokeAllRefreshTokensForUser(userId);
+    return { message: 'Logged out successfully' };
+  }
+
   async refreshToken(refreshToken: string) {
     try {
-      const payload = this.jwtService.verify<{ sub: string }>(refreshToken, {
-        secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
-        issuer: this.getIssuer(),
-        audience: this.getAudience(),
-      });
+      const payload = this.jwtService.verify<{ sub: string; jti?: string }>(
+        refreshToken,
+        {
+          secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
+          issuer: this.getIssuer(),
+          audience: this.getAudience(),
+        },
+      );
+
+      if (!payload.jti) {
+        throw new UnauthorizedException('Invalid refresh token: missing jti');
+      }
+
+      const tokenHash = this.hashToken(refreshToken);
+      const record = await this.refreshTokenModel
+        .findOne({
+          userId: payload.sub,
+          jti: payload.jti,
+        })
+        .exec();
+
+      if (!record || record.revoked || record.tokenHash !== tokenHash) {
+        throw new UnauthorizedException('Invalid refresh token');
+      }
+      if (record.expiresAt.getTime() <= Date.now()) {
+        throw new UnauthorizedException('Refresh token expired');
+      }
+
+      // rotate: revoke old token
+      await this.refreshTokenModel.updateOne(
+        { _id: record._id },
+        { $set: { revoked: true, revokedAt: new Date() } },
+      );
 
       const user = await this.userModel.findById(payload.sub).exec();
       if (!user || !user.isActive || user.isBlocked) {
@@ -465,9 +605,83 @@ export class AuthService {
     }
   }
 
-  private async generateTokens(user: UserDocument) {
+  async startMfaSetup(userId: string) {
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+    const secret = speakeasy.generateSecret({
+      length: 20,
+      name: `Truden (${user.email ?? userId})`,
+    });
+    user.mfa = {
+      ...(user.mfa || {}),
+      setupSecret: secret.base32,
+      enabled: user.mfa?.enabled ?? false,
+    };
+    await user.save();
+    return {
+      secret: secret.base32,
+      otpauthUrl: secret.otpauth_url,
+      note: 'Scan in authenticator app, then call /auth/mfa/enable with the 6-digit code.',
+    };
+  }
+
+  async enableMfa(userId: string, token: string) {
+    const user = await this.userModel
+      .findById(userId)
+      .select('+mfa.secret +mfa.setupSecret')
+      .exec();
+    if (!user) throw new UnauthorizedException('User not found');
+    const secret = user.mfa?.setupSecret;
+    if (!secret) {
+      throw new BadRequestException('No MFA setup in progress');
+    }
+    const verified = this.verifyTotp(secret, token);
+    if (!verified) {
+      throw new UnauthorizedException('Invalid MFA code');
+    }
+    user.mfa = {
+      enabled: true,
+      secret,
+      setupSecret: undefined,
+      verifiedAt: new Date(),
+    };
+    await user.save();
+    return { message: 'MFA enabled' };
+  }
+
+  async disableMfa(userId: string, token: string) {
+    const user = await this.userModel
+      .findById(userId)
+      .select('+mfa.secret +mfa.setupSecret')
+      .exec();
+    if (!user) throw new UnauthorizedException('User not found');
+    const secret = user.mfa?.secret;
+    if (!secret || !user.mfa?.enabled) {
+      throw new BadRequestException('MFA is not enabled');
+    }
+    const verified = this.verifyTotp(secret, token);
+    if (!verified) {
+      throw new UnauthorizedException('Invalid MFA code');
+    }
+    user.mfa = {
+      enabled: false,
+      secret: undefined,
+      setupSecret: undefined,
+      verifiedAt: undefined,
+    };
+    await user.save();
+    return { message: 'MFA disabled' };
+  }
+
+  private async generateTokens(
+    user: UserDocument,
+    options: { ip?: string; userAgent?: string } = {},
+  ) {
     const roles = Array.isArray(user.roles) ? user.roles : [];
     const permissions = await this.rolesService.getPermissionsForRoles(roles);
+    const jti = crypto.randomUUID();
     const payload: JwtPayload = {
       sub: String(user._id),
       email: user.email,
@@ -475,6 +689,7 @@ export class AuthService {
       walletAddress: user.primaryWallet,
       roles,
       permissions,
+      jti,
     };
 
     const accessExpiresIn = (this.configService.get<string>('JWT_EXPIRY') ||
@@ -500,10 +715,55 @@ export class AuthService {
       }),
     ]);
 
+    // persist refresh token for rotation/revocation
+    const expiresAt = this.computeExpiryDate(refreshExpiresIn);
+    const tokenHash = this.hashToken(refreshToken);
+    await this.refreshTokenModel.create({
+      userId: new Types.ObjectId(user._id),
+      jti,
+      tokenHash,
+      expiresAt,
+      revoked: false,
+      ip: options.ip,
+      userAgent: options.userAgent,
+    });
+
     return {
       accessToken,
       refreshToken,
     };
+  }
+
+  private async revokeAllRefreshTokensForUser(userId: string) {
+    await this.refreshTokenModel.updateMany(
+      { userId: new Types.ObjectId(userId), revoked: false },
+      { $set: { revoked: true, revokedAt: new Date() } },
+    );
+  }
+
+  private hashToken(token: string) {
+    return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  private computeExpiryDate(expiresIn: JwtSignOptions['expiresIn']) {
+    if (typeof expiresIn === 'number') {
+      return new Date(Date.now() + expiresIn * 1000);
+    }
+    // handle strings like "15m", "7d"
+    const match = /^(\d+)([smhd])$/.exec(expiresIn as string);
+    if (!match) {
+      // fallback: 7 days
+      return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    }
+    const value = parseInt(match[1], 10);
+    const unit = match[2];
+    const multipliers: Record<string, number> = {
+      s: 1000,
+      m: 60 * 1000,
+      h: 60 * 60 * 1000,
+      d: 24 * 60 * 60 * 1000,
+    };
+    return new Date(Date.now() + value * multipliers[unit]);
   }
 
   private sanitizeUser(user: UserDocument) {
@@ -523,15 +783,29 @@ export class AuthService {
     };
   }
 
-  private decodeIdToken(token: string): Record<string, any> {
-    try {
-      const [, payload] = token.split('.');
-      const json = Buffer.from(payload, 'base64').toString('utf8');
-      const parsed = JSON.parse(json) as Record<string, unknown>;
-      return parsed;
-    } catch {
-      throw new UnauthorizedException('Invalid id token');
-    }
+  private requiresMfa(user: UserDocument) {
+    return Boolean(user.mfa?.enabled);
+  }
+
+  private getAdminAllowedIps(): Set<string> | null {
+    const raw = this.configService.get<string>('ADMIN_ALLOWED_IPS');
+    if (!raw) return null;
+    const set = new Set(
+      raw
+        .split(',')
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0),
+    );
+    return set.size ? set : null;
+  }
+
+  private verifyTotp(secret: string, token: string) {
+    return speakeasy.totp.verify({
+      secret,
+      encoding: 'base32',
+      token,
+      window: 1,
+    });
   }
 
   async triggerEmailVerification(user: UserDocument) {
@@ -709,9 +983,14 @@ export class AuthService {
 
   private async verifyGoogleIdToken(
     idToken: string,
-  ): Promise<Record<string, unknown> | null> {
+  ): Promise<Record<string, unknown>> {
     const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
-    if (!clientId) return null;
+    if (!clientId) {
+      this.logger.error(
+        'GOOGLE_CLIENT_ID is not configured; rejecting Google OAuth login',
+      );
+      throw new UnauthorizedException('Google login is not configured');
+    }
     try {
       const googleLib = (await import('google-auth-library')) as unknown as {
         OAuth2Client: new (id: string) => {
@@ -727,7 +1006,10 @@ export class AuthService {
         audience: clientId,
       });
       const payload = ticket.getPayload();
-      return payload ?? null;
+      if (!payload) {
+        throw new Error('Missing payload in Google token');
+      }
+      return payload;
     } catch (err: unknown) {
       const msg =
         err instanceof Error
@@ -735,10 +1017,30 @@ export class AuthService {
           : typeof err === 'string'
             ? err
             : 'unknown error';
-      this.logger.warn(
-        `Google token verification failed, falling back to local decode: ${msg}`,
+      this.logger.warn(`Google token verification failed: ${msg}`);
+      throw new UnauthorizedException('Invalid Google id token');
+    }
+  }
+
+  private async verifyAppleIdToken(idToken: string): Promise<JWTPayload> {
+    const clientId = this.configService.get<string>('APPLE_CLIENT_ID');
+    if (!clientId) {
+      this.logger.error(
+        'APPLE_CLIENT_ID is not configured; rejecting Apple OAuth login',
       );
-      return null;
+      throw new UnauthorizedException('Apple login is not configured');
+    }
+    try {
+      const { payload } = await jwtVerify(idToken, this.appleJwks, {
+        issuer: 'https://appleid.apple.com',
+        audience: clientId,
+      });
+      return payload;
+    } catch (err: unknown) {
+      this.logger.warn(
+        `Apple token verification failed: ${this.formatJoseError(err)}`,
+      );
+      throw new UnauthorizedException('Invalid Apple id token');
     }
   }
 
@@ -796,6 +1098,16 @@ export class AuthService {
         resetAt: current.resetAt,
       });
     }
+  }
+
+  private enforceRateLimitForIp(
+    action: string,
+    ip: string | undefined,
+    limit: number,
+    windowMs: number,
+  ) {
+    if (!ip) return;
+    this.enforceRateLimit(action, ip, limit, windowMs);
   }
 
   private getIssuer(): string | undefined {
@@ -888,5 +1200,26 @@ export class AuthService {
     } catch {
       return 'unknown error';
     }
+  }
+
+  private formatJoseError(err: unknown) {
+    if (err instanceof Error) return err.message;
+    if (typeof err === 'string') return err;
+    return 'unknown error';
+  }
+
+  private lookupCountryFromIp(ipAddress?: string): string | undefined {
+    if (!ipAddress) return undefined;
+    try {
+      const geo = geoip.lookup(ipAddress);
+      if (geo?.country && typeof geo.country === 'string') {
+        return geo.country;
+      }
+    } catch (err: unknown) {
+      this.logger.debug(
+        `GeoIP lookup failed for ${ipAddress}: ${this.formatJoseError(err)}`,
+      );
+    }
+    return undefined;
   }
 }

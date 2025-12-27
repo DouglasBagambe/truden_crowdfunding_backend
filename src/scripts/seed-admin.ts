@@ -3,7 +3,8 @@ import * as bcrypt from 'bcryptjs';
 import { connect, connection } from 'mongoose';
 import appConfig from '../config/app.config';
 import { User, UserSchema } from '../modules/users/schemas/user.schema';
-import { UserRole } from '../common/enums/role.enum';
+import { UserRole, KYCStatus } from '../common/enums/role.enum';
+import { CreatorVerificationStatus } from '../common/enums/creator-verification-status.enum';
 
 async function seedAdmin() {
   const config = appConfig();
@@ -23,15 +24,12 @@ async function seedAdmin() {
 
   const existing = await UserModel.findOne({ email }).select('+passwordHash');
   const hashedPassword = await bcrypt.hash(password, 10);
+  const now = new Date();
 
   if (existing) {
     existing.passwordHash = hashedPassword;
     existing.roles = Array.from(
-      new Set([
-        ...(existing.roles || []),
-        UserRole.ADMIN,
-        UserRole.SUPERADMIN,
-      ]),
+      new Set([...(existing.roles || []), UserRole.ADMIN, UserRole.SUPERADMIN]),
     );
     existing.profile = {
       ...existing.profile,
@@ -43,6 +41,34 @@ async function seedAdmin() {
     };
     existing.isActive = true;
     existing.isBlocked = false;
+    existing.emailVerifiedAt = existing.emailVerifiedAt ?? now;
+    existing.emailVerificationSentAt = existing.emailVerificationSentAt ?? now;
+    existing.emailVerificationCodeHash = undefined;
+    existing.emailVerificationCodeExpiresAt = undefined;
+    existing.emailVerificationAttempts = 0;
+    existing.emailVerificationSendCount = existing.emailVerificationSendCount ?? 0;
+    existing.kycStatus = KYCStatus.VERIFIED;
+    existing.kyc = {
+      ...(existing.kyc || {}),
+      status: KYCStatus.VERIFIED,
+      provider: existing.kyc?.provider,
+      providerStatus: existing.kyc?.providerStatus ?? 'VERIFIED',
+      providerSessionId: existing.kyc?.providerSessionId,
+      providerResultUrl: existing.kyc?.providerResultUrl,
+      providerFailureReason: undefined,
+      submittedAt: existing.kyc?.submittedAt ?? now,
+      verifiedAt: now,
+      accreditation: existing.kyc?.accreditation ?? { isAccredited: false },
+    };
+    existing.creatorVerification = {
+      ...(existing.creatorVerification || {}),
+      status: CreatorVerificationStatus.VERIFIED,
+      evidenceUrls: existing.creatorVerification?.evidenceUrls ?? [],
+      attachments: existing.creatorVerification?.attachments ?? [],
+      failureReason: undefined,
+      submittedAt: existing.creatorVerification?.submittedAt ?? now,
+      verifiedAt: now,
+    };
     await existing.save();
     console.log(`Admin user updated: ${email}`);
   } else {
@@ -53,10 +79,33 @@ async function seedAdmin() {
       roles: [UserRole.SUPERADMIN, UserRole.ADMIN],
       isActive: true,
       isBlocked: false,
+      emailVerifiedAt: now,
+      emailVerificationSentAt: now,
+      emailVerificationSendCount: 0,
+      kycStatus: KYCStatus.VERIFIED,
+      kyc: {
+        status: KYCStatus.VERIFIED,
+        provider: 'seeded',
+        providerStatus: 'VERIFIED',
+        providerSessionId: null,
+        providerResultUrl: null,
+        providerFailureReason: undefined,
+        submittedAt: now,
+        verifiedAt: now,
+        accreditation: { isAccredited: false },
+      },
       profile: {
         firstName,
         lastName,
         displayName: [firstName, lastName].filter(Boolean).join(' ').trim(),
+      },
+      creatorVerification: {
+        status: CreatorVerificationStatus.VERIFIED,
+        evidenceUrls: [],
+        attachments: [],
+        failureReason: undefined,
+        submittedAt: now,
+        verifiedAt: now,
       },
     });
     console.log(`Admin user created: ${email}`);
