@@ -63,16 +63,18 @@ export class ProjectsService {
       throw new BadRequestException('Projects can only be created as DRAFT');
     }
 
-    const projectType = dto.type;
+    const projectType: ProjectType | undefined =
+      dto.type ?? (dto as unknown as { projectType?: ProjectType }).projectType;
+
     this.validateProjectType(
       { ...dto, type: projectType },
       { requireType: true },
     );
     const agreementsPayload: AgreementRuleDto[] =
       await this.resolveAgreementsWithTemplates(projectType, {
-        agreements: [],
-        roiAgreements: [],
-        charityAgreements: [],
+        agreements: dto.agreements,
+        roiAgreements: dto.roiAgreements,
+        charityAgreements: dto.charityAgreements,
         category: dto.category,
         industry: dto.industry,
       });
@@ -475,7 +477,7 @@ export class ProjectsService {
     ) {
       throw new BadRequestException(
         'Final status must be APPROVED, REJECTED, or CHANGES_REQUESTED',
-      );
+      ); 
     }
 
     if (dto.finalStatus === ProjectStatus.APPROVED) {

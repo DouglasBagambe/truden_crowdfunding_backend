@@ -8,6 +8,8 @@ import { ProjectStatus } from '../../common/enums/project-status.enum';
 import { ProjectType } from '../../common/enums/project-type.enum';
 import { MilestoneStatus } from '../../common/enums/milestone-status.enum';
 import { CreateVerificationLogDto } from './dto/create-verification-log.dto';
+import { KYCStatus } from '../../common/enums/role.enum';
+import { CreatorVerificationStatus } from '../../common/enums/creator-verification-status.enum';
 
 const mockProjectId = '507f1f77bcf86cd799439011';
 
@@ -27,12 +29,41 @@ const createService = () => {
     findByProject: jest.fn(),
   };
 
+  const usersRepo = {
+    findById: jest.fn(),
+  };
+
+  const agreementTemplatesService = {
+    findApplicable: jest.fn().mockResolvedValue([]),
+  };
+
+  const attachmentRequirementsService = {
+    findApplicable: jest.fn().mockResolvedValue([]),
+  };
+
+  const attachmentFilesRepo = {
+    create: jest.fn(),
+    findById: jest.fn(),
+  };
+
   const service = new ProjectsService(
     projectsRepo as any,
     milestonesRepo as any,
+    usersRepo as any,
+    agreementTemplatesService as any,
+    attachmentRequirementsService as any,
+    attachmentFilesRepo as any,
   );
 
-  return { service, projectsRepo, milestonesRepo };
+  return {
+    service,
+    projectsRepo,
+    milestonesRepo,
+    usersRepo,
+    agreementTemplatesService,
+    attachmentRequirementsService,
+    attachmentFilesRepo,
+  };
 };
 
 describe('ProjectsService', () => {
@@ -91,9 +122,25 @@ describe('ProjectsService', () => {
         videoUrls: dto.videoUrls,
         socialLinks: dto.socialLinks,
         website: dto.website,
-        attachments: dto.attachments,
-        agreements: dto.agreements,
-        roiAgreements: dto.agreements,
+        attachments: expect.arrayContaining([
+          expect.objectContaining({
+            title: 'proof',
+            url: 'https://example.com/doc',
+            isRequired: true,
+          }),
+        ]),
+        agreements: expect.arrayContaining([
+          expect.objectContaining({
+            title: 'Terms',
+            requiresAcceptance: true,
+          }),
+        ]),
+        roiAgreements: expect.arrayContaining([
+          expect.objectContaining({
+            title: 'Terms',
+            requiresAcceptance: true,
+          }),
+        ]),
         requiresAgreement: true,
         status: ProjectStatus.DRAFT,
       }),
@@ -255,7 +302,7 @@ describe('ProjectsService', () => {
   });
 
   it('allows approval with verification log present', async () => {
-    const { service, projectsRepo } = createService();
+    const { service, projectsRepo, usersRepo } = createService();
     const logs: CreateVerificationLogDto[] = [
       { performedBy: 'agent', summary: 'checked', decision: 'approve' },
     ] as any;
@@ -263,6 +310,13 @@ describe('ProjectsService', () => {
       status: ProjectStatus.PENDING_REVIEW,
       verificationLogs: logs,
       attachments: [],
+      creatorId: 'creator-1',
+    });
+    usersRepo.findById.mockResolvedValue({
+      isBlocked: false,
+      isActive: true,
+      kyc: { status: KYCStatus.VERIFIED },
+      creatorVerification: { status: CreatorVerificationStatus.VERIFIED },
     });
     projectsRepo.setStatus.mockResolvedValue(true);
     await service.decide(mockProjectId, {

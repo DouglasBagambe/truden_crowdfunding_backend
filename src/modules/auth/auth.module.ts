@@ -25,12 +25,24 @@ import { AuditModule } from '../audit/audit.module';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET') || 'default-secret-key',
-        signOptions: {
-          expiresIn: configService.get<string>('JWT_EXPIRY') ?? '15m',
-        },
-      }),
+      useFactory: (configService: ConfigService) => {
+        const raw = configService.get<string>('JWT_EXPIRY') ?? '15m';
+        const match = /^\s*(\d+)\s*([smhd])?\s*$/.exec(String(raw));
+        let expiresIn: number;
+        if (match) {
+          const n = parseInt(match[1], 10);
+          const u = match[2] ?? 's';
+          const mult = u === 'd' ? 86400 : u === 'h' ? 3600 : u === 'm' ? 60 : 1;
+          expiresIn = n * mult;
+        } else {
+          const n = Number(raw);
+          expiresIn = Number.isFinite(n) ? (n as number) : 900;
+        }
+        return {
+          secret: configService.get<string>('JWT_SECRET') || 'default-secret-key',
+          signOptions: { expiresIn },
+        };
+      },
     }),
   ],
   controllers: [AuthController],

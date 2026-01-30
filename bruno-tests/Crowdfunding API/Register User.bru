@@ -1,0 +1,27 @@
+meta {
+  name: Register User
+  type: http
+  seq: 1
+}
+
+post {
+  url: http://localhost:3000/api/auth/login
+  body: json
+  auth: inherit
+}
+
+headers {
+  Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2OTcyNDUxNGEzNWNhODZkNmQzM2UwYjIiLCJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20iLCJyb2xlcyI6WyJJTlZFU1RPUiIsIklOTk9WQVRPUiJdLCJwZXJtaXNzaW9ucyI6WyJTVUJNSVRfUFJPSkVDVCIsIkVESVRfT1dOX1BST0pFQ1QiLCJJTlZFU1QiXSwianRpIjoiYzQwMTU1OGMtY2M3Yy00OGQ0LWIwM2ItZmE3NjhlNDM0NjlhIiwiaWF0IjoxNzY5MTA1Nzg5LCJleHAiOjE3NjkxMDY2ODksImF1ZCI6IlRydWRlblVzZXJzIiwiaXNzIjoiVHJ1ZGVuIn0.ntYnPo9Nr6uu-_3lHJ94kbTEtskj-iwENaTDGBbr6nM
+}
+
+body:json {
+  {
+    "email": "test@example.com",
+    "password": "Test123456!"
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

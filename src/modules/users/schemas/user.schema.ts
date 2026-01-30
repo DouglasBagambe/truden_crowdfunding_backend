@@ -84,6 +84,16 @@ export class KycData {
   @Prop({ trim: true })
   failureReason?: string;
 
+  // Optional denormalized ID document metadata used by services
+  @Prop({ trim: true })
+  documentType?: string;
+
+  @Prop({ trim: true })
+  documentCountry?: string;
+
+  @Prop({ trim: true })
+  documentLast4?: string;
+
   @Prop({ type: Accreditation, default: {} })
   accreditation!: Accreditation;
 }

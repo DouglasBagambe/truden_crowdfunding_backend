@@ -251,8 +251,8 @@ export class KycService {
         rejectedAt: p.rejectedAt ?? null,
         rejectionReason: p.rejectionReason ?? null,
         documentCount: (p.documents ?? []).length,
-        createdAt: p.createdAt as Date,
-        updatedAt: p.updatedAt as Date,
+        createdAt: (p as any).createdAt as Date,
+        updatedAt: (p as any).updatedAt as Date,
       };
     });
 
@@ -449,8 +449,8 @@ export class KycService {
       rejectionReason: profile.rejectionReason ?? null,
       manualNotes: profile.manualNotes ?? null,
       documents: docs,
-      createdAt: profile.createdAt as Date,
-      updatedAt: profile.updatedAt as Date,
+      createdAt: (profile as any).createdAt as Date,
+      updatedAt: (profile as any).updatedAt as Date,
     };
   }
 

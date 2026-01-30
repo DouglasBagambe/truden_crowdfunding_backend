@@ -5,7 +5,7 @@ import {
   Types,
 } from 'mongoose';
 import type { DocumentMetadata } from '../types';
-import { AccessAction, DocumentState } from '../types';
+import { AccessAction, DocumentState, AccessLevel } from '../types';
 
 export type DealDocumentDocument = DealDocument & MongooseDocument;
 export type FolderDocument = Folder & MongooseDocument;
@@ -51,7 +51,7 @@ export class DealDocument {
       {
         userId: { type: MongooseSchema.Types.ObjectId },
         role: { type: String },
-        accessLevel: { type: String, required: true },
+        accessLevel: { type: String, enum: AccessLevel, required: true },
         expiresAt: { type: Date },
       },
     ],
@@ -60,7 +60,7 @@ export class DealDocument {
   acl!: {
     userId?: Types.ObjectId;
     role?: string;
-    accessLevel: string;
+    accessLevel: AccessLevel;
     expiresAt?: Date;
   }[];
 

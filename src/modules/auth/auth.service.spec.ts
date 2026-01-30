@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { UserDocument } from '../users/schemas/user.schema';
 import { Types } from 'mongoose';
+import { AuditService } from '../audit/audit.service';
 import * as crypto from 'crypto';
 import sgMail from '@sendgrid/mail';
 import { HttpException, UnauthorizedException } from '@nestjs/common';
@@ -47,6 +48,8 @@ describe('AuthService email verification (codes)', () => {
   let rolesService: jest.Mocked<RolesService>;
   let configService: jest.Mocked<ConfigService>;
   let jwtService: jest.Mocked<JwtService>;
+  let refreshTokenModel: Record<string, jest.Mock>;
+  let auditService: jest.Mocked<AuditService>;
   let updates: Record<string, unknown>[];
 
   const makeQuery = <T>(result: T): SimpleQuery<T> => ({
@@ -85,11 +88,20 @@ describe('AuthService email verification (codes)', () => {
       signAsync: jest.fn(),
       verify: jest.fn(),
     } as unknown as jest.Mocked<JwtService>;
+    refreshTokenModel = {
+      findOne: jest.fn(),
+      updateOne: jest.fn(),
+    } as unknown as Record<string, jest.Mock>;
+    auditService = {
+      log: jest.fn(),
+    } as unknown as jest.Mocked<AuditService>;
     service = new AuthService(
       userModel as unknown as any,
+      refreshTokenModel as unknown as any,
       jwtService as unknown as JwtService,
       configService as unknown as ConfigService,
       rolesService as unknown as RolesService,
+      auditService as unknown as AuditService,
     );
   });
 

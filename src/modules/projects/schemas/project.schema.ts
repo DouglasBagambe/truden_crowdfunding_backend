@@ -51,13 +51,13 @@ export class Project {
   @Prop({ type: [String], default: [] })
   tags!: string[];
 
-  @Prop({ trim: true, enum: CharityCategory })
+  @Prop({ type: String, trim: true, enum: CharityCategory })
   category?: CharityCategory;
 
-  @Prop({ trim: true, enum: CharitySubcategory })
+  @Prop({ type: String, trim: true, enum: CharitySubcategory })
   subcategory?: CharitySubcategory;
 
-  @Prop({ trim: true, enum: ROIIndustry })
+  @Prop({ type: String, trim: true, enum: ROIIndustry })
   industry?: ROIIndustry;
 
   @Prop({ trim: true })
@@ -108,6 +108,10 @@ export class Project {
 
   @Prop({ type: String, trim: true })
   decisionReason?: string;
+
+  @Prop({ type: String, trim: true })
+  projectOnchainId?: string;
+
 
   @Prop({ type: Boolean, default: true })
   requiresAgreement!: boolean;
@@ -279,7 +283,7 @@ export class Project {
 export const ProjectSchema = SchemaFactory.createForClass(Project);
 
 export class ROIProject {
-  @Prop({ required: true, trim: true, index: true, enum: ROIIndustry })
+  @Prop({ required: true, trim: true, index: true, type: String, enum: ROIIndustry })
   declare industry: string;
 
   @Prop({ trim: true })
@@ -287,10 +291,16 @@ export class ROIProject {
 }
 
 export class CharityProject {
-  @Prop({ required: true, trim: true, index: true, enum: CharityCategory })
+  @Prop({
+    required: true,
+    trim: true,
+    index: true,
+    type: String,
+    enum: CharityCategory,
+  })
   declare category: string;
 
-  @Prop({ trim: true, enum: CharitySubcategory })
+  @Prop({ type: String, trim: true, enum: CharitySubcategory })
   declare subcategory?: string;
 }
 

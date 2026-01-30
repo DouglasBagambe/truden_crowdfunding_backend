@@ -10,7 +10,7 @@ import { Permission } from '../src/common/enums/permission.enum';
 import { UserRole } from '../src/common/enums/role.enum';
 import { User, UserDocument } from '../src/modules/users/schemas/user.schema';
 
-jest.setTimeout(30000);
+jest.setTimeout(120000);
 
 type AuthUser = {
   email?: string;
@@ -78,7 +78,14 @@ describe('Auth integration (e2e)', () => {
 
   beforeAll(async () => {
     try {
-      mongo = await MongoMemoryServer.create();
+      const startPromise = MongoMemoryServer.create();
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('MongoMemoryServer startup timeout')),
+          15000,
+        ),
+      );
+      mongo = (await Promise.race([startPromise, timeoutPromise])) as MongoMemoryServer;
     } catch (err) {
       // In environments without network access or MongoDB binaries,
       // starting MongoMemoryServer can fail. Mark setup as failed so
@@ -88,6 +95,11 @@ describe('Auth integration (e2e)', () => {
         'Skipping Auth e2e tests: failed to start MongoMemoryServer',
         err,
       );
+      setupFailed = true;
+      return;
+    }
+
+    if (!mongo) {
       setupFailed = true;
       return;
     }

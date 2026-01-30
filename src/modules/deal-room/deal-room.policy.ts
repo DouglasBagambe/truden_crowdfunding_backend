@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Types } from 'mongoose';
-import type { DealDocumentDocument } from './deal-room.schema';
+import type { DealDocumentDocument } from './schemas/deal-room.schema';
 import { AccessLevel, DocumentCategory, DocumentState } from './types';
 import { UserRole } from '../../common/enums/role.enum';
 
@@ -93,7 +93,7 @@ export class DealRoomPolicy {
       if (
         this.userMatches(userId, entry.userId) &&
         (!entry.expiresAt || entry.expiresAt > now) &&
-        this.hasLevel(required, entry.accessLevel)
+        this.hasLevel(required, entry.accessLevel as AccessLevel)
       ) {
         return true;
       }
@@ -104,7 +104,7 @@ export class DealRoomPolicy {
       if (!entry.role) continue;
       if (!roles.includes(entry.role as UserRole)) continue;
       if (entry.expiresAt && entry.expiresAt <= now) continue;
-      if (this.hasLevel(required, entry.accessLevel)) {
+      if (this.hasLevel(required, entry.accessLevel as AccessLevel)) {
         return true;
       }
     }

@@ -223,6 +223,8 @@ export class CreateProjectDto {
       'Agreements are auto-applied from admin templates; user-supplied agreements are ignored.',
     deprecated: true,
   })
+  @IsOptional()
+  @IsArray()
   agreements?: AgreementRuleDto[];
 
   @ApiPropertyOptional({
@@ -230,6 +232,8 @@ export class CreateProjectDto {
       'Agreements are auto-applied from admin templates; user-supplied agreements are ignored.',
     deprecated: true,
   })
+  @IsOptional()
+  @IsArray()
   roiAgreements?: AgreementRuleDto[];
 
   @ApiPropertyOptional({
@@ -237,6 +241,8 @@ export class CreateProjectDto {
       'Agreements are auto-applied from admin templates; user-supplied agreements are ignored.',
     deprecated: true,
   })
+  @IsOptional()
+  @IsArray()
   charityAgreements?: AgreementRuleDto[];
 
   @ApiPropertyOptional({

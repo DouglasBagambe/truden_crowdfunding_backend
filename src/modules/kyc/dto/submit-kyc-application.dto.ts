@@ -2,7 +2,7 @@ import { IsEnum, IsObject, IsOptional } from 'class-validator';
 import {
   ApiPropertyOptional,
 } from '../../../common/swagger.decorators';
-import { KycLevel } from '../interfaces/kyc.interface';
+import type { KycLevel } from '../interfaces/kyc.interface';
 
 export class SubmitKycApplicationDto {
   @ApiPropertyOptional({ enum: ['BASIC', 'ENHANCED'] })

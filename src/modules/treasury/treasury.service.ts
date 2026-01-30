@@ -479,9 +479,7 @@ export class TreasuryService {
       type: doc.type,
       amount: doc.amount,
       txHash: doc.txHash,
-      initiatedBy: doc.initiatedBy
-        ? (doc.initiatedBy as Types.ObjectId).toHexString()
-        : null,
+      initiatedBy: doc.initiatedBy ? String(doc.initiatedBy) : null,
       metadata: doc.metadata ?? null,
       createdAt,
     };

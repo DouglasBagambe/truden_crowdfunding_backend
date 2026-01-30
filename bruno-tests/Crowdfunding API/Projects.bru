@@ -1,0 +1,38 @@
+meta {
+  name: Projects
+  type: http
+  seq: 4
+}
+
+post {
+  url: http://localhost:3000/api/projects
+  body: json
+  auth: inherit
+}
+
+headers {
+  Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2OTcyNDUxNGEzNWNhODZkNmQzM2UwYjIiLCJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20iLCJwcmltYXJ5V2FsbGV0IjoiMHg3NDJkMzVjYzY2MzRjMDUzMjkyNWEzYjg0NGJjNDU0ZTQ0MzhmNDRlIiwid2FsbGV0QWRkcmVzcyI6IjB4NzQyZDM1Y2M2NjM0YzA1MzI5MjVhM2I4NDRiYzQ1NGU0NDM4ZjQ0ZSIsInJvbGVzIjpbIklOVkVTVE9SIiwiSU5OT1ZBVE9SIl0sInBlcm1pc3Npb25zIjpbIlNVQk1JVF9QUk9KRUNUIiwiRURJVF9PV05fUFJPSkVDVCIsIklOVkVTVCJdLCJqdGkiOiJkZTQ0MGQ5OC0yNmU5LTQyMmMtYWQ2NC1jNzY2Yjc0ZmEyYWIiLCJpYXQiOjE3NjkxMTE1NjgsImV4cCI6MTc2OTExMjQ2OCwiYXVkIjoiVHJ1ZGVuVXNlcnMiLCJpc3MiOiJUcnVkZW4ifQ.EfqAcnC_aesebwkZUiaXcipvyyWhVaOSNU6RLI8gIOE
+}
+
+body:json {
+  {
+    "type": "CHARITY",
+    "name": "Clean Water Initiative",
+    "summary": "Providing clean water to remote villages.",
+    "story": "Full story about the project providing clean water access...",
+    "country": "Kenya",
+    "location": "Nairobi",
+    "beneficiary": "Local Community",
+    "paymentMethod": "Crypto",
+    "category": "ngo",
+    "subcategory": "health",
+    "targetAmount": 1000,
+    "currency": "USD",
+    "fundingEndDate": "2026-12-31T23:59:59.000Z"
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}
