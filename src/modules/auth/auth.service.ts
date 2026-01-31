@@ -60,7 +60,7 @@ export class AuthService {
     const { email, password, firstName, lastName, role } = registerDto;
     this.enforceRateLimit('register', email, 3, 10 * 60 * 1000);
     this.enforceRateLimitForIp('register', ipAddress, 20, 10 * 60 * 1000);
-    const isTestEnv = this.configService.get<string>('NODE_ENV') === 'test';
+    const isDevOrTest = ['development', 'test'].includes(this.configService.get<string>('NODE_ENV') || '');
 
     const existingUser = await this.userModel
       .findOne({ email: email.toLowerCase() })
@@ -78,7 +78,7 @@ export class AuthService {
       signupIp: ipAddress,
       lastLoginIp: ipAddress,
       lastLoginAt: new Date(),
-      emailVerifiedAt: isTestEnv ? new Date() : null,
+      emailVerifiedAt: isDevOrTest ? new Date() : null,
       emailVerificationSentAt: undefined,
       emailVerificationSendCount: 0,
       emailVerificationRateLimitResetAt: undefined,
@@ -94,7 +94,7 @@ export class AuthService {
     });
 
     const tokens = await this.generateTokens(user);
-    if (!isTestEnv) {
+    if (!isDevOrTest) {
       await this.issueVerificationCode(user, {
         sendCount: 1,
         rateLimitReset: Date.now() + this.emailVerificationWindowMs,
@@ -114,6 +114,10 @@ export class AuthService {
 
   async login(loginDto: LoginDto, ipAddress?: string) {
     const { email, password } = loginDto;
+    const nodeEnv = this.configService.get<string>('NODE_ENV');
+    console.log('[AUTH_DEBUG] Login attempt for:', email);
+    console.log('[AUTH_DEBUG] NODE_ENV:', nodeEnv);
+
     this.enforceRateLimit('login', email, 5, 60 * 1000);
     this.enforceRateLimitForIp('login', ipAddress, 30, 10 * 60 * 1000);
 
@@ -121,12 +125,20 @@ export class AuthService {
       .findOne({ email: email.toLowerCase() })
       .select('+passwordHash +mfa.secret +mfa.setupSecret')
       .exec();
+    
+    if (!user) {
+      console.log('[AUTH_DEBUG] User not found during login');
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
     const provider = user?.authProvider as AuthProvider | undefined;
-    if (!user || !user.passwordHash || provider !== AuthProvider.EMAIL) {
+    if (!user.passwordHash || provider !== AuthProvider.EMAIL) {
+      console.log('[AUTH_DEBUG] User found but missing hash or wrong provider:', provider);
       throw new UnauthorizedException('Invalid credentials');
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
+    console.log('[AUTH_DEBUG] Password check:', isPasswordValid ? 'PASS' : 'FAIL');
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -155,8 +167,12 @@ export class AuthService {
       }
     }
 
-    const isTestEnv = this.configService.get<string>('NODE_ENV') === 'test';
-    if (!user.emailVerifiedAt && !isTestEnv) {
+    const isDevOrTest = ['development', 'test'].includes(nodeEnv || '');
+    console.log('[AUTH_DEBUG] emailVerifiedAt:', user.emailVerifiedAt);
+    console.log('[AUTH_DEBUG] isDevOrTest:', isDevOrTest);
+
+    if (!user.emailVerifiedAt && !isDevOrTest) {
+      console.log('[AUTH_DEBUG] Blocking login: Email not verified and not in Dev/Test env');
       throw new UnauthorizedException('Email not verified');
     }
 
@@ -431,8 +447,8 @@ export class AuthService {
 
   async resendVerificationEmail(email: string, ipAddress?: string) {
     const normalizedEmail = email.trim().toLowerCase();
-    const isTestEnv = this.configService.get<string>('NODE_ENV') === 'test';
-    if (isTestEnv) {
+    const isDevOrTest = ['development', 'test'].includes(this.configService.get<string>('NODE_ENV') || '');
+    if (isDevOrTest) {
       return { message: 'Verification email sent' };
     }
     this.enforceRateLimit('resendEmail', normalizedEmail, 3, this.emailVerificationWindowMs);
