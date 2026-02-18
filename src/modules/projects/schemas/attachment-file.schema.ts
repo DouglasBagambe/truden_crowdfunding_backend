@@ -8,8 +8,8 @@ export type ProjectAttachmentFileDocument = HydratedDocument<ProjectAttachmentFi
   timestamps: { createdAt: 'createdAt', updatedAt: 'updatedAt' },
 })
 export class ProjectAttachmentFile {
-  @Prop({ type: Types.ObjectId, required: true, index: true })
-  projectId!: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, required: false, index: true })
+  projectId?: Types.ObjectId;
 
   @Prop({ type: String, required: true, trim: true })
   filename!: string;

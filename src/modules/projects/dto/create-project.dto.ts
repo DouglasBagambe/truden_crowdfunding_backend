@@ -114,6 +114,11 @@ export class CreateProjectDto {
   @Transform(({ value }) => toStringArray(value))
   galleryImages?: string[];
 
+  @ApiPropertyOptional({ description: 'Main featured project image' })
+  @IsOptional()
+  @IsUrl()
+  imageUrl?: string;
+
   @ApiPropertyOptional({
     description: 'Social links for the project/beneficiary',
     type: [SocialLinkDto],

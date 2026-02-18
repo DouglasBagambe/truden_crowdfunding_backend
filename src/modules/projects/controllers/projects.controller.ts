@@ -25,7 +25,9 @@ type MulterFile = Express.Multer.File;
 @ApiTags('Projects')
 @Controller('projects')
 export class ProjectsController {
-  constructor(private readonly projectsService: ProjectsService) {}
+  constructor(private readonly projectsService: ProjectsService) { }
+
+  // ── Static / non-parameterized routes FIRST ──────────────────────────────
 
   @Post()
   createProject(
@@ -34,6 +36,33 @@ export class ProjectsController {
   ) {
     return this.projectsService.createProject(creatorId, dto);
   }
+
+  @Get('me')
+  getMyProjects(@CurrentUser('sub') creatorId: string) {
+    return this.projectsService.listMyProjects(creatorId);
+  }
+
+  @Public()
+  @Get()
+  listProjects(@Query() query: QueryProjectsDto) {
+    return this.projectsService.listPublicProjects(query);
+  }
+
+  /** Generic media upload – any authenticated user can upload */
+  @Post('upload')
+  @UseInterceptors(FileInterceptor('file'))
+  uploadGenericMedia(@UploadedFile() file: MulterFile) {
+    return this.projectsService.uploadGenericFile(file);
+  }
+
+  /** Serve uploaded files publicly */
+  @Public()
+  @Get('files/:fileId')
+  async downloadGenericFile(@Param('fileId') fileId: string) {
+    return this.projectsService.downloadGenericFile(fileId);
+  }
+
+  // ── Parameterized routes AFTER static ones ────────────────────────────────
 
   @Put(':id')
   updateProject(
@@ -52,23 +81,12 @@ export class ProjectsController {
     return this.projectsService.submitProject(id, creatorId);
   }
 
-  @Get('me')
-  getMyProjects(@CurrentUser('sub') creatorId: string) {
-    return this.projectsService.listMyProjects(creatorId);
-  }
-
   @Get(':id/owner')
   getOwnedProject(
     @Param('id') id: string,
     @CurrentUser('sub') creatorId: string,
   ) {
     return this.projectsService.getProjectOwnerView(id, creatorId);
-  }
-
-  @Public()
-  @Get()
-  listProjects(@Query() query: QueryProjectsDto) {
-    return this.projectsService.listPublicProjects(query);
   }
 
   @Public()

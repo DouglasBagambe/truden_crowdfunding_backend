@@ -56,7 +56,7 @@ export class ProjectsService {
     private readonly agreementTemplatesService: AgreementTemplatesService,
     private readonly attachmentRequirementsService: AttachmentRequirementsService,
     private readonly attachmentFilesRepo: AttachmentFilesRepository,
-  ) {}
+  ) { }
 
   async createProject(creatorId: string, dto: CreateProjectDto) {
     if (dto.status && dto.status !== ProjectStatus.DRAFT) {
@@ -113,6 +113,7 @@ export class ProjectsService {
       videoUrls: dto.videoUrls ?? [],
       socialLinks: dto.socialLinks ?? [],
       website: dto.website,
+      imageUrl: dto.imageUrl,
       attachments: attachmentsPayload,
       agreements: agreementsPayload,
       roiAgreements: projectType === ProjectType.ROI ? agreementsPayload : [],
@@ -219,6 +220,7 @@ export class ProjectsService {
       setPayload.galleryImages = this.normalizeStringArray(dto.galleryImages);
     if (dto.socialLinks !== undefined) setPayload.socialLinks = dto.socialLinks;
     if (dto.website !== undefined) setPayload.website = dto.website;
+    if (dto.imageUrl !== undefined) setPayload.imageUrl = dto.imageUrl;
     if (dto.targetAmount !== undefined)
       setPayload.targetAmount = dto.targetAmount;
     if (dto.currency !== undefined) setPayload.currency = dto.currency;
@@ -272,17 +274,17 @@ export class ProjectsService {
       const updatedType = inferredType ?? currentType;
       const normalizedAttachments = this.normalizeAttachmentArray(
         dto.attachments ??
-          (project.attachments as Array<{
-            title: string;
-            url?: string;
-            fileId?: string;
-            type?: string;
-            isRequired?: boolean;
-            templateId?: string;
-            templateVersion?: number;
-            requestedBy?: string;
-            requestedAt?: Date;
-          }>),
+        (project.attachments as Array<{
+          title: string;
+          url?: string;
+          fileId?: string;
+          type?: string;
+          isRequired?: boolean;
+          templateId?: string;
+          templateVersion?: number;
+          requestedBy?: string;
+          requestedAt?: Date;
+        }>),
       );
       setPayload.attachments = await this.applyAttachmentRequirementsAsync(
         updatedType,
@@ -402,10 +404,15 @@ export class ProjectsService {
     this.ensureValidObjectId(id);
     const project = await this.projectsRepo.findById(id);
     if (!project) throw new NotFoundException('Project not found');
-    const isPublic = PUBLIC_STATUSES.some(
-      (status) => status === project.status,
-    );
-    if (!isPublic) {
+    // Allow public access to approved/funding projects AND draft/pending (so creators can view after creation)
+    const viewableStatuses = [
+      ...PUBLIC_STATUSES,
+      ProjectStatus.DRAFT,
+      ProjectStatus.PENDING_REVIEW,
+      ProjectStatus.CHANGES_REQUESTED,
+    ];
+    const isViewable = viewableStatuses.some((status) => status === project.status);
+    if (!isViewable) {
       throw new NotFoundException('Project not available');
     }
     return this.getProjectWithMilestones(id);
@@ -477,7 +484,7 @@ export class ProjectsService {
     ) {
       throw new BadRequestException(
         'Final status must be APPROVED, REJECTED, or CHANGES_REQUESTED',
-      ); 
+      );
     }
 
     if (dto.finalStatus === ProjectStatus.APPROVED) {
@@ -647,6 +654,45 @@ export class ProjectsService {
       mimeType: stored.mimeType,
       size: stored.size,
     };
+  }
+
+  async uploadGenericFile(file?: MulterFile) {
+    const fileBuffer = file?.buffer;
+    const fileName = file?.originalname;
+    const fileMime = file?.mimetype;
+    const fileSize = file?.size;
+
+    if (!file || !fileBuffer || !fileName) {
+      throw new BadRequestException('File is required');
+    }
+
+    const stored = await this.attachmentFilesRepo.create({
+      projectId: undefined, // Unlinked
+      filename: fileName,
+      mimeType: fileMime,
+      size: fileSize,
+      data: fileBuffer,
+    });
+
+    // Provide a full URL that the frontend can use as an image src
+    const baseUrl = process.env.BACKEND_URL || process.env.API_URL || 'http://localhost:3000';
+    return {
+      fileId: String(stored._id),
+      filename: stored.filename,
+      url: `${baseUrl}/api/projects/files/${stored._id}`,
+    };
+  }
+
+  async downloadGenericFile(fileId: string) {
+    const file = await this.attachmentFilesRepo.findById(fileId);
+    if (!file) {
+      throw new NotFoundException('File not found');
+    }
+
+    return new StreamableFile(file.data, {
+      disposition: `inline; filename="${file.filename}"`,
+      type: file.mimeType ?? 'application/octet-stream',
+    });
   }
 
   async downloadAttachment(projectId: string, fileId: string) {
@@ -874,16 +920,16 @@ export class ProjectsService {
   private normalizeAttachmentArray(
     value:
       | Array<{
-          title: string;
-          url?: string;
-          fileId?: string;
-          type?: string;
-          isRequired?: boolean;
-          templateId?: string;
-          templateVersion?: number;
-          requestedBy?: string;
-          requestedAt?: Date;
-        }>
+        title: string;
+        url?: string;
+        fileId?: string;
+        type?: string;
+        isRequired?: boolean;
+        templateId?: string;
+        templateVersion?: number;
+        requestedBy?: string;
+        requestedAt?: Date;
+      }>
       | unknown,
   ) {
     if (!Array.isArray(value)) return [];

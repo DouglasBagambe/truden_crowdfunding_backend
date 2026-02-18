@@ -42,6 +42,6 @@ export type NftDocument = Nft & Document;
 
 export const NftSchema = SchemaFactory.createForClass(Nft);
 
-NftSchema.index({ tokenId: 1 });
-NftSchema.index({ investorId: 1 });
-NftSchema.index({ projectId: 1 });
+// NftSchema.index({ tokenId: 1 });
+// NftSchema.index({ investorId: 1 });
+// NftSchema.index({ projectId: 1 });

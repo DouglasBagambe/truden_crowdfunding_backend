@@ -159,7 +159,5 @@ export const EscrowEventLogSchema =
 export const MilestoneLockSchema = SchemaFactory.createForClass(MilestoneLock);
 
 EscrowSchema.index({ projectId: 1 });
-DepositSchema.index({ txHash: 1 }, { unique: true, sparse: true });
 DepositSchema.index({ investorId: 1, escrowId: 1 });
 EscrowEventLogSchema.index({ txHash: 1 }, { sparse: true });
-EscrowEventLogSchema.index({ escrowId: 1 });

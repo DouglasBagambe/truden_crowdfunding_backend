@@ -61,6 +61,9 @@ export class Project {
   industry?: ROIIndustry;
 
   @Prop({ trim: true })
+  imageUrl?: string;
+
+  @Prop({ trim: true })
   risks?: string;
 
   @Prop({ type: [String], default: [] })

@@ -12,6 +12,7 @@ import { NftModule } from './modules/nfts/nft.module';
 import { TreasuryModule } from './modules/treasury/treasury.module';
 import { KycModule } from './modules/kyc/kyc.module';
 import { StatisticsModule } from './modules/statistics/statistics.module';
+import { PaymentsModule } from './modules/payments/payments.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
@@ -50,6 +51,7 @@ import appConfig from './config/app.config';
     TreasuryModule,
     KycModule,
     StatisticsModule,
+    PaymentsModule,
   ],
   providers: [
     {
@@ -66,4 +68,4 @@ import appConfig from './config/app.config';
     },
   ],
 })
-export class AppModule {}
+export class AppModule { }

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { InvestmentsController } from './controllers/investments.controller';
 import { InvestmentsService } from './services/investments.service';
+import { InvestmentNFTService } from './services/investment-nft.service';
 import { Investment, InvestmentSchema } from './schemas/investment.schema';
 import { AuthModule } from '../auth/auth.module';
 import { EscrowModule } from '../escrow/escrow.module';
@@ -18,7 +19,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
     ProjectsModule,
   ],
   controllers: [InvestmentsController],
-  providers: [InvestmentsService, RolesGuard],
-  exports: [InvestmentsService],
+  providers: [InvestmentsService, InvestmentNFTService, RolesGuard],
+  exports: [InvestmentsService, InvestmentNFTService],
 })
-export class InvestmentsModule {}
+export class InvestmentsModule { }

@@ -26,6 +26,18 @@ export class Investment {
   @Prop({ type: String, default: null })
   nftId?: string | null;
 
+  @Prop({ type: Number, default: null, index: true })
+  nftTokenId?: number | null;
+
+  @Prop({ type: String, default: null })
+  nftTxHash?: string | null;
+
+  @Prop({ type: String, default: null })
+  nftMetadataURI?: string | null;
+
+  @Prop({ type: String, default: null })
+  nftContractAddress?: string | null;
+
   @Prop({ type: String, default: null })
   txHash?: string | null;
 
@@ -41,5 +53,4 @@ export type InvestmentDocument = Investment & Document;
 
 export const InvestmentSchema = SchemaFactory.createForClass(Investment);
 
-InvestmentSchema.index({ investorId: 1 });
-InvestmentSchema.index({ projectId: 1 });
+

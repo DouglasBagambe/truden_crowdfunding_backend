@@ -54,7 +54,7 @@ export class AuthService {
     private configService: ConfigService,
     private rolesService: RolesService,
     private readonly auditService: AuditService,
-  ) {}
+  ) { }
 
   async register(registerDto: RegisterDto, ipAddress?: string) {
     const { email, password, firstName, lastName, role } = registerDto;
@@ -125,7 +125,7 @@ export class AuthService {
       .findOne({ email: email.toLowerCase() })
       .select('+passwordHash +mfa.secret +mfa.setupSecret')
       .exec();
-    
+
     if (!user) {
       console.log('[AUTH_DEBUG] User not found during login');
       throw new UnauthorizedException('Invalid credentials');
@@ -283,9 +283,9 @@ export class AuthService {
       typeof decoded.name === 'string'
         ? decoded.name
         : [decoded.given_name, decoded.family_name]
-            .filter((val): val is string => typeof val === 'string')
-            .join(' ')
-            .trim();
+          .filter((val): val is string => typeof val === 'string')
+          .join(' ')
+          .trim();
     const displayName = decodedDisplayName || email || providerSubject;
     const locale =
       typeof decoded.locale === 'string' ? decoded.locale : undefined;
@@ -715,19 +715,24 @@ export class AuthService {
     ) || '7d') as JwtSignOptions['expiresIn'];
 
     const payloadObject: JwtPayload = { ...payload };
+    const signOptions = {
+      issuer: this.getIssuer(),
+      audience: this.getAudience(),
+    };
+
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payloadObject, {
         secret: this.configService.get<string>('JWT_SECRET') || undefined,
         expiresIn: accessExpiresIn,
-        issuer: this.getIssuer(),
-        audience: this.getAudience(),
+        ...(signOptions.issuer ? { issuer: signOptions.issuer } : {}),
+        ...(signOptions.audience ? { audience: signOptions.audience } : {}),
       }),
       this.jwtService.signAsync(payloadObject, {
         secret:
           this.configService.get<string>('REFRESH_TOKEN_SECRET') || undefined,
         expiresIn: refreshExpiresIn,
-        issuer: this.getIssuer(),
-        audience: this.getAudience(),
+        ...(signOptions.issuer ? { issuer: signOptions.issuer } : {}),
+        ...(signOptions.audience ? { audience: signOptions.audience } : {}),
       }),
     ]);
 
@@ -907,15 +912,14 @@ export class AuthService {
           <p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">
             Thanks for signing up. Please confirm your email to secure your account and continue.
           </p>
-          ${
-            verificationLink
-              ? `<div style="text-align:center; margin: 20px 0;">
+          ${verificationLink
+        ? `<div style="text-align:center; margin: 20px 0;">
                   <a href="${verificationLink}" style="background: #1f6feb; color: #ffffff; text-decoration: none; padding: 12px 20px; border-radius: 8px; font-weight: 600; display: inline-block;">Verify Email</a>
                 </div>
                 <p style="margin: 0 0 12px; color: #607087; font-size: 13px; line-height: 1.6;">If the button doesn’t work, copy and paste this link into your browser:<br><span style="word-break: break-all; color: #1f6feb;">${verificationLink}</span></p>`
-              : `<p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">Your verification code:</p>
+        : `<p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">Your verification code:</p>
                 <div style="padding: 12px; background: #f0f4ff; border-radius: 8px; font-family: monospace; font-size: 16px; font-weight: 700; letter-spacing: 2px; color: #0f1f38; text-align:center;">${code}</div>`
-          }
+      }
           <p style="margin: 16px 0 0; color: #8a97ab; font-size: 12px;">If you did not request this, you can safely ignore this email.</p>
         </div>
       </div>
@@ -979,15 +983,14 @@ export class AuthService {
           <p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">
             We received a request to reset your password. If this was you, use the link or token below.
           </p>
-          ${
-            resetLink
-              ? `<div style="text-align:center; margin: 20px 0;">
+          ${resetLink
+        ? `<div style="text-align:center; margin: 20px 0;">
                   <a href="${resetLink}" style="background: #1f6feb; color: #ffffff; text-decoration: none; padding: 12px 20px; border-radius: 8px; font-weight: 600; display: inline-block;">Reset Password</a>
                 </div>
                 <p style="margin: 0 0 12px; color: #607087; font-size: 13px; line-height: 1.6;">If the button doesn’t work, copy and paste this link into your browser:<br><span style="word-break: break-all; color: #1f6feb;">${resetLink}</span></p>`
-              : `<p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">Your reset token:</p>
+        : `<p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">Your reset token:</p>
                 <div style="padding: 12px; background: #f0f4ff; border-radius: 8px; font-family: monospace; font-size: 14px; color: #0f1f38;">${token}</div>`
-          }
+      }
           <p style="margin: 16px 0 0; color: #8a97ab; font-size: 12px;">If you did not request this, you can safely ignore this email.</p>
         </div>
       </div>
@@ -1139,14 +1142,26 @@ export class AuthService {
   }
 
   private getIssuer(): string | undefined {
-    const issuer = this.configService.get<string>('JWT_ISSUER');
-    if (issuer && issuer.trim().length > 0) return issuer.trim();
+    try {
+      const issuer = this.configService.get<any>('JWT_ISSUER');
+      if (typeof issuer === 'string' && issuer.trim().length > 0) {
+        return issuer.trim();
+      }
+    } catch (e) {
+      this.logger.error('Error getting JWT_ISSUER:', e);
+    }
     return undefined;
   }
 
   private getAudience(): string | undefined {
-    const audience = this.configService.get<string>('JWT_AUDIENCE');
-    if (audience && audience.trim().length > 0) return audience.trim();
+    try {
+      const audience = this.configService.get<any>('JWT_AUDIENCE');
+      if (typeof audience === 'string' && audience.trim().length > 0) {
+        return audience.trim();
+      }
+    } catch (e) {
+      this.logger.error('Error getting JWT_AUDIENCE:', e);
+    }
     return undefined;
   }
 

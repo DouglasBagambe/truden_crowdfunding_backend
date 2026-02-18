@@ -26,6 +26,6 @@ export default () => ({
     adminPrivateKey: process.env.ADMIN_PRIVATE_KEY,
   },
   cors: {
-    origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000'],
+    origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000', 'http://localhost:3001'],
   },
 });
