@@ -99,7 +99,7 @@ export class CreateProjectDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(10)
-  @IsUrl({}, { each: true })
+  @IsUrl({ require_tld: false }, { each: true })
   @Transform(({ value }) => toStringArray(value))
   videoUrls?: string[];
 
@@ -110,13 +110,13 @@ export class CreateProjectDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(20)
-  @IsUrl({}, { each: true })
+  @IsUrl({ require_tld: false }, { each: true })
   @Transform(({ value }) => toStringArray(value))
   galleryImages?: string[];
 
   @ApiPropertyOptional({ description: 'Main featured project image' })
   @IsOptional()
-  @IsUrl()
+  @IsUrl({ require_tld: false })
   imageUrl?: string;
 
   @ApiPropertyOptional({
@@ -132,7 +132,7 @@ export class CreateProjectDto {
 
   @ApiPropertyOptional({ description: 'Official project website' })
   @IsOptional()
-  @IsUrl()
+  @IsUrl({ require_tld: false })
   website?: string;
 
   @ApiProperty({ description: 'Preferred payment method for contributions' })

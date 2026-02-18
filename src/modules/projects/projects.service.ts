@@ -675,7 +675,8 @@ export class ProjectsService {
     });
 
     // Provide a full URL that the frontend can use as an image src
-    const baseUrl = process.env.BACKEND_URL || process.env.API_URL || 'http://localhost:3000';
+    const rawBaseUrl = process.env.BACKEND_URL || process.env.API_URL || 'http://localhost:3000';
+    const baseUrl = rawBaseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
     return {
       fileId: String(stored._id),
       filename: stored.filename,

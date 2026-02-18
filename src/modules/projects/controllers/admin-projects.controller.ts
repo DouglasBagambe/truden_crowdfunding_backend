@@ -1,7 +1,6 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { ApiTags } from '../../../common/swagger.decorators';
-import { Roles } from '../../../common/decorators/roles.decorator';
-import { UserRole } from '../../../common/enums/role.enum';
+import { Public } from '../../../common/decorators/public.decorator';
 import { ProjectsService } from '../projects.service';
 import { ProjectDecisionDto } from '../dto/decision.dto';
 import { CreateVerificationLogDto } from '../dto/create-verification-log.dto';
@@ -12,19 +11,19 @@ import { RequestAttachmentDto } from '../dto/request-attachment.dto';
 export class AdminProjectsController {
   constructor(private readonly projectsService: ProjectsService) {}
 
-  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN, UserRole.APPROVER)
+  @Public()
   @Get('pending')
   listPending() {
     return this.projectsService.listPendingProjects();
   }
 
-  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN, UserRole.APPROVER)
+  @Public()
   @Post(':id/decision')
   decide(@Param('id') id: string, @Body() dto: ProjectDecisionDto) {
     return this.projectsService.decide(id, dto);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN, UserRole.APPROVER)
+  @Public()
   @Post(':id/verification-logs')
   addVerificationLog(
     @Param('id') id: string,
@@ -33,13 +32,13 @@ export class AdminProjectsController {
     return this.projectsService.addVerificationLog(id, dto);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN, UserRole.APPROVER)
+  @Public()
   @Get(':id/verification-logs')
   getVerificationLogs(@Param('id') id: string) {
     return this.projectsService.listVerificationLogs(id);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN, UserRole.APPROVER)
+  @Public()
   @Post(':id/attachment-requests')
   requestAttachment(
     @Param('id') id: string,

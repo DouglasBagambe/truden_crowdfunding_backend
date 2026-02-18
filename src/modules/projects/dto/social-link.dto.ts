@@ -8,6 +8,6 @@ export class SocialLinkDto {
   platform!: string;
 
   @ApiProperty({ description: 'Profile or page URL' })
-  @IsUrl()
+  @IsUrl({ require_tld: false })
   url!: string;
 }

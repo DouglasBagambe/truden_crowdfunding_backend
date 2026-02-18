@@ -10,7 +10,7 @@ export class DocumentAttachmentDto {
   @ApiPropertyOptional({ description: 'Attachment URL (legacy/optional; use fileId for uploaded files)' })
   @IsOptional()
   @ValidateIf((o: DocumentAttachmentDto) => !o.fileId || o.url !== undefined)
-  @IsUrl()
+  @IsUrl({ require_tld: false })
   url?: string;
 
   @ApiPropertyOptional({ description: 'Stored file id (preferred for uploaded attachments)' })
