@@ -18,6 +18,7 @@ import { CreateProjectDto } from '../dto/create-project.dto';
 import { UpdateProjectDto } from '../dto/update-project.dto';
 import { QueryProjectsDto } from '../dto/query-projects.dto';
 import { UploadAttachmentDto } from '../dto/upload-attachment.dto';
+import { CreateCharityDonationDto } from '../dto/create-charity-donation.dto';
 import { ProjectsService } from '../projects.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 type MulterFile = Express.Multer.File;
@@ -99,6 +100,24 @@ export class ProjectsController {
   @Get(':id/milestones')
   getProjectMilestones(@Param('id') id: string) {
     return this.projectsService.getMilestonesPublic(id);
+  }
+
+  @Public()
+  @Post(':id/donate')
+  donateToCharity(@Param('id') id: string, @Body() dto: CreateCharityDonationDto) {
+    const amount = Number(dto.amount);
+    return this.projectsService.incrementCharityDonation(
+      id,
+      amount,
+      dto.donorName,
+      dto.message,
+    );
+  }
+
+  @Public()
+  @Get(':id/donors')
+  listDonors(@Param('id') id: string, @Query('limit') limit?: string) {
+    return this.projectsService.listCharityDonationsPublic(id, Number(limit) || 50);
   }
 
   @Roles(UserRole.INNOVATOR, UserRole.ADMIN)

@@ -32,6 +32,7 @@ import { RequestAttachmentDto } from './dto/request-attachment.dto';
 import { AttachmentFilesRepository } from './repositories/attachment-files.repository';
 import { UploadAttachmentDto } from './dto/upload-attachment.dto';
 import { StreamableFile } from '@nestjs/common';
+import { CharityDonationsRepository } from './repositories/charity-donations.repository';
 type MulterFile = Express.Multer.File;
 
 const PUBLIC_STATUSES = [
@@ -45,6 +46,7 @@ const OWNER_EDITABLE_STATUSES = [
   ProjectStatus.DRAFT,
   ProjectStatus.PENDING_REVIEW,
   ProjectStatus.CHANGES_REQUESTED,
+  ProjectStatus.APPROVED,
 ] as const satisfies ProjectStatus[];
 
 @Injectable()
@@ -56,13 +58,10 @@ export class ProjectsService {
     private readonly agreementTemplatesService: AgreementTemplatesService,
     private readonly attachmentRequirementsService: AttachmentRequirementsService,
     private readonly attachmentFilesRepo: AttachmentFilesRepository,
+    private readonly charityDonationsRepo: CharityDonationsRepository,
   ) { }
 
   async createProject(creatorId: string, dto: CreateProjectDto) {
-    if (dto.status && dto.status !== ProjectStatus.DRAFT) {
-      throw new BadRequestException('Projects can only be created as DRAFT');
-    }
-
     const projectType: ProjectType | undefined =
       dto.type ?? (dto as unknown as { projectType?: ProjectType }).projectType;
 
@@ -104,7 +103,7 @@ export class ProjectsService {
       subcategory: dto.subcategory,
       industry: dto.industry,
       risks: risksValue,
-      status: ProjectStatus.DRAFT,
+      status: ProjectStatus.APPROVED,
       targetAmount: dto.targetAmount,
       currency: dto.currency,
       fundingStartDate: dto.fundingStartDate,
@@ -316,6 +315,27 @@ export class ProjectsService {
     }
 
     return this.getProjectWithMilestones(projectId);
+  }
+
+  async listCharityDonationsPublic(projectId: string, limit = 50) {
+    const project = await this.ensureProjectExists(projectId);
+    const projectType = this.readProjectType(project);
+    if (projectType !== ProjectType.CHARITY) {
+      throw new BadRequestException('Donations are only supported for charity projects');
+    }
+    const isPublic = PUBLIC_STATUSES.some((status) => status === project.status);
+    if (!isPublic) {
+      throw new NotFoundException('Project not available');
+    }
+    const safeLimit = Math.max(1, Math.min(100, Number(limit) || 50));
+    const items = await this.charityDonationsRepo.listByProject(projectId, safeLimit);
+    return items.map((d) => ({
+      id: String((d as any)._id),
+      donorName: d.donorName || 'Anonymous',
+      amount: d.amount,
+      message: d.message ?? null,
+      createdAt: (d as any).createdAt ?? null,
+    }));
   }
 
   async submitProject(projectId: string, creatorId: string) {
@@ -545,6 +565,48 @@ export class ProjectsService {
     await this.projectsRepo.updateById(projectId, {
       $inc: { raisedAmount: amount, backerCount: 1 },
     });
+  }
+
+  async incrementCharityDonation(
+    projectId: string,
+    amount: number,
+    donorName?: string,
+    message?: string,
+  ) {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Invalid amount');
+    }
+
+    this.ensureValidObjectId(projectId);
+    const project = await this.projectsRepo.findById(projectId);
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+
+    const projectType = this.normalizeProjectType(project.projectType);
+    if (projectType !== ProjectType.CHARITY) {
+      throw new BadRequestException('Donations are only supported for charity projects');
+    }
+
+    const isPublic = PUBLIC_STATUSES.some((status) => status === project.status);
+    if (!isPublic) {
+      throw new BadRequestException('Project is not available for donations');
+    }
+
+    const normalizedDonorName = (donorName ?? '').trim() || 'Anonymous';
+
+    await this.projectsRepo.updateById(projectId, {
+      $inc: { raisedAmount: amount, backerCount: 1 },
+    });
+
+    await this.charityDonationsRepo.create({
+      projectId: new Types.ObjectId(projectId),
+      amount,
+      donorName: normalizedDonorName,
+      message: message?.trim() ? message.trim() : null,
+    });
+
+    return this.getProjectWithMilestones(projectId);
   }
 
   async requestAttachment(projectId: string, dto: RequestAttachmentDto) {

@@ -26,6 +26,10 @@ import {
   ROIProjectSchema,
   CharityProjectSchema,
 } from './schemas/project.schema';
+import {
+  CharityDonation,
+  CharityDonationSchema,
+} from './schemas/charity-donation.schema';
 import { Milestone, MilestoneSchema } from './schemas/milestone.schema';
 import { ProjectType } from '../../common/enums/project-type.enum';
 import { UsersModule } from '../users/users.module';
@@ -33,6 +37,7 @@ import {
   AgreementTemplate,
   AgreementTemplateSchema,
 } from './schemas/agreement-template.schema';
+import { CharityDonationsRepository } from './repositories/charity-donations.repository';
 
 @Module({
   imports: [
@@ -47,6 +52,7 @@ import {
         ],
       },
       { name: Milestone.name, schema: MilestoneSchema },
+      { name: CharityDonation.name, schema: CharityDonationSchema },
       { name: AgreementTemplate.name, schema: AgreementTemplateSchema },
       {
         name: AttachmentRequirement.name,
@@ -68,6 +74,7 @@ import {
     ProjectsService,
     ProjectsRepository,
     MilestonesRepository,
+    CharityDonationsRepository,
     AgreementTemplatesRepository,
     AgreementTemplatesService,
     AttachmentRequirementsRepository,
