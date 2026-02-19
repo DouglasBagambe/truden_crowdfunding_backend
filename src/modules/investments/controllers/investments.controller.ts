@@ -48,6 +48,12 @@ export class InvestmentsController {
     return this.investmentsService.getInvestmentsByUser(userId, currentUser);
   }
 
+  @Get('my')
+  @Roles(UserRole.INVESTOR)
+  async getMyInvestments(@CurrentUser() currentUser: JwtPayload) {
+    return this.investmentsService.getMyInvestments(currentUser);
+  }
+
   @Get('project/:projectId')
   @Roles(UserRole.ADMIN, UserRole.INNOVATOR)
   async getProjectInvestors(

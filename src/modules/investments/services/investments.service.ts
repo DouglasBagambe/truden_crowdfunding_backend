@@ -221,6 +221,15 @@ export class InvestmentsService {
     });
   }
 
+  async getMyInvestments(currentUser: JwtPayload): Promise<InvestmentView[]> {
+    this.ensureInvestorRole(currentUser);
+    const userId = currentUser.sub;
+    if (!userId) {
+      throw new BadRequestException('Missing user id in token');
+    }
+    return this.getInvestmentsByUser(userId, currentUser);
+  }
+
   async getInvestmentsByUser(
     userId: string,
     currentUser: JwtPayload,

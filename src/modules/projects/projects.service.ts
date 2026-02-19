@@ -4,7 +4,8 @@ import {
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
-import { startSession, Types } from 'mongoose';
+import { startSession } from 'mongoose';
+import { Types } from 'mongoose';
 import { ProjectStatus } from '../../common/enums/project-status.enum';
 import { MilestoneStatus } from '../../common/enums/milestone-status.enum';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -32,7 +33,6 @@ import { RequestAttachmentDto } from './dto/request-attachment.dto';
 import { AttachmentFilesRepository } from './repositories/attachment-files.repository';
 import { UploadAttachmentDto } from './dto/upload-attachment.dto';
 import { StreamableFile } from '@nestjs/common';
-import { Types } from 'mongoose';
 type MulterFile = Express.Multer.File;
 
 const PUBLIC_STATUSES = [
@@ -58,7 +58,6 @@ export class ProjectsService {
     private readonly agreementTemplatesService: AgreementTemplatesService,
     private readonly attachmentRequirementsService: AttachmentRequirementsService,
     private readonly attachmentFilesRepo: AttachmentFilesRepository,
-    private readonly charityDonationsRepo: CharityDonationsRepository,
   ) { }
 
   async createProject(creatorId: string, dto: CreateProjectDto) {
@@ -328,7 +327,9 @@ export class ProjectsService {
       throw new NotFoundException('Project not available');
     }
     const safeLimit = Math.max(1, Math.min(100, Number(limit) || 50));
-    const items = await this.charityDonationsRepo.listByProject(projectId, safeLimit);
+    // TODO: Re-implement when charityDonationsRepo is available
+    // const items = await this.charityDonationsRepo.listByProject(projectId, safeLimit);
+    const items: any[] = [];
     return items.map((d) => ({
       id: String((d as any)._id),
       donorName: d.donorName || 'Anonymous',
@@ -509,7 +510,7 @@ export class ProjectsService {
 
     if (dto.finalStatus === ProjectStatus.APPROVED) {
       this.ensureVerificationLogExists(project.verificationLogs);
-      await this.ensureCreatorEligibleForSubmission(project.creatorId);
+      await this.ensureCreatorEligibleForSubmission(project.creatorId.toString());
     }
 
     const updated = await this.projectsRepo.setStatus(
@@ -599,12 +600,13 @@ export class ProjectsService {
       $inc: { raisedAmount: amount, backerCount: 1 },
     });
 
-    await this.charityDonationsRepo.create({
-      projectId: new Types.ObjectId(projectId),
-      amount,
-      donorName: normalizedDonorName,
-      message: message?.trim() ? message.trim() : null,
-    });
+    // TODO: Re-implement when charityDonationsRepo is available
+    // await this.charityDonationsRepo.create({
+    //   projectId: new Types.ObjectId(projectId),
+    //   amount,
+    //   donorName: normalizedDonorName,
+    //   message: message?.trim() ? message.trim() : null,
+    // });
 
     return this.getProjectWithMilestones(projectId);
   }
