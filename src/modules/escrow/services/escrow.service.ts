@@ -5,6 +5,7 @@ import { DepositDto } from '../dto/deposit.dto';
 import { ReleaseDto } from '../dto/release.dto';
 import { RefundDto } from '../dto/refund.dto';
 import { DisputeDto } from '../dto/dispute.dto';
+import { ApproveMilestoneDto } from '../dto/approve-milestone.dto';
 import { DepositStatus } from '../types';
 import { EscrowEvents } from '../events';
 import { ProjectsService } from '../../projects/projects.service';
@@ -138,6 +139,38 @@ export class EscrowService {
     return {
       success: true,
     };
+  }
+
+  async approveMilestone(dto: ApproveMilestoneDto, approvedBy: string) {
+    if (!Types.ObjectId.isValid(dto.projectId)) {
+      throw new BadRequestException('Invalid projectId');
+    }
+
+    const amount = Number(dto.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Invalid amount');
+    }
+
+    const lock = await this.escrowRepository.addMilestoneApproval({
+      projectId: new Types.ObjectId(dto.projectId),
+      milestoneId: dto.milestoneId,
+      amount,
+      by: new Types.ObjectId(approvedBy),
+      signature: dto.signature,
+    });
+
+    await this.escrowRepository.createEventLog({
+      type: EscrowEvents.RELEASE_CONFIRMED,
+      payload: {
+        projectId: dto.projectId,
+        milestoneId: dto.milestoneId,
+        amount,
+        approvals: lock.approvals?.length ?? 0,
+      },
+      actor: { id: approvedBy, role: 'ADMIN' },
+    });
+
+    return { success: true, approvals: lock.approvals?.length ?? 0 };
   }
 
   async refundDeposit(dto: RefundDto, initiatedBy: string) {

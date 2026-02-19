@@ -60,6 +60,14 @@ export class ProjectsService {
     private readonly attachmentFilesRepo: AttachmentFilesRepository,
   ) { }
 
+  async findByOnchainId(projectOnchainId: string) {
+    return this.projectsRepo.findByOnchainId(projectOnchainId);
+  }
+
+  async listRoiProjectsWithOnchainId() {
+    return this.projectsRepo.listRoiProjectsWithOnchainId();
+  }
+
   async createProject(creatorId: string, dto: CreateProjectDto) {
     const projectType: ProjectType | undefined =
       dto.type ?? (dto as unknown as { projectType?: ProjectType }).projectType;
@@ -1109,8 +1117,14 @@ export class ProjectsService {
     return this.getProjectWithMilestones(projectId);
   }
 
-  private async ensureCreatorEligibleForSubmission(creatorId: string) {
-    const creator = await this.usersRepo.findById(creatorId);
+  private async ensureCreatorEligible(ownerId: string) {
+    const kycBypass =
+      String(process.env.KYC_BYPASS ?? '').toLowerCase() === 'true';
+    if (kycBypass) {
+      return;
+    }
+
+    const creator = await this.usersRepo.findById(ownerId);
     if (!creator) {
       throw new NotFoundException('Creator not found');
     }
@@ -1134,5 +1148,9 @@ export class ProjectsService {
         'Creator verification must be VERIFIED before submitting a project',
       );
     }
+  }
+
+  private async ensureCreatorEligibleForSubmission(ownerId: string) {
+    return this.ensureCreatorEligible(ownerId);
   }
 }

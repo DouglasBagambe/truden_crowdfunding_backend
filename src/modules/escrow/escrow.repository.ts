@@ -106,4 +106,47 @@ export class EscrowRepository {
   async getEventsByTxHash(txHash: string): Promise<EscrowEventLogDocument[]> {
     return this.eventLogModel.find({ txHash }).sort({ _id: 1 }).exec();
   }
+
+  async findMilestoneLock(
+    projectId: Types.ObjectId,
+    milestoneId: string,
+  ): Promise<MilestoneLockDocument | null> {
+    return this.milestoneLockModel
+      .findOne({ projectId, milestoneId })
+      .exec();
+  }
+
+  async createMilestoneLock(data: Partial<MilestoneLock>) {
+    const doc = new this.milestoneLockModel(data);
+    return doc.save();
+  }
+
+  async addMilestoneApproval(params: {
+    projectId: Types.ObjectId;
+    milestoneId: string;
+    amount: number;
+    by: Types.ObjectId;
+    signature?: string;
+  }): Promise<MilestoneLockDocument> {
+    const existing = await this.findMilestoneLock(
+      params.projectId,
+      params.milestoneId,
+    );
+
+    const lock =
+      existing ??
+      (await this.createMilestoneLock({
+        projectId: params.projectId,
+        milestoneId: params.milestoneId,
+        amount: params.amount,
+        lockedAt: new Date(),
+      }));
+
+    lock.approvals = [
+      ...(lock.approvals ?? []),
+      { by: params.by, signature: params.signature, timestamp: new Date() },
+    ];
+    await lock.save();
+    return lock;
+  }
 }

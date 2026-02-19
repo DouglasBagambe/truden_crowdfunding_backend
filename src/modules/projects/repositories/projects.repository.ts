@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, UpdateQuery } from 'mongoose';
 import { ProjectStatus } from '../../../common/enums/project-status.enum';
+import { ProjectType } from '../../../common/enums/project-type.enum';
 import { Project, ProjectDocument } from '../schemas/project.schema';
 
 @Injectable()
@@ -27,6 +28,23 @@ export class ProjectsRepository {
 
   findById(id: string): Promise<ProjectDocument | null> {
     return this.projectModel.findById(id).populate('creatorId', 'firstName lastName email').exec();
+  }
+
+  findByOnchainId(projectOnchainId: string): Promise<ProjectDocument | null> {
+    return this.projectModel
+      .findOne({ projectOnchainId: String(projectOnchainId) })
+      .populate('creatorId', 'firstName lastName email')
+      .exec();
+  }
+
+  listRoiProjectsWithOnchainId(): Promise<ProjectDocument[]> {
+    return this.projectModel
+      .find({
+        projectType: ProjectType.ROI,
+        projectOnchainId: { $exists: true, $ne: null },
+      })
+      .select('projectOnchainId')
+      .exec();
   }
 
   updateById(

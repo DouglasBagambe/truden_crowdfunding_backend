@@ -123,6 +123,13 @@ export class InvestmentsService {
   ): Promise<InvestmentView> {
     this.ensureInvestorRole(currentUser);
 
+    const investmentsTestMode =
+      String(this.configService.get('INVESTMENTS_TEST_MODE') ?? '').toLowerCase() ===
+      'true';
+
+    const kycBypass =
+      String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() === 'true';
+
     const investorId = currentUser.sub;
     if (!investorId) {
       throw new BadRequestException('Missing investor id in token');
@@ -138,13 +145,16 @@ export class InvestmentsService {
       throw new ForbiddenException('Investor account is inactive');
     }
 
-    if (investorProfile.kycStatus !== KYCStatus.VERIFIED) {
-      throw new ForbiddenException('Investor KYC is not verified');
+    const shouldEnforceKyc = !investmentsTestMode && !kycBypass;
+    if (shouldEnforceKyc) {
+      if (investorProfile.kycStatus !== KYCStatus.VERIFIED) {
+        throw new ForbiddenException('Investor KYC is not verified');
+      }
     }
 
     const walletAddress =
       investorProfile.walletAddress ?? currentUser.walletAddress;
-    if (!walletAddress) {
+    if (shouldEnforceKyc && !walletAddress) {
       throw new BadRequestException('Investor wallet address is required');
     }
 
@@ -153,30 +163,35 @@ export class InvestmentsService {
 
     await this.ensureProjectIsOpen(dto.projectId);
 
-    const txHash = await this.simulateEscrowDeposit(
-      dto.projectOnchainId ?? dto.projectId,
-      walletAddress,
-      amountNumber,
-    );
+    let txHash: string | null = null;
+    let nftId: string | null = null;
 
-    const nftId = await this.simulateMintInvestmentNft(
-      walletAddress,
-      dto.projectId,
-      amountNumber,
-    );
+    if (!investmentsTestMode) {
+      txHash = await this.simulateEscrowDeposit(
+        dto.projectOnchainId ?? dto.projectId,
+        walletAddress as string,
+        amountNumber,
+      );
 
-    const depositDto: DepositDto = {
-      projectId: dto.projectId,
-      amount: dto.amount,
-      currency: EscrowCurrency.ETH,
-      source: FundingSource.ONCHAIN,
-      txHash: txHash ?? undefined,
-      metadata: {
-        investorWallet: walletAddress,
-      },
-    };
+      nftId = await this.simulateMintInvestmentNft(
+        walletAddress as string,
+        dto.projectId,
+        amountNumber,
+      );
 
-    await this.escrowService.createDeposit(depositDto, investorId);
+      const depositDto: DepositDto = {
+        projectId: dto.projectId,
+        amount: dto.amount,
+        currency: EscrowCurrency.ETH,
+        source: FundingSource.ONCHAIN,
+        txHash: txHash ?? undefined,
+        metadata: {
+          investorWallet: walletAddress as string,
+        },
+      };
+
+      await this.escrowService.createDeposit(depositDto, investorId);
+    }
 
     const investment = await this.investmentModel.create({
       projectId: projectObjectId,
@@ -190,8 +205,8 @@ export class InvestmentsService {
     await this.incrementProjectRaised(dto.projectId, amountNumber);
 
     return this.toView(investment, {
-      investorWallet: walletAddress,
-      investorKyc: investorProfile.kycStatus,
+      investorWallet: walletAddress ?? undefined,
+      investorKyc: kycBypass ? KYCStatus.VERIFIED : investorProfile.kycStatus,
       nftMetadata: null,
     });
   }
@@ -392,6 +407,16 @@ export class InvestmentsService {
   private async ensureProjectIsOpen(projectId: string): Promise<void> {
     if (!Types.ObjectId.isValid(projectId)) {
       throw new BadRequestException('Invalid projectId');
+    }
+
+    const investmentsTestMode =
+      String(this.configService.get('INVESTMENTS_TEST_MODE') ?? '').toLowerCase() ===
+      'true';
+    const kycBypass =
+      String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() === 'true';
+
+    if (investmentsTestMode || kycBypass) {
+      return;
     }
 
     await this.projectsService.ensureProjectIsOpenForInvestment(projectId);

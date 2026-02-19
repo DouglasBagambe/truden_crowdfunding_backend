@@ -13,6 +13,7 @@ import { DepositDto } from '../dto/deposit.dto';
 import { ReleaseDto } from '../dto/release.dto';
 import { RefundDto } from '../dto/refund.dto';
 import { DisputeDto } from '../dto/dispute.dto';
+import { ApproveMilestoneDto } from '../dto/approve-milestone.dto';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { Roles } from '../../../common/decorators/roles.decorator';
 import { RolesGuard } from '../../../common/guards/roles.guard';
@@ -55,6 +56,15 @@ export class EscrowController {
     @Body() dto: DisputeDto,
   ) {
     return this.escrowService.raiseDispute(dto, userId);
+  }
+
+  @Post('milestones/approve')
+  @Roles(UserRole.ADMIN)
+  async approveMilestone(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: ApproveMilestoneDto,
+  ) {
+    return this.escrowService.approveMilestone(dto, userId);
   }
 
   @Post('refund')
