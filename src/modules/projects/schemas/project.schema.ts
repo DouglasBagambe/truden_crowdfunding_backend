@@ -1,10 +1,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument } from 'mongoose';
+import { HydratedDocument, Types } from 'mongoose';
 import { ProjectStatus } from '../../../common/enums/project-status.enum';
 import { ProjectType } from '../../../common/enums/project-type.enum';
 import { CharityCategory } from '../../../common/enums/charity-category.enum';
 import { CharitySubcategory } from '../../../common/enums/charity-subcategory.enum';
 import { ROIIndustry } from '../../../common/enums/roi-industry.enum';
+import { User } from '../../users/schemas/user.schema';
 
 export type ProjectDocument = HydratedDocument<Project>;
 
@@ -14,8 +15,8 @@ export type ProjectDocument = HydratedDocument<Project>;
   discriminatorKey: 'projectType',
 })
 export class Project {
-  @Prop({ required: true, trim: true, index: true })
-  creatorId!: string;
+  @Prop({ required: true, trim: true, index: true, type: Types.ObjectId, ref: 'User' })
+  creatorId!: string | Types.ObjectId;
 
   @Prop({
     required: true,

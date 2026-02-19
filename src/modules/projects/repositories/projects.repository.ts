@@ -26,7 +26,7 @@ export class ProjectsRepository {
   }
 
   findById(id: string): Promise<ProjectDocument | null> {
-    return this.projectModel.findById(id).exec();
+    return this.projectModel.findById(id).populate('creatorId', 'firstName lastName email').exec();
   }
 
   updateById(

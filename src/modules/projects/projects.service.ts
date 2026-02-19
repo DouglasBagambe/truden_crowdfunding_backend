@@ -32,7 +32,7 @@ import { RequestAttachmentDto } from './dto/request-attachment.dto';
 import { AttachmentFilesRepository } from './repositories/attachment-files.repository';
 import { UploadAttachmentDto } from './dto/upload-attachment.dto';
 import { StreamableFile } from '@nestjs/common';
-import { CharityDonationsRepository } from './repositories/charity-donations.repository';
+import { Types } from 'mongoose';
 type MulterFile = Express.Multer.File;
 
 const PUBLIC_STATUSES = [
@@ -90,7 +90,7 @@ export class ProjectsService {
       this.toOptionalString(dto.risks) ?? this.toOptionalString(dto.challenges);
 
     const project = await this.projectsRepo.create({
-      creatorId,
+      creatorId: new Types.ObjectId(creatorId),
       projectType,
       name: dto.name,
       summary: dto.summary,
