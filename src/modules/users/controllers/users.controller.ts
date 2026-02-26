@@ -9,7 +9,9 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '../../../common/swagger.decorators';
+import { ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { UsersService } from '../users.service';
+import { CustodialWalletService } from '../services/custodial-wallet.service';
 import { CreateUserDto } from '../dto/create-user.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { LinkWalletDto } from '../dto/link-wallet.dto';
@@ -32,13 +34,28 @@ import { CreateKycSessionDto } from '../dto/create-kyc-session.dto';
 @ApiBearerAuth()
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly custodialWalletService: CustodialWalletService,
+  ) { }
+
 
   @Post()
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.MANAGE_USERS)
   createUser(@Body() dto: CreateUserDto) {
     return this.usersService.createUser(dto);
+  }
+
+  @Get('me/wallet')
+  @ApiOperation({ summary: 'Get or create custodial wallet for current user' })
+  @ApiResponse({ status: 200, description: 'Custodial wallet address and NFTs' })
+  async getMyWallet(@CurrentUser('sub') userId: string) {
+    const wallet = await this.custodialWalletService.getOrCreateWallet(userId);
+    return {
+      custodialWalletAddress: wallet.address,
+      nfts: [], // NFT data populated by blockchain queries; empty by default until contract deployed
+    };
   }
 
   @Get('me')

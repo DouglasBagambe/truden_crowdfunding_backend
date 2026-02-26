@@ -9,8 +9,9 @@ import {
     Request,
     HttpCode,
     HttpStatus,
+    Query,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
 import { InitializePaymentDto } from './dto/initialize-payment.dto';
 import {
@@ -20,6 +21,7 @@ import {
     WalletInvestmentDto,
 } from './dto/wallet.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { PaymentMethod } from './schemas/payment-transaction.schema';
 
 @ApiTags('Payments')
 @Controller('payments')
@@ -56,6 +58,68 @@ export class PaymentsController {
         @Body() payload: any,
     ) {
         return this.paymentsService.handleWebhook(signature, payload);
+    }
+
+    // ─── DPO Pay Endpoints ──────────────────────────────────────
+    @Post('dpo/initialize')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth('JWT-auth')
+    @ApiOperation({ summary: 'Initialize a DPO payment (mobile money or card)' })
+    @ApiResponse({ status: 201, description: 'DPO payment initialized. Returns token + instructions.' })
+    @ApiBody({
+        schema: {
+            type: 'object',
+            required: ['projectId', 'amount', 'paymentMethod'],
+            properties: {
+                projectId: { type: 'string' },
+                amount: { type: 'number', example: 50000 },
+                currency: { type: 'string', example: 'UGX' },
+                paymentMethod: { type: 'string', enum: ['mobile_money', 'card'] },
+                phoneNumber: { type: 'string', example: '256701234567' },
+                mno: { type: 'string', enum: ['MTN', 'AIRTEL'] },
+            },
+        },
+    })
+    async initializeDPOPayment(
+        @Body() dto: {
+            projectId: string;
+            amount: number;
+            currency?: string;
+            paymentMethod: PaymentMethod;
+            phoneNumber?: string;
+            mno?: 'MTN' | 'AIRTEL';
+            card?: {
+                number: string;
+                expiryMonth: string;
+                expiryYear: string;
+                cvv: string;
+                holderName: string;
+            };
+        },
+        @Request() req: any,
+    ) {
+        return this.paymentsService.initializeDPOPayment(dto, req.user.userId ?? req.user.sub);
+    }
+
+    @Get('dpo/verify/:token')
+    @UseGuards(JwtAuthGuard)
+    @ApiBearerAuth('JWT-auth')
+    @ApiOperation({ summary: 'Poll DPO payment status (frontend polls this every 5s)' })
+    @ApiResponse({ status: 200, description: 'DPO payment verification result' })
+    async verifyDPOPayment(@Param('token') token: string) {
+        return this.paymentsService.verifyDPOPayment(token);
+    }
+
+    @Post('dpo/webhook')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'DPO BackURL / server-to-server webhook' })
+    @ApiResponse({ status: 200, description: 'Webhook processed' })
+    async handleDPOWebhook(
+        @Body() payload: Record<string, string>,
+        @Query() query: Record<string, string>,
+    ) {
+        // DPO can deliver as body OR query params — merge both
+        return this.paymentsService.handleDPOWebhook({ ...query, ...payload });
     }
 
     @Get('transaction/:id')

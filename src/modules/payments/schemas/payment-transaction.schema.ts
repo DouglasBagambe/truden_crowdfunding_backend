@@ -19,6 +19,7 @@ export enum PaymentMethod {
 export enum PaymentProvider {
     Flutterwave = 'flutterwave',
     Blockchain = 'blockchain',
+    DPO = 'dpo',
 }
 
 export enum MobileMoneyProvider {
@@ -81,6 +82,10 @@ export class PaymentTransaction {
 
     @Prop({ type: String })
     phoneNumber?: string;
+
+    // DPO specific fields
+    @Prop({ type: String, index: true })
+    dpoToken?: string;
 
     // Card specific
     @Prop({ type: String })

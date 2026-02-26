@@ -24,6 +24,8 @@ import {
     WalletInvestmentDto,
 } from './dto/wallet.dto';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { DpoService } from './dpo.service';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class PaymentsService {
@@ -35,7 +37,9 @@ export class PaymentsService {
         @InjectModel(Wallet.name)
         private walletModel: Model<WalletDocument>,
         private flutterwaveService: FlutterwaveService,
+        private dpoService: DpoService,
         private eventEmitter: EventEmitter2,
+        private configService: ConfigService,
     ) { }
 
     /**
@@ -388,4 +392,150 @@ export class PaymentsService {
 
         return transaction;
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // DPO Pay methods
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Initialize a DPO payment (step 1: get transaction token).
+     * Returns the token plus charge instructions when method=mobile_money.
+     */
+    async initializeDPOPayment(
+        dto: {
+            projectId: string;
+            amount: number;
+            currency?: string;
+            paymentMethod: PaymentMethod;
+            phoneNumber?: string;
+            mno?: 'MTN' | 'AIRTEL';
+            card?: {
+                number: string;
+                expiryMonth: string;
+                expiryYear: string;
+                cvv: string;
+                holderName: string;
+            };
+        },
+        userId: string,
+    ) {
+        const backendUrl = this.configService.get<string>('BACKEND_URL') ?? 'http://localhost:3000';
+        const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? 'http://localhost:3001';
+
+        const { token } = await this.dpoService.createToken(
+            dto.projectId,
+            dto.amount,
+            dto.currency ?? 'UGX',
+            `${backendUrl}/api/payments/dpo/webhook`,
+            `${frontendUrl}/dashboard?payment=success`,
+        );
+
+        const txRef = `DPO-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+        const transaction = await this.paymentTransactionModel.create({
+            userId: new Types.ObjectId(userId),
+            projectId: new Types.ObjectId(dto.projectId),
+            amount: dto.amount,
+            currency: dto.currency ?? 'UGX',
+            paymentMethod: dto.paymentMethod,
+            provider: PaymentProvider.DPO,
+            dpoToken: token,
+            flutterwaveReference: txRef, // reuse field as generic ref
+            phoneNumber: dto.phoneNumber,
+            status: PaymentStatus.Pending,
+        });
+
+        let instructions: string | null = null;
+
+        if (dto.paymentMethod === PaymentMethod.MobileMoney) {
+            if (!dto.phoneNumber || !dto.mno) {
+                throw new BadRequestException('Phone number and MNO required for mobile money');
+            }
+            const chargeResult = await this.dpoService.chargeTokenMobile(
+                token,
+                dto.phoneNumber,
+                dto.mno,
+            );
+            instructions = chargeResult.instructions;
+        } else if (dto.paymentMethod === PaymentMethod.Card && dto.card) {
+            const chargeResult = await this.dpoService.chargeTokenCreditCard(token, dto.card);
+            instructions = chargeResult.message;
+        }
+
+        this.logger.log(`DPO payment initialized for user ${userId}: token=${token}`);
+
+        return {
+            transactionId: transaction._id,
+            token,
+            instructions,
+            status: transaction.status,
+        };
+    }
+
+    /**
+     * Poll/verify a DPO payment by token (call from frontend while waiting).
+     */
+    async verifyDPOPayment(token: string) {
+        const transaction = await this.paymentTransactionModel.findOne({ dpoToken: token });
+        if (!transaction) throw new NotFoundException('DPO transaction not found');
+
+        const verify = await this.dpoService.verifyToken(token);
+
+        if (verify.status === '000' && transaction.status !== PaymentStatus.Successful) {
+            transaction.status = PaymentStatus.Successful;
+            transaction.completedAt = new Date();
+            await transaction.save();
+
+            this.eventEmitter.emit('payment.successful', {
+                transactionId: transaction._id,
+                userId: transaction.userId,
+                projectId: transaction.projectId,
+                amount: transaction.amount,
+                currency: transaction.currency,
+            });
+        } else if (verify.status !== '000' && verify.status !== 'pending') {
+            transaction.status = PaymentStatus.Failed;
+            transaction.failureReason = verify.message;
+            await transaction.save();
+        }
+
+        return { status: transaction.status, verify };
+    }
+
+    /**
+     * Handle DPO server-to-server webhook / BackURL callback.
+     */
+    async handleDPOWebhook(payload: Record<string, string>) {
+        const token = payload.TransactionToken ?? payload.token;
+        if (!token) return { received: true };
+
+        const transaction = await this.paymentTransactionModel.findOne({ dpoToken: token });
+        if (!transaction) {
+            this.logger.warn(`DPO webhook: no transaction for token ${token}`);
+            return { received: true };
+        }
+
+        // Verify with DPO before trusting the webhook payload
+        const verify = await this.dpoService.verifyToken(token);
+
+        if (verify.status === '000' && transaction.status !== PaymentStatus.Successful) {
+            transaction.status = PaymentStatus.Successful;
+            transaction.completedAt = new Date();
+            transaction.webhookData = payload;
+            await transaction.save();
+
+            this.eventEmitter.emit('payment.successful', {
+                transactionId: transaction._id,
+                userId: transaction.userId,
+                projectId: transaction.projectId,
+                amount: transaction.amount,
+                currency: transaction.currency,
+            });
+
+            this.logger.log(`DPO payment confirmed via webhook: ${token}`);
+        }
+
+        return { received: true };
+    }
 }
+

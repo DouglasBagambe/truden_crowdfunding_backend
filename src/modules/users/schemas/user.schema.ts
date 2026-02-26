@@ -297,6 +297,14 @@ export class User {
   @Prop({ default: null, select: false })
   nonce?: string;
 
+  /** Custodial EVM wallet address managed by the platform (public, safe to show) */
+  @Prop({ trim: true, lowercase: true })
+  custodialWalletAddress?: string;
+
+  /** AES-256-GCM encrypted private key for the custodial wallet – NEVER expose to clients */
+  @Prop({ trim: true, select: false })
+  custodialWalletKeyEncrypted?: string;
+
   @Prop({ type: UserProfile, default: {} })
   profile!: UserProfile;
 }

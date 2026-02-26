@@ -166,7 +166,7 @@ export class InvestmentsService {
     let txHash: string | null = null;
     let nftId: string | null = null;
 
-    if (!investmentsTestMode) {
+    if (!investmentsTestMode && !kycBypass) {
       txHash = await this.simulateEscrowDeposit(
         dto.projectOnchainId ?? dto.projectId,
         walletAddress as string,

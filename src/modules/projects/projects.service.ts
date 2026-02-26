@@ -1,20 +1,21 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
-  ForbiddenException,
 } from '@nestjs/common';
-import { startSession } from 'mongoose';
+import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
-import { ProjectStatus } from '../../common/enums/project-status.enum';
-import { MilestoneStatus } from '../../common/enums/milestone-status.enum';
+import type { FilterQuery } from 'mongoose';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { QueryProjectsDto } from './dto/query-projects.dto';
 import { ProjectDecisionDto } from './dto/decision.dto';
 import { ProjectsRepository } from './repositories/projects.repository';
 import { MilestonesRepository } from './repositories/milestones.repository';
-import { ProjectDocument } from './schemas/project.schema';
+import type { ProjectDocument } from './schemas/project.schema';
+import { ProjectStatus } from '../../common/enums/project-status.enum';
+import { MilestoneStatus } from '../../common/enums/milestone-status.enum';
 import { ProjectType } from '../../common/enums/project-type.enum';
 import { AgreementRuleDto } from './dto/agreement-rule.dto';
 import { CharityCategory } from '../../common/enums/charity-category.enum';
@@ -55,6 +56,7 @@ export class ProjectsService {
     private readonly projectsRepo: ProjectsRepository,
     private readonly milestonesRepo: MilestonesRepository,
     private readonly usersRepo: UsersRepository,
+    private readonly configService: ConfigService,
     private readonly agreementTemplatesService: AgreementTemplatesService,
     private readonly attachmentRequirementsService: AttachmentRequirementsService,
     private readonly attachmentFilesRepo: AttachmentFilesRepository,
@@ -554,8 +556,17 @@ export class ProjectsService {
     if (!project) {
       throw new NotFoundException('Project not found');
     }
-    if (project.status !== ProjectStatus.FUNDING) {
-      throw new BadRequestException('Project is not accepting investments');
+
+    const investmentsTestMode =
+      String(this.configService.get('INVESTMENTS_TEST_MODE') ?? '').toLowerCase() ===
+      'true';
+    const kycBypass =
+      String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() === 'true';
+
+    if (!investmentsTestMode && !kycBypass) {
+      if (project.status !== ProjectStatus.FUNDING) {
+        throw new BadRequestException('Project is not accepting investments');
+      }
     }
     const target = project.targetAmount || 0;
     if (target <= 0) {
