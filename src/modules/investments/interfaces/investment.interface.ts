@@ -17,6 +17,7 @@ export interface InvestmentViewProject {
   id: string;
   title?: string;
   category?: string;
+  type?: string;
   creatorId?: string;
 }
 

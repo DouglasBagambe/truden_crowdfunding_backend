@@ -45,7 +45,7 @@ export class UsersService {
     private readonly configService: ConfigService,
     private readonly auditService: AuditService,
     private readonly http: HttpService,
-  ) {}
+  ) { }
 
   async createUser(dto: CreateUserDto) {
     const primaryWallet = dto.primaryWallet?.toLowerCase();
@@ -122,6 +122,10 @@ export class UsersService {
     const setPayload: Record<string, unknown> = {};
     if (dto.displayName !== undefined)
       setPayload['profile.displayName'] = dto.displayName;
+    if (dto.firstName !== undefined)
+      setPayload['profile.firstName'] = dto.firstName;
+    if (dto.lastName !== undefined)
+      setPayload['profile.lastName'] = dto.lastName;
     if (dto.email !== undefined) setPayload['email'] = dto.email.toLowerCase();
     if (dto.avatarUrl !== undefined)
       setPayload['profile.avatarUrl'] = dto.avatarUrl;
@@ -315,13 +319,13 @@ export class UsersService {
           dateOfBirth: dob ? new Date(dob).toISOString() : null,
           homeAddress: address
             ? {
-                line1: address?.Street || address?.line1,
-                line2: address?.line2,
-                city: address?.City || address?.city,
-                state: address?.State || address?.state,
-                postalCode: address?.PostalCode || address?.postalCode,
-                country: address?.Country || address?.country,
-              }
+              line1: address?.Street || address?.line1,
+              line2: address?.line2,
+              city: address?.City || address?.city,
+              state: address?.State || address?.state,
+              postalCode: address?.PostalCode || address?.postalCode,
+              country: address?.Country || address?.country,
+            }
             : null,
           documentType: undefined,
           documentCountry: undefined,

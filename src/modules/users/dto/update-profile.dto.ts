@@ -9,6 +9,18 @@ export class UpdateProfileDto {
   @Length(2, 64)
   displayName?: string;
 
+  @ApiPropertyOptional({ minLength: 2, maxLength: 64 })
+  @IsOptional()
+  @IsString()
+  @Length(2, 64)
+  firstName?: string;
+
+  @ApiPropertyOptional({ minLength: 2, maxLength: 64 })
+  @IsOptional()
+  @IsString()
+  @Length(2, 64)
+  lastName?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsEmail()

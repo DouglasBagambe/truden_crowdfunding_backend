@@ -89,7 +89,7 @@ export class InvestmentsService {
     private readonly escrowService: EscrowService,
     private readonly projectsService: ProjectsService,
     private readonly configService: ConfigService,
-  ) {}
+  ) { }
 
   private parseObjectId(id: string, fieldName: string): Types.ObjectId {
     if (!Types.ObjectId.isValid(id)) {
@@ -263,17 +263,23 @@ export class InvestmentsService {
     const investments = await this.investmentModel
       .find({ investorId: investorObjectId })
       .sort({ createdAt: -1 })
+      .populate('projectId')
       .exec();
 
     const investorProfile = await this.safeLoadAuthUser(userId);
 
-    return investments.map((investment) =>
-      this.toView(investment, {
+    return investments.map((investment: any) => {
+      const project = investment.projectId;
+      return this.toView(investment, {
         investorWallet: investorProfile?.walletAddress,
         investorKyc: investorProfile?.kycStatus,
+        projectTitle: project?.title || project?.name,
+        projectCategory: project?.category,
+        projectType: project?.projectType || project?.type,
+        projectCreatorId: project?.creatorId?.toString(),
         nftMetadata: null,
-      }),
-    );
+      });
+    });
   }
 
   async getInvestmentsByProject(
@@ -495,12 +501,12 @@ export class InvestmentsService {
     }
 
     const value = BigInt(Math.floor(amount * 1e18));
-    
+
     // If projectOnchainId is a simple number string (e.g. "0", "1"), use it directly.
     // Otherwise fallback to hash (for testing/legacy).
     const isNumeric = /^\d+$/.test(projectOnchainId);
-    const numericProjectId = isNumeric 
-      ? BigInt(projectOnchainId) 
+    const numericProjectId = isNumeric
+      ? BigInt(projectOnchainId)
       : BigInt('0x' + projectOnchainId.substring(0, 12));
 
     // const hash: Hash = await walletClient.writeContract({
@@ -529,8 +535,8 @@ export class InvestmentsService {
 
     const projectIdStr = investment.projectId.toHexString();
     const isNumeric = /^\d+$/.test(projectIdStr);
-    const numericProjectId = isNumeric 
-      ? BigInt(projectIdStr) 
+    const numericProjectId = isNumeric
+      ? BigInt(projectIdStr)
       : BigInt('0x' + projectIdStr.substring(0, 12));
 
     const hash: Hash = await walletClient.writeContract({
@@ -592,6 +598,7 @@ export class InvestmentsService {
       investorKyc?: KYCStatus;
       projectTitle?: string;
       projectCategory?: string;
+      projectType?: string;
       projectCreatorId?: string;
       nftMetadata?: Record<string, unknown> | null;
     },
@@ -614,9 +621,10 @@ export class InvestmentsService {
       createdAt,
       updatedAt,
       project: {
-        id: investment.projectId.toHexString(),
+        id: investment.projectId.toHexString ? investment.projectId.toHexString() : String(investment.projectId),
         title: options?.projectTitle,
         category: options?.projectCategory,
+        type: options?.projectType,
         creatorId: options?.projectCreatorId,
       },
       investor: {
