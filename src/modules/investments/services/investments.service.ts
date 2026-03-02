@@ -610,25 +610,29 @@ export class InvestmentsService {
       (investment as InvestmentDocument & { updatedAt?: Date }).updatedAt ??
       createdAt;
 
+    const projectDoc = investment.projectId as any;
+    const projectIdString = projectDoc?._id ? projectDoc._id.toString() : String(investment.projectId);
+    const investorIdString = (investment.investorId as any)?._id ? (investment.investorId as any)._id.toString() : String(investment.investorId);
+
     return {
-      id: investment._id.toHexString(),
-      projectId: investment.projectId.toHexString(),
-      investorId: investment.investorId.toHexString(),
-      amount: investment.amount,
+      id: investment._id ? investment._id.toString() : (investment as any).id,
+      projectId: projectIdString,
+      investorId: investorIdString,
+      amount: Number(investment.amount),
       txHash: investment.txHash ?? null,
       nftId: investment.nftId ?? null,
       status: investment.status,
       createdAt,
       updatedAt,
       project: {
-        id: investment.projectId.toHexString ? investment.projectId.toHexString() : String(investment.projectId),
-        title: options?.projectTitle,
-        category: options?.projectCategory,
-        type: options?.projectType,
-        creatorId: options?.projectCreatorId,
+        id: projectIdString,
+        title: options?.projectTitle || projectDoc?.title || projectDoc?.name,
+        category: options?.projectCategory || projectDoc?.category,
+        type: options?.projectType || projectDoc?.projectType || projectDoc?.type,
+        creatorId: options?.projectCreatorId || projectDoc?.creatorId?.toString(),
       },
       investor: {
-        id: investment.investorId.toHexString(),
+        id: investorIdString,
         walletAddress: options?.investorWallet,
         kycStatus: options?.investorKyc,
       },

@@ -5,8 +5,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Types } from 'mongoose';
-import type { FilterQuery } from 'mongoose';
+import { Model, Types } from 'mongoose';
+import { InjectModel } from '@nestjs/mongoose';
+import { Investment, InvestmentDocument } from '../investments/schemas/investment.schema';
+import { InvestmentStatus } from '../investments/interfaces/investment.interface';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { QueryProjectsDto } from './dto/query-projects.dto';
@@ -60,6 +62,8 @@ export class ProjectsService {
     private readonly agreementTemplatesService: AgreementTemplatesService,
     private readonly attachmentRequirementsService: AttachmentRequirementsService,
     private readonly attachmentFilesRepo: AttachmentFilesRepository,
+    @InjectModel(Investment.name)
+    private readonly investmentModel: Model<InvestmentDocument>,
   ) { }
 
   async findByOnchainId(projectOnchainId: string) {
@@ -72,7 +76,7 @@ export class ProjectsService {
 
   async createProject(creatorId: string, dto: CreateProjectDto) {
     const projectType: ProjectType | undefined =
-      dto.type ?? (dto as unknown as { projectType?: ProjectType }).projectType;
+      (dto.type ?? (dto as any).projectType ?? (dto.category ? ProjectType.CHARITY : (dto.industry ? ProjectType.ROI : undefined)));
 
     this.validateProjectType(
       { ...dto, type: projectType },
@@ -590,6 +594,7 @@ export class ProjectsService {
   async incrementCharityDonation(
     projectId: string,
     amount: number,
+    userId?: string,
     donorName?: string,
     message?: string,
   ) {
@@ -619,13 +624,15 @@ export class ProjectsService {
       $inc: { raisedAmount: amount, backerCount: 1 },
     });
 
-    // TODO: Re-implement when charityDonationsRepo is available
-    // await this.charityDonationsRepo.create({
-    //   projectId: new Types.ObjectId(projectId),
-    //   amount,
-    //   donorName: normalizedDonorName,
-    //   message: message?.trim() ? message.trim() : null,
-    // });
+    if (userId) {
+      await this.investmentModel.create({
+        projectId: project._id,
+        investorId: new Types.ObjectId(userId),
+        amount: amount,
+        status: InvestmentStatus.Active,
+        txHash: null,
+      });
+    }
 
     return this.getProjectWithMilestones(projectId);
   }

@@ -39,10 +39,14 @@ import {
 } from './schemas/agreement-template.schema';
 import { CharityDonationsRepository } from './repositories/charity-donations.repository';
 
+import { Investment, InvestmentSchema } from '../investments/schemas/investment.schema';
+import { InvestmentStatus } from '../investments/interfaces/investment.interface';
+
 @Module({
   imports: [
     UsersModule,
     MongooseModule.forFeature([
+      { name: Investment.name, schema: InvestmentSchema },
       {
         name: Project.name,
         schema: ProjectSchema,
@@ -88,4 +92,4 @@ import { CharityDonationsRepository } from './repositories/charity-donations.rep
     AttachmentFilesRepository,
   ],
 })
-export class ProjectsModule {}
+export class ProjectsModule { }

@@ -104,11 +104,16 @@ export class ProjectsController {
 
   @Public()
   @Post(':id/donate')
-  donateToCharity(@Param('id') id: string, @Body() dto: CreateCharityDonationDto) {
+  donateToCharity(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @Body() dto: CreateCharityDonationDto
+  ) {
     const amount = Number(dto.amount);
     return this.projectsService.incrementCharityDonation(
       id,
       amount,
+      userId,
       dto.donorName,
       dto.message,
     );
