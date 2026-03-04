@@ -32,5 +32,5 @@ COPY --from=builder /app/dist ./dist
 # Expose the port NestJS listens on
 EXPOSE 3000
 
-# Start
-CMD ["node", "dist/main"]
+# Start — NestJS compiles into dist/src/main.js
+CMD ["node", "dist/src/main"]
