@@ -18,6 +18,7 @@ export interface PaymentSuccessfulPayload {
     projectId: Types.ObjectId | string;
     amount: number;
     currency: string;
+    projectType?: string; // 'CHARITY' | 'ROI'
 }
 
 @Injectable()
@@ -68,9 +69,22 @@ export class PaymentInvestmentListener {
 
             this.logger.log(`Investment created: ${investment._id}`);
 
-            // 3. Increment project funding
+            // 3. Increment project funding (look up project type from transaction metadata)
             try {
-                await this.projectsService.incrementFunding(projectId, payload.amount);
+                const tx = await this.paymentTransactionModel.findById(transactionId).lean();
+                const projectType = (payload.projectType
+                    || (tx?.metadata as any)?.projectType
+                    || '').toString().toUpperCase();
+
+                if (projectType === 'CHARITY') {
+                    await this.projectsService.incrementCharityDonation(
+                        projectId,
+                        payload.amount,
+                        userId, // track the donor
+                    );
+                } else {
+                    await this.projectsService.incrementFunding(projectId, payload.amount);
+                }
             } catch (err: any) {
                 this.logger.warn(`Failed to increment project funding: ${err.message}`);
             }
