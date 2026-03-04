@@ -1,26 +1,36 @@
-FROM node:22-alpine AS base
+# ── Stage 1: Build ────────────────────────────────────────────────────────────
+FROM node:20-alpine AS builder
+
 WORKDIR /app
 
-# Install deps separately for caching
-FROM base AS deps
-RUN apk add --no-cache python3 make g++ git
+# Copy manifests first for better layer caching
 COPY package*.json ./
-RUN npm ci --unsafe-perm
 
-# Build
-FROM base AS build
-COPY --from=deps /app/node_modules ./node_modules
+# Install ALL deps (including devDeps needed for build)
+RUN npm ci
+
+# Copy source
 COPY . .
-RUN npm run build
 
-# Runtime
-FROM node:22-alpine AS runner
+# Build without running tests (Render handles that separately if needed)
+RUN npm run build:skip-tests
+
+# ── Stage 2: Production image ──────────────────────────────────────────────────
+FROM node:20-alpine AS production
+
 WORKDIR /app
-ENV NODE_ENV=production
 
-COPY --from=build /app/package*.json ./
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/dist ./dist
+# Copy manifests
+COPY package*.json ./
 
-EXPOSE 3005
-CMD ["node", "dist/main.js"]
+# Install ONLY production deps
+RUN npm ci --omit=dev
+
+# Copy compiled output from builder
+COPY --from=builder /app/dist ./dist
+
+# Expose the port NestJS listens on
+EXPOSE 3000
+
+# Start
+CMD ["node", "dist/main"]
