@@ -409,66 +409,56 @@ export class PaymentsService {
             paymentMethod: PaymentMethod;
             phoneNumber?: string;
             mno?: 'MTN' | 'AIRTEL';
-            card?: {
-                number: string;
-                expiryMonth: string;
-                expiryYear: string;
-                cvv: string;
-                holderName: string;
-            };
+            description?: string;
+            projectType?: string; // 'CHARITY' | 'ROI'
         },
         userId: string,
     ) {
-        const backendUrl = this.configService.get<string>('BACKEND_URL') ?? 'http://localhost:3000';
-        const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? 'http://localhost:3001';
+        const backendUrl = this.configService.get<string>('BACKEND_URL') ?? 'https://trufund.onrender.com';
+        const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? 'https://trufund.netlify.app';
+
+        const currency = dto.currency ?? 'UGX';
+        const isCharity = (dto.projectType ?? '').toUpperCase() === 'CHARITY';
+        const description = dto.description
+            ?? (isCharity ? 'Donation to charity project - TruFund' : 'Investment in ROI project - TruFund');
+
+        // RedirectURL: user lands here after paying (success)
+        const redirectUrl = `${frontendUrl}/payment/result?status=success&projectId=${dto.projectId}`;
+        // BackURL: DPO pings this as server-to-server webhook AND sends user here on cancel
+        const backUrl = `${backendUrl}/api/payments/dpo/webhook`;
 
         const { token } = await this.dpoService.createToken(
             dto.projectId,
             dto.amount,
-            dto.currency ?? 'UGX',
-            `${backendUrl}/api/payments/dpo/webhook`,
-            `${frontendUrl}/dashboard?payment=success`,
+            currency,
+            backUrl,
+            redirectUrl,
+            description,
         );
 
         const txRef = `DPO-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-        const transaction = await this.paymentTransactionModel.create({
+        await this.paymentTransactionModel.create({
             userId: new Types.ObjectId(userId),
             projectId: new Types.ObjectId(dto.projectId),
             amount: dto.amount,
-            currency: dto.currency ?? 'UGX',
+            currency,
             paymentMethod: dto.paymentMethod,
             provider: PaymentProvider.DPO,
             dpoToken: token,
-            flutterwaveReference: txRef, // reuse field as generic ref
+            flutterwaveReference: txRef,
             phoneNumber: dto.phoneNumber,
             status: PaymentStatus.Pending,
+            metadata: { projectType: dto.projectType, description },
         });
 
-        let instructions: string | null = null;
+        this.logger.log(`DPO payment token created for user ${userId}: token=${token}`);
 
-        if (dto.paymentMethod === PaymentMethod.MobileMoney) {
-            if (!dto.phoneNumber || !dto.mno) {
-                throw new BadRequestException('Phone number and MNO required for mobile money');
-            }
-            const chargeResult = await this.dpoService.chargeTokenMobile(
-                token,
-                dto.phoneNumber,
-                dto.mno,
-            );
-            instructions = chargeResult.instructions;
-        } else if (dto.paymentMethod === PaymentMethod.Card && dto.card) {
-            const chargeResult = await this.dpoService.chargeTokenCreditCard(token, dto.card);
-            instructions = chargeResult.message;
-        }
-
-        this.logger.log(`DPO payment initialized for user ${userId}: token=${token}`);
-
+        // Return the DPO hosted payment page URL — frontend redirects user here
         return {
-            transactionId: transaction._id,
             token,
-            instructions,
-            status: transaction.status,
+            redirectUrl: `https://secure.3gdirectpay.com/payv3.php?ID=${token}`,
+            status: PaymentStatus.Pending,
         };
     }
 

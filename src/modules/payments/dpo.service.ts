@@ -104,13 +104,13 @@ export class DpoService {
                 RedirectURL: redirectUrl,
                 BackURL: backUrl,
                 CompanyRefUnique: 0,
-                PTL: 5, // Payment time limit in minutes
+                PTL: 60, // 60 minute payment time limit
                 PaymentDate: paymentDate,
                 Description: description,
             },
             Services: {
                 Service: {
-                    ServiceType: '3854', // Investments / financial services
+                    ServiceType: '104563', // Live: Web Services (Truden Tech)
                     ServiceDescription: description,
                     ServiceDate: paymentDate,
                 },

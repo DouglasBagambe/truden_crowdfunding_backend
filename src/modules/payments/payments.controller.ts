@@ -60,41 +60,19 @@ export class PaymentsController {
         return this.paymentsService.handleWebhook(signature, payload);
     }
 
-    // ─── DPO Pay Endpoints ──────────────────────────────────────
     @Post('dpo/initialize')
     @UseGuards(JwtAuthGuard)
     @ApiBearerAuth('JWT-auth')
-    @ApiOperation({ summary: 'Initialize a DPO payment (mobile money or card)' })
-    @ApiResponse({ status: 201, description: 'DPO payment initialized. Returns token + instructions.' })
-    @ApiBody({
-        schema: {
-            type: 'object',
-            required: ['projectId', 'amount', 'paymentMethod'],
-            properties: {
-                projectId: { type: 'string' },
-                amount: { type: 'number', example: 50000 },
-                currency: { type: 'string', example: 'UGX' },
-                paymentMethod: { type: 'string', enum: ['mobile_money', 'card'] },
-                phoneNumber: { type: 'string', example: '256701234567' },
-                mno: { type: 'string', enum: ['MTN', 'AIRTEL'] },
-            },
-        },
-    })
+    @ApiOperation({ summary: 'Create DPO payment token — returns redirect URL to DPO hosted payment page' })
+    @ApiResponse({ status: 201, description: 'Returns token + redirectUrl. Frontend should window.location.href to redirectUrl.' })
     async initializeDPOPayment(
         @Body() dto: {
             projectId: string;
             amount: number;
             currency?: string;
             paymentMethod: PaymentMethod;
-            phoneNumber?: string;
-            mno?: 'MTN' | 'AIRTEL';
-            card?: {
-                number: string;
-                expiryMonth: string;
-                expiryYear: string;
-                cvv: string;
-                holderName: string;
-            };
+            projectType?: string;
+            description?: string;
         },
         @Request() req: any,
     ) {
@@ -104,22 +82,30 @@ export class PaymentsController {
     @Get('dpo/verify/:token')
     @UseGuards(JwtAuthGuard)
     @ApiBearerAuth('JWT-auth')
-    @ApiOperation({ summary: 'Poll DPO payment status (frontend polls this every 5s)' })
-    @ApiResponse({ status: 200, description: 'DPO payment verification result' })
+    @ApiOperation({ summary: 'Verify DPO payment status by token' })
     async verifyDPOPayment(@Param('token') token: string) {
         return this.paymentsService.verifyDPOPayment(token);
     }
 
     @Post('dpo/webhook')
     @HttpCode(HttpStatus.OK)
-    @ApiOperation({ summary: 'DPO BackURL / server-to-server webhook' })
-    @ApiResponse({ status: 200, description: 'Webhook processed' })
+    @ApiOperation({ summary: 'DPO server-to-server IPN (POST)' })
     async handleDPOWebhook(
         @Body() payload: Record<string, string>,
         @Query() query: Record<string, string>,
     ) {
-        // DPO can deliver as body OR query params — merge both
         return this.paymentsService.handleDPOWebhook({ ...query, ...payload });
+    }
+
+    @Get('dpo/webhook')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'DPO BackURL redirect handler (GET — used when user cancels)' })
+    async handleDPOWebhookGet(@Query() query: Record<string, string>) {
+        // When user cancels, DPO GET-redirects to BackURL with ?TransactionToken=XXX
+        await this.paymentsService.handleDPOWebhook(query).catch(() => null);
+        // Redirect user back to frontend cancel page
+        const frontendUrl = 'https://trufund.netlify.app';
+        return { redirect: `${frontendUrl}/payment/result?status=cancelled` };
     }
 
     @Get('transaction/:id')
