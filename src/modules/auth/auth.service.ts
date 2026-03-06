@@ -628,7 +628,7 @@ export class AuthService {
     }
     const secret = speakeasy.generateSecret({
       length: 20,
-      name: `Truden (${user.email ?? userId})`,
+      name: `Keibo (${user.email ?? userId})`,
     });
     user.mfa = {
       ...(user.mfa || {}),
@@ -899,12 +899,12 @@ export class AuthService {
       ? `${verifyUrl}?code=${encodeURIComponent(code)}&email=${encodeURIComponent(email)}`
       : undefined;
     const text = verificationLink
-      ? `Welcome to Truden.\n\nPlease verify your email by opening this link: ${verificationLink}\nIf you did not request this, you can ignore this email.`
-      : `Welcome to Truden.\n\nYour verification code: ${code}\nSubmit it to /auth/verify-email along with your email to activate your account.`;
+      ? `Welcome to Keibo.\n\nPlease verify your email by opening this link: ${verificationLink}\nIf you did not request this, you can ignore this email.`
+      : `Welcome to Keibo.\n\nYour verification code: ${code}\nSubmit it to /auth/verify-email along with your email to activate your account.`;
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; background: #f7f9fb; border: 1px solid #e5e8ec; border-radius: 12px;">
         <div style="text-align: center; margin-bottom: 16px;">
-          <div style="font-size: 20px; font-weight: 700; color: #0f1f38;">Truden</div>
+          <div style="font-size: 20px; font-weight: 700; color: #0f1f38;">Keibo</div>
           <div style="font-size: 13px; color: #607087;">Crowdfunding Platform</div>
         </div>
         <div style="background: #ffffff; padding: 20px; border-radius: 10px; border: 1px solid #eef1f5;">
@@ -975,7 +975,7 @@ export class AuthService {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; background: #f7f9fb; border: 1px solid #e5e8ec; border-radius: 12px;">
         <div style="text-align: center; margin-bottom: 16px;">
-          <div style="font-size: 20px; font-weight: 700; color: #0f1f38;">Truden</div>
+          <div style="font-size: 20px; font-weight: 700; color: #0f1f38;">Keibo</div>
           <div style="font-size: 13px; color: #607087;">Crowdfunding Platform</div>
         </div>
         <div style="background: #ffffff; padding: 20px; border-radius: 10px; border: 1px solid #eef1f5;">

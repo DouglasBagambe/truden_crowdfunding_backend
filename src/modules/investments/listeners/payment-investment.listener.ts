@@ -81,6 +81,7 @@ export class PaymentInvestmentListener {
                         projectId,
                         payload.amount,
                         userId, // track the donor
+                        (tx?.metadata as any)?.donorName, // donor name
                     );
                 } else {
                     await this.projectsService.incrementFunding(projectId, payload.amount);

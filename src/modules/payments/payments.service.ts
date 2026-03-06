@@ -411,16 +411,17 @@ export class PaymentsService {
             mno?: 'MTN' | 'AIRTEL';
             description?: string;
             projectType?: string; // 'CHARITY' | 'ROI'
+            donorName?: string;
         },
         userId: string,
     ) {
-        const backendUrl = this.configService.get<string>('BACKEND_URL') ?? 'https://trufund.onrender.com';
-        const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? 'https://trufund.netlify.app';
+        const backendUrl = this.configService.get<string>('BACKEND_URL') ?? 'https://keibo.onrender.com';
+        const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? 'https://keibo.netlify.app';
 
         const currency = dto.currency ?? 'UGX';
         const isCharity = (dto.projectType ?? '').toUpperCase() === 'CHARITY';
         const description = dto.description
-            ?? (isCharity ? 'Donation to charity project - TruFund' : 'Investment in ROI project - TruFund');
+            ?? (isCharity ? 'Donation to charity project - Keibo' : 'Investment in ROI project - Keibo');
 
         // RedirectURL: user lands here after paying (success)
         const redirectUrl = `${frontendUrl}/payment/result?status=success&projectId=${dto.projectId}`;
@@ -449,7 +450,11 @@ export class PaymentsService {
             flutterwaveReference: txRef,
             phoneNumber: dto.phoneNumber,
             status: PaymentStatus.Pending,
-            metadata: { projectType: dto.projectType, description },
+            metadata: {
+                projectType: dto.projectType,
+                description,
+                donorName: dto.donorName
+            },
         });
 
         this.logger.log(`DPO payment token created for user ${userId}: token=${token}`);

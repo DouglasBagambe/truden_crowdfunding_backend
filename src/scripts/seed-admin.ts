@@ -17,7 +17,7 @@ async function seedAdmin() {
   await connect(mongoUri);
   const UserModel = connection.model(User.name, UserSchema);
 
-  const email = (process.env.ADMIN_EMAIL || 'admin@truden.net').toLowerCase();
+  const email = (process.env.ADMIN_EMAIL || 'admin@keibo.net').toLowerCase();
   const password = process.env.ADMIN_PASSWORD || 'F13ryl10n!';
   const firstName = process.env.ADMIN_FIRST_NAME || 'Admin';
   const lastName = process.env.ADMIN_LAST_NAME || 'User';

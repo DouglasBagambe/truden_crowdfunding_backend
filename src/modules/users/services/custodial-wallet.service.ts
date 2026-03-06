@@ -41,7 +41,7 @@ export class CustodialWalletService {
             );
         }
         // Derive a 32-byte key regardless of input length
-        const raw = keyHex || 'truden-crowdfunding-default-dev-key-unsafe';
+        const raw = keyHex || 'keibo-crowdfunding-default-dev-key-unsafe';
         this.masterKey = crypto.createHash('sha256').update(raw).digest();
     }
 

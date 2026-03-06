@@ -82,25 +82,24 @@ export class DpoService {
         currency = 'UGX',
         backUrl: string,
         redirectUrl: string,
-        description = 'Investment via Truden',
+        description = 'Investment via Keibo',
     ): Promise<DpoCreateTokenResult> {
         if (!this.isConfigured) {
             throw new BadRequestException('DPO payment gateway is not configured');
         }
 
         const now = new Date();
-        const paymentDate = now
-            .toISOString()
-            .replace(/[-:]/g, '')
-            .replace('T', ' ')
-            .slice(0, 17);
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const paymentDate =
+            `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+            ` ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
 
         const xml = this.buildXml({
             Request: 'createToken',
             Transaction: {
                 PaymentAmount: amount.toFixed(2),
                 PaymentCurrency: currency,
-                CompanyRef: `TRUDEN-${projectId}-${Date.now()}`,
+                CompanyRef: `KEIBO-${projectId}-${Date.now()}`,
                 RedirectURL: redirectUrl,
                 BackURL: backUrl,
                 CompanyRefUnique: 0,
@@ -110,7 +109,7 @@ export class DpoService {
             },
             Services: {
                 Service: {
-                    ServiceType: '104563', // Live: Web Services (Truden Tech)
+                    ServiceType: '104563', // Live: Web Services (Keibo Tech)
                     ServiceDescription: description,
                     ServiceDate: paymentDate,
                 },

@@ -10,10 +10,13 @@ import {
     HttpCode,
     HttpStatus,
     Query,
+    Logger,
+    HttpException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
 import { InitializePaymentDto } from './dto/initialize-payment.dto';
+import { InitializeDPOPaymentDto } from './dto/initialize-dpo-payment.dto';
 import {
     DepositToWalletDto,
     WithdrawFromWalletDto,
@@ -26,6 +29,7 @@ import { PaymentMethod } from './schemas/payment-transaction.schema';
 @ApiTags('Payments')
 @Controller('payments')
 export class PaymentsController {
+    private readonly logger = new Logger(PaymentsController.name);
     constructor(private readonly paymentsService: PaymentsService) { }
 
     @Post('initialize')
@@ -66,17 +70,21 @@ export class PaymentsController {
     @ApiOperation({ summary: 'Create DPO payment token — returns redirect URL to DPO hosted payment page' })
     @ApiResponse({ status: 201, description: 'Returns token + redirectUrl. Frontend should window.location.href to redirectUrl.' })
     async initializeDPOPayment(
-        @Body() dto: {
-            projectId: string;
-            amount: number;
-            currency?: string;
-            paymentMethod: PaymentMethod;
-            projectType?: string;
-            description?: string;
-        },
+        @Body() dto: InitializeDPOPaymentDto,
         @Request() req: any,
     ) {
-        return this.paymentsService.initializeDPOPayment(dto, req.user.userId ?? req.user.sub);
+        try {
+            return await this.paymentsService.initializeDPOPayment(
+                { ...dto, paymentMethod: dto.paymentMethod ?? PaymentMethod.Card },
+                req.user.userId ?? req.user.sub,
+            );
+        } catch (err: any) {
+            this.logger.error('DPO initialize error:', err?.message, err?.stack);
+            throw new HttpException(
+                err?.message || 'Failed to initialize DPO payment',
+                err?.status ?? 500,
+            );
+        }
     }
 
     @Get('dpo/verify/:token')
@@ -104,7 +112,7 @@ export class PaymentsController {
         // When user cancels, DPO GET-redirects to BackURL with ?TransactionToken=XXX
         await this.paymentsService.handleDPOWebhook(query).catch(() => null);
         // Redirect user back to frontend cancel page
-        const frontendUrl = 'https://trufund.netlify.app';
+        const frontendUrl = 'https://keibo.netlify.app';
         return { redirect: `${frontendUrl}/payment/result?status=cancelled` };
     }
 
