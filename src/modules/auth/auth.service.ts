@@ -706,6 +706,7 @@ export class AuthService {
       roles,
       permissions,
       jti,
+      emailVerified: !!user.emailVerifiedAt,
     };
 
     const accessExpiresIn = (this.configService.get<string>('JWT_EXPIRY') ||

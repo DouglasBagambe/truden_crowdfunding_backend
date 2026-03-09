@@ -25,6 +25,7 @@ import {
 } from './dto/wallet.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PaymentMethod } from './schemas/payment-transaction.schema';
+import { EmailVerifiedGuard } from '../../common/guards/email-verified.guard';
 
 @ApiTags('Payments')
 @Controller('payments')
@@ -65,7 +66,7 @@ export class PaymentsController {
     }
 
     @Post('dpo/initialize')
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, EmailVerifiedGuard)
     @ApiBearerAuth('JWT-auth')
     @ApiOperation({ summary: 'Create DPO payment token — returns redirect URL to DPO hosted payment page' })
     @ApiResponse({ status: 201, description: 'Returns token + redirectUrl. Frontend should window.location.href to redirectUrl.' })
@@ -173,6 +174,7 @@ export class WalletController {
     }
 
     @Post('withdraw')
+    @UseGuards(EmailVerifiedGuard)
     @ApiOperation({ summary: 'Withdraw from wallet' })
     @ApiResponse({ status: 201, description: 'Withdrawal initiated' })
     async withdraw(@Body() dto: WithdrawFromWalletDto, @Request() req: any) {

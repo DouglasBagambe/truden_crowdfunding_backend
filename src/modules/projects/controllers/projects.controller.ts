@@ -6,6 +6,7 @@ import {
   Post,
   Put,
   Query,
+  UseGuards,
   UseInterceptors,
   UploadedFile,
 } from '@nestjs/common';
@@ -21,6 +22,7 @@ import { UploadAttachmentDto } from '../dto/upload-attachment.dto';
 import { CreateCharityDonationDto } from '../dto/create-charity-donation.dto';
 import { ProjectsService } from '../projects.service';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { EmailVerifiedGuard } from '../../../common/guards/email-verified.guard';
 type MulterFile = Express.Multer.File;
 
 @ApiTags('Projects')
@@ -31,6 +33,7 @@ export class ProjectsController {
   // ── Static / non-parameterized routes FIRST ──────────────────────────────
 
   @Post()
+  @UseGuards(EmailVerifiedGuard)
   createProject(
     @CurrentUser('sub') creatorId: string,
     @Body() dto: CreateProjectDto,
@@ -75,6 +78,7 @@ export class ProjectsController {
   }
 
   @Post(':id/submit')
+  @UseGuards(EmailVerifiedGuard)
   submitProject(
     @Param('id') id: string,
     @CurrentUser('sub') creatorId: string,
