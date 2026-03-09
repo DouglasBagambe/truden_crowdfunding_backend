@@ -913,13 +913,19 @@ export class AuthService {
           <p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">
             Thanks for signing up. Please confirm your email to secure your account and continue.
           </p>
+          
+          <p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">Your 6-digit verification code is:</p>
+          <div style="padding: 16px; margin-bottom: 24px; background: #f0f4ff; border-radius: 8px; font-family: monospace; font-size: 24px; font-weight: 700; letter-spacing: 4px; color: #0f1f38; text-align:center;">
+             ${code}
+          </div>
+
           ${verificationLink
-        ? `<div style="text-align:center; margin: 20px 0;">
-                  <a href="${verificationLink}" style="background: #1f6feb; color: #ffffff; text-decoration: none; padding: 12px 20px; border-radius: 8px; font-weight: 600; display: inline-block;">Verify Email</a>
-                </div>
-                <p style="margin: 0 0 12px; color: #607087; font-size: 13px; line-height: 1.6;">If the button doesn’t work, copy and paste this link into your browser:<br><span style="word-break: break-all; color: #1f6feb;">${verificationLink}</span></p>`
-        : `<p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">Your verification code:</p>
-                <div style="padding: 12px; background: #f0f4ff; border-radius: 8px; font-family: monospace; font-size: 16px; font-weight: 700; letter-spacing: 2px; color: #0f1f38; text-align:center;">${code}</div>`
+        ? `<p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">Or, you can simply click the button below:</p>
+           <div style="text-align:center; margin: 20px 0;">
+             <a href="${verificationLink}" style="background: #1f6feb; color: #ffffff; text-decoration: none; padding: 12px 20px; border-radius: 8px; font-weight: 600; display: inline-block;">Verify Email Automatically</a>
+           </div>
+           <p style="margin: 0 0 12px; color: #607087; font-size: 13px; line-height: 1.6;">If the button doesn’t work, use this link:<br><span style="word-break: break-all; color: #1f6feb;">${verificationLink}</span></p>`
+        : ''
       }
           <p style="margin: 16px 0 0; color: #8a97ab; font-size: 12px;">If you did not request this, you can safely ignore this email.</p>
         </div>
