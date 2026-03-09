@@ -275,7 +275,9 @@ export class PaymentsService {
     }
 
     /**
-     * Withdraw from wallet
+     * Withdraw from wallet.
+     * A 2% platform fee is charged on every withdrawal.
+     * The fee goes to the Keibo Treasury wallet (KEIBO_TREASURY_USER_ID env var).
      */
     async withdrawFromWallet(dto: WithdrawFromWalletDto, userId: string) {
         const wallet = await this.getOrCreateWallet(userId);
@@ -294,22 +296,49 @@ export class PaymentsService {
             throw new BadRequestException('Invalid withdrawal method');
         }
 
+        // ── 2% Platform Fee ──────────────────────────────────────────
+        const PLATFORM_FEE_RATE = 0.02; // 2%
+        const platformFee = Math.ceil(dto.amount * PLATFORM_FEE_RATE);
+        const payoutAmount = dto.amount - platformFee; // Creator receives 98%
+        // ─────────────────────────────────────────────────────────────
+
         // Create payout reference
         const payoutRef = `PAYOUT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-        // Process payout with Flutterwave
+        // Process payout with Flutterwave (pays out the net amount after fee)
         const payoutResult = await this.flutterwaveService.processPayout({
-            amount: dto.amount,
+            amount: payoutAmount,
             currency: dto.currency,
             accountNumber: method.accountNumber,
             accountBank: method.provider,
-            narration: 'Wallet withdrawal',
+            narration: dto.note || 'Wallet withdrawal - Keibo',
             reference: payoutRef,
         });
 
-        // Deduct from wallet
+        // Deduct full requested amount from creator's wallet
         (wallet.fiatBalance as any)[currency] -= dto.amount;
         await wallet.save();
+
+        // Credit the 2% fee to the Keibo Treasury wallet
+        const treasuryUserId = this.configService.get<string>('KEIBO_TREASURY_USER_ID');
+        if (treasuryUserId && platformFee > 0) {
+            try {
+                const treasuryWallet = await this.getOrCreateWallet(treasuryUserId);
+                (treasuryWallet.fiatBalance as any)[currency] =
+                    ((treasuryWallet.fiatBalance as any)[currency] || 0) + platformFee;
+                await treasuryWallet.save();
+                this.logger.log(
+                    `Platform fee ${currency} ${platformFee} credited to treasury wallet (userId=${treasuryUserId})`,
+                );
+            } catch (feeErr: any) {
+                // Non-critical: fee tracking failed, but payout proceeds
+                this.logger.warn(`Failed to credit treasury fee: ${feeErr.message}`);
+            }
+        } else {
+            this.logger.warn(
+                `KEIBO_TREASURY_USER_ID not configured. Platform fee ${currency} ${platformFee} was not routed.`,
+            );
+        }
 
         // Create transaction record
         const transaction = await this.paymentTransactionModel.create({
@@ -321,17 +350,26 @@ export class PaymentsService {
             provider: PaymentProvider.Flutterwave,
             status: PaymentStatus.Processing,
             flutterwaveReference: payoutRef,
-            metadata: { payoutResult },
+            metadata: {
+                payoutResult,
+                platformFee,
+                payoutAmount,
+                feeRate: PLATFORM_FEE_RATE,
+            },
         });
 
-        this.logger.log(`Withdrawal initiated for user ${userId}: ${transaction._id}`);
+        this.logger.log(`Withdrawal initiated for user ${userId}: ${transaction._id} | amount=${dto.amount} fee=${platformFee} payout=${payoutAmount}`);
 
         return {
             transactionId: transaction._id,
             status: PaymentStatus.Processing,
+            amount: dto.amount,
+            platformFee,
+            youReceive: payoutAmount,
             newBalance: (wallet.fiatBalance as any)[currency],
         };
     }
+
 
     /**
      * Add withdrawal method

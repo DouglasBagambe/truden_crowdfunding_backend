@@ -7,6 +7,7 @@ import { InvestmentStatus } from '../interfaces/investment.interface';
 import { InvestmentNFTService } from '../services/investment-nft.service';
 import { CustodialWalletService } from '../../users/services/custodial-wallet.service';
 import { ProjectsService } from '../../projects/projects.service';
+import { PaymentsService } from '../../payments/payments.service';
 import {
     PaymentTransaction,
     PaymentTransactionDocument,
@@ -33,6 +34,7 @@ export class PaymentInvestmentListener {
         private readonly investmentNFTService: InvestmentNFTService,
         private readonly custodialWalletService: CustodialWalletService,
         private readonly projectsService: ProjectsService,
+        private readonly paymentsService: PaymentsService,
     ) { }
 
     @OnEvent('payment.successful', { async: true })
@@ -70,6 +72,7 @@ export class PaymentInvestmentListener {
             this.logger.log(`Investment created: ${investment._id}`);
 
             // 3. Increment project funding (look up project type from transaction metadata)
+            //    + credit the project creator's Keibo wallet for charity donations
             try {
                 const tx = await this.paymentTransactionModel.findById(transactionId).lean();
                 const projectType = (payload.projectType
@@ -83,6 +86,26 @@ export class PaymentInvestmentListener {
                         userId, // track the donor
                         (tx?.metadata as any)?.donorName, // donor name
                     );
+
+                    // ── Credit creator's Keibo wallet with the donated funds ──
+                    // This makes the money available for the creator to withdraw.
+                    try {
+                        const project = await this.projectsService.ensureProjectExists(projectId);
+                        if (project?.creatorId) {
+                            const creatorId = String(project.creatorId);
+                            const creatorWallet = await this.paymentsService.getOrCreateWallet(creatorId);
+                            const currency = (payload.currency ?? 'UGX').toUpperCase();
+                            (creatorWallet.fiatBalance as any)[currency] =
+                                ((creatorWallet.fiatBalance as any)[currency] || 0) + payload.amount;
+                            await creatorWallet.save();
+                            this.logger.log(
+                                `Credited creator ${creatorId} wallet ${currency} +${payload.amount} from charity donation`,
+                            );
+                        }
+                    } catch (creditErr: any) {
+                        this.logger.error(`Failed to credit creator wallet: ${creditErr.message}`);
+                        // Non-critical — donation is still recorded; admin can manually credit
+                    }
                 } else {
                     await this.projectsService.incrementFunding(projectId, payload.amount);
                 }

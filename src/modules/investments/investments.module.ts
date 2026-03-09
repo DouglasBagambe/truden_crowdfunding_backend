@@ -32,6 +32,7 @@ import {
   ],
   controllers: [InvestmentsController],
   providers: [InvestmentsService, InvestmentNFTService, PaymentInvestmentListener, RolesGuard],
+  // Note: ProjectsRepository and PaymentsService come via ProjectsModule and PaymentsModule exports
   exports: [InvestmentsService, InvestmentNFTService],
 })
 export class InvestmentsModule { }

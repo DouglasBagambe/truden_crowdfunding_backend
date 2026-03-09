@@ -34,6 +34,11 @@ export class WithdrawFromWalletDto {
     @ApiProperty({ description: 'Withdrawal method ID (index in array)' })
     @IsNumber()
     withdrawalMethodIndex!: number;
+
+    @ApiProperty({ description: 'Optional note for the withdrawal', required: false })
+    @IsString()
+    @IsOptional()
+    note?: string;
 }
 
 export class AddWithdrawalMethodDto {
