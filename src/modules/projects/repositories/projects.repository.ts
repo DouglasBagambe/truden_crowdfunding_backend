@@ -10,7 +10,7 @@ export class ProjectsRepository {
   constructor(
     @InjectModel(Project.name)
     private readonly projectModel: Model<ProjectDocument>,
-  ) {}
+  ) { }
 
   create(payload: Partial<Project>): Promise<ProjectDocument> {
     const discriminatorType = payload.projectType;
@@ -76,6 +76,7 @@ export class ProjectsRepository {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
+      .populate('creatorId', 'firstName lastName email')
       .exec();
   }
 
