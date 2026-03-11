@@ -525,9 +525,7 @@ export class ProjectsService {
       );
     }
 
-    if (dto.finalStatus === ProjectStatus.APPROVED) {
-      // Verification log check relaxed – admin approves directly via admin panel
-    }
+
 
     const updated = await this.projectsRepo.setStatus(
       projectId,
