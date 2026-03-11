@@ -629,8 +629,8 @@ export class ProjectsService {
         if (creatorUser) {
           creatorData = {
             _id: (creatorUser as any)._id,
-            firstName: (creatorUser as any).firstName,
-            lastName: (creatorUser as any).lastName,
+            firstName: (creatorUser as any).profile?.firstName || (creatorUser as any).firstName,
+            lastName: (creatorUser as any).profile?.lastName || (creatorUser as any).lastName,
             email: creatorUser.email,
           };
         }
@@ -1206,7 +1206,12 @@ export class ProjectsService {
     // Use explicit creatorOverride first, then fall back to populated creatorId
     const rawCreator = obj.creatorId as any;
     const populatedCreator = rawCreator && typeof rawCreator === 'object' && rawCreator.email
-      ? { _id: rawCreator._id, firstName: rawCreator.firstName, lastName: rawCreator.lastName, email: rawCreator.email }
+      ? {
+        _id: rawCreator._id,
+        firstName: rawCreator.profile?.firstName || rawCreator.firstName,
+        lastName: rawCreator.profile?.lastName || rawCreator.lastName,
+        email: rawCreator.email
+      }
       : undefined;
 
     const creator = creatorOverride || populatedCreator;

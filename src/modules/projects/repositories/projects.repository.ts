@@ -27,13 +27,13 @@ export class ProjectsRepository {
   }
 
   findById(id: string): Promise<ProjectDocument | null> {
-    return this.projectModel.findById(id).populate('creatorId', 'firstName lastName email').exec();
+    return this.projectModel.findById(id).populate('creatorId', 'profile email').exec();
   }
 
   findByOnchainId(projectOnchainId: string): Promise<ProjectDocument | null> {
     return this.projectModel
       .findOne({ projectOnchainId: String(projectOnchainId) })
-      .populate('creatorId', 'firstName lastName email')
+      .populate('creatorId', 'profile email')
       .exec();
   }
 
@@ -76,7 +76,7 @@ export class ProjectsRepository {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('creatorId', 'firstName lastName email')
+      .populate('creatorId', 'profile email')
       .exec();
   }
 
