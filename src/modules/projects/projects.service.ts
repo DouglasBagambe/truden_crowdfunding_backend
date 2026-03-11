@@ -513,9 +513,6 @@ export class ProjectsService {
     this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
-    if (project.status !== ProjectStatus.PENDING_REVIEW) {
-      throw new BadRequestException('Project is not pending review');
-    }
     if (
       ![
         ProjectStatus.APPROVED,
@@ -621,7 +618,26 @@ export class ProjectsService {
       this.milestonesRepo.findByProject(projectId),
     ]);
     if (!project) throw new NotFoundException('Project not found');
-    return { project: this.withProgress(project), milestones };
+
+    // Manually resolve creator since legacy projects store creatorId as string (not ObjectId)
+    // so Mongoose populate() silently fails on them
+    const creatorIdStr = project.creatorId?.toString();
+    let creatorData: { _id: any; firstName?: string; lastName?: string; email?: string } | undefined;
+    if (creatorIdStr) {
+      try {
+        const creatorUser = await this.usersRepo.findById(creatorIdStr);
+        if (creatorUser) {
+          creatorData = {
+            _id: (creatorUser as any)._id,
+            firstName: (creatorUser as any).firstName,
+            lastName: (creatorUser as any).lastName,
+            email: creatorUser.email,
+          };
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    return { project: this.withProgress(project, creatorData), milestones };
   }
 
   async ensureProjectExists(projectId: string): Promise<ProjectDocument> {
@@ -1178,22 +1194,22 @@ export class ProjectsService {
     }
   }
 
-  private withProgress(project: ProjectDocument) {
+  private withProgress(
+    project: ProjectDocument,
+    creatorOverride?: { _id: any; firstName?: string; lastName?: string; email?: string },
+  ) {
     const obj = project.toObject();
     const target = obj.targetAmount || 0;
     const raised = obj.raisedAmount || 0;
     const progressPct = target > 0 ? Math.min(100, (raised / target) * 100) : 0;
 
-    // Expose populated creator info as a separate `creator` field
+    // Use explicit creatorOverride first, then fall back to populated creatorId
     const rawCreator = obj.creatorId as any;
-    const creator = rawCreator && typeof rawCreator === 'object' && rawCreator.email
-      ? {
-        _id: rawCreator._id,
-        firstName: rawCreator.firstName,
-        lastName: rawCreator.lastName,
-        email: rawCreator.email,
-      }
+    const populatedCreator = rawCreator && typeof rawCreator === 'object' && rawCreator.email
+      ? { _id: rawCreator._id, firstName: rawCreator.firstName, lastName: rawCreator.lastName, email: rawCreator.email }
       : undefined;
+
+    const creator = creatorOverride || populatedCreator;
 
     return {
       ...obj,
