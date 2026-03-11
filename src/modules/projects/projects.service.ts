@@ -2,8 +2,10 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import sgMail from '@sendgrid/mail';
 import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
@@ -116,7 +118,7 @@ export class ProjectsService {
       subcategory: dto.subcategory,
       industry: dto.industry,
       risks: risksValue,
-      status: ProjectStatus.APPROVED,
+      status: ProjectStatus.PENDING_REVIEW,
       targetAmount: dto.targetAmount,
       currency: dto.currency,
       fundingStartDate: dto.fundingStartDate,
@@ -466,6 +468,10 @@ export class ProjectsService {
     return this.milestonesRepo.findByProject(projectId);
   }
 
+  async listAllProjectsForAdmin() {
+    return this.projectsRepo.query({}, 500, 0);
+  }
+
   async listPendingProjects() {
     return this.projectsRepo.query(
       { status: ProjectStatus.PENDING_REVIEW },
@@ -507,9 +513,6 @@ export class ProjectsService {
     this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
-    if (project.status !== ProjectStatus.PENDING_REVIEW) {
-      throw new BadRequestException('Project is not pending review');
-    }
     if (
       ![
         ProjectStatus.APPROVED,
@@ -522,10 +525,7 @@ export class ProjectsService {
       );
     }
 
-    if (dto.finalStatus === ProjectStatus.APPROVED) {
-      this.ensureVerificationLogExists(project.verificationLogs);
-      await this.ensureCreatorEligibleForSubmission(project.creatorId.toString());
-    }
+
 
     const updated = await this.projectsRepo.setStatus(
       projectId,
@@ -533,7 +533,81 @@ export class ProjectsService {
       dto.reason,
     );
     if (!updated) throw new NotFoundException('Project not found');
+
+    // Send email notification to creator on Rejection or Approval
+    try {
+      const creator = await this.usersRepo.findById(project.creatorId.toString());
+      if (creator?.email) {
+        await this.sendProjectDecisionEmail(
+          creator.email,
+          (creator as any).firstName || (creator as any).lastName || creator.email,
+          project.name,
+          dto.finalStatus,
+          dto.reason,
+        );
+      }
+    } catch (emailErr) {
+      // Non-fatal: log but don't block
+      new Logger('ProjectsService').warn(`Failed to send decision email: ${emailErr}`);
+    }
+
     return updated;
+  }
+
+  private async sendProjectDecisionEmail(
+    email: string,
+    creatorName: string,
+    projectName: string,
+    decision: ProjectStatus,
+    reason?: string,
+  ) {
+    const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
+    const from = this.configService.get<string>('EMAIL_FROM');
+    if (!apiKey || !from) return;
+    sgMail.setApiKey(apiKey);
+
+    const isApproved = decision === ProjectStatus.APPROVED;
+    const isRejected = decision === ProjectStatus.REJECTED;
+    const isChangesRequested = decision === ProjectStatus.CHANGES_REQUESTED;
+
+    const subject = isApproved
+      ? `Your campaign "${projectName}" has been approved!`
+      : isRejected
+        ? `Update on your campaign "${projectName}"`
+        : `Changes requested for "${projectName}"`;
+
+    const statusColour = isApproved ? '#10b981' : isRejected ? '#ef4444' : '#f59e0b';
+    const statusLabel = isApproved ? 'Approved' : isRejected ? 'Rejected' : 'Changes Requested';
+    const bodyMessage = isApproved
+      ? `Great news! Your campaign <strong>${projectName}</strong> has been reviewed and <strong>approved</strong>. It is now visible to the public and ready to receive donations.`
+      : isRejected
+        ? `After careful review, your campaign <strong>${projectName}</strong> could not be approved at this time.`
+        : `Our review team has reviewed your campaign <strong>${projectName}</strong> and requires some changes before it can be approved.`;
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; background: #f7f9fb; border: 1px solid #e5e8ec; border-radius: 12px;">
+        <div style="text-align: center; margin-bottom: 16px;">
+          <div style="font-size: 20px; font-weight: 700; color: #0f1f38;">Keibo</div>
+          <div style="font-size: 13px; color: #607087;">Crowdfunding Platform</div>
+        </div>
+        <div style="background: #ffffff; padding: 20px; border-radius: 10px; border: 1px solid #eef1f5;">
+          <div style="display:inline-block; background:${statusColour}20; color:${statusColour}; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1px; padding:4px 12px; border-radius:20px; margin-bottom:16px;">${statusLabel}</div>
+          <h2 style="margin: 0 0 12px; color: #0f1f38;">Campaign Review Update</h2>
+          <p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">Hi ${creatorName},</p>
+          <p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">${bodyMessage}</p>
+          ${reason ? `<div style="margin: 16px 0; padding: 14px 16px; background: #f7f9fb; border-left: 4px solid ${statusColour}; border-radius: 4px;"><p style="margin:0; font-size:13px; color:#304054; line-height:1.6;"><strong>Reason:</strong><br>${reason}</p></div>` : ''}
+          <p style="margin: 16px 0 0; color: #8a97ab; font-size: 12px;">Log in to your Keibo dashboard to view your campaign status and take action.</p>
+        </div>
+      </div>
+    `;
+
+    await sgMail.send({
+      to: email,
+      from,
+      subject,
+      text: `${bodyMessage}${reason ? `\n\nReason: ${reason}` : ''}`,
+      html,
+    });
   }
 
   async getProjectWithMilestones(projectId: string) {
@@ -542,7 +616,26 @@ export class ProjectsService {
       this.milestonesRepo.findByProject(projectId),
     ]);
     if (!project) throw new NotFoundException('Project not found');
-    return { project: this.withProgress(project), milestones };
+
+    // Manually resolve creator since legacy projects store creatorId as string (not ObjectId)
+    // so Mongoose populate() silently fails on them
+    const creatorIdStr = project.creatorId?.toString();
+    let creatorData: { _id: any; firstName?: string; lastName?: string; email?: string } | undefined;
+    if (creatorIdStr) {
+      try {
+        const creatorUser = await this.usersRepo.findById(creatorIdStr);
+        if (creatorUser) {
+          creatorData = {
+            _id: (creatorUser as any)._id,
+            firstName: (creatorUser as any).profile?.firstName || (creatorUser as any).firstName,
+            lastName: (creatorUser as any).profile?.lastName || (creatorUser as any).lastName,
+            email: creatorUser.email,
+          };
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    return { project: this.withProgress(project, creatorData), milestones };
   }
 
   async ensureProjectExists(projectId: string): Promise<ProjectDocument> {
@@ -1099,13 +1192,31 @@ export class ProjectsService {
     }
   }
 
-  private withProgress(project: ProjectDocument) {
+  private withProgress(
+    project: ProjectDocument,
+    creatorOverride?: { _id: any; firstName?: string; lastName?: string; email?: string },
+  ) {
     const obj = project.toObject();
     const target = obj.targetAmount || 0;
     const raised = obj.raisedAmount || 0;
     const progressPct = target > 0 ? Math.min(100, (raised / target) * 100) : 0;
+
+    // Use explicit creatorOverride first, then fall back to populated creatorId
+    const rawCreator = obj.creatorId as any;
+    const populatedCreator = rawCreator && typeof rawCreator === 'object' && rawCreator.email
+      ? {
+        _id: rawCreator._id,
+        firstName: rawCreator.profile?.firstName || rawCreator.firstName,
+        lastName: rawCreator.profile?.lastName || rawCreator.lastName,
+        email: rawCreator.email
+      }
+      : undefined;
+
+    const creator = creatorOverride || populatedCreator;
+
     return {
       ...obj,
+      creator,
       progress: {
         raisedAmount: raised,
         targetAmount: target,

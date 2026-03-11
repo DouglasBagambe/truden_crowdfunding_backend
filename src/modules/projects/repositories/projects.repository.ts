@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { FilterQuery, Model, UpdateQuery } from 'mongoose';
+import { FilterQuery, Model, UpdateQuery, Types } from 'mongoose';
 import { ProjectStatus } from '../../../common/enums/project-status.enum';
 import { ProjectType } from '../../../common/enums/project-type.enum';
 import { Project, ProjectDocument } from '../schemas/project.schema';
@@ -10,7 +10,7 @@ export class ProjectsRepository {
   constructor(
     @InjectModel(Project.name)
     private readonly projectModel: Model<ProjectDocument>,
-  ) {}
+  ) { }
 
   create(payload: Partial<Project>): Promise<ProjectDocument> {
     const discriminatorType = payload.projectType;
@@ -27,13 +27,13 @@ export class ProjectsRepository {
   }
 
   findById(id: string): Promise<ProjectDocument | null> {
-    return this.projectModel.findById(id).populate('creatorId', 'firstName lastName email').exec();
+    return this.projectModel.findById(id).populate('creatorId', 'profile email').exec();
   }
 
   findByOnchainId(projectOnchainId: string): Promise<ProjectDocument | null> {
     return this.projectModel
       .findOne({ projectOnchainId: String(projectOnchainId) })
-      .populate('creatorId', 'firstName lastName email')
+      .populate('creatorId', 'profile email')
       .exec();
   }
 
@@ -60,8 +60,22 @@ export class ProjectsRepository {
     creatorId: string,
     filter: FilterQuery<ProjectDocument> = {},
   ): Promise<ProjectDocument[]> {
+    let objectId: Types.ObjectId | undefined;
+    try {
+      objectId = new Types.ObjectId(creatorId);
+    } catch { }
+
+    const conditions: any[] = [];
+    conditions.push({ creatorId });
+    if (objectId) {
+      conditions.push({ creatorId: objectId });
+    }
+
     return this.projectModel
-      .find({ creatorId, ...filter })
+      .find({
+        $or: conditions,
+        ...filter,
+      })
       .sort({ createdAt: -1 })
       .exec();
   }
@@ -76,6 +90,7 @@ export class ProjectsRepository {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
+      .populate('creatorId', 'profile email')
       .exec();
   }
 

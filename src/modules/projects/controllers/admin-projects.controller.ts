@@ -9,7 +9,13 @@ import { RequestAttachmentDto } from '../dto/request-attachment.dto';
 @ApiTags('Admin Projects')
 @Controller('admin/projects')
 export class AdminProjectsController {
-  constructor(private readonly projectsService: ProjectsService) {}
+  constructor(private readonly projectsService: ProjectsService) { }
+
+  @Public()
+  @Get('all')
+  listAll() {
+    return this.projectsService.listAllProjectsForAdmin();
+  }
 
   @Public()
   @Get('pending')
