@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { FilterQuery, Model, UpdateQuery } from 'mongoose';
+import { FilterQuery, Model, UpdateQuery, Types } from 'mongoose';
 import { ProjectStatus } from '../../../common/enums/project-status.enum';
 import { ProjectType } from '../../../common/enums/project-type.enum';
 import { Project, ProjectDocument } from '../schemas/project.schema';
@@ -60,8 +60,22 @@ export class ProjectsRepository {
     creatorId: string,
     filter: FilterQuery<ProjectDocument> = {},
   ): Promise<ProjectDocument[]> {
+    let objectId: Types.ObjectId | undefined;
+    try {
+      objectId = new Types.ObjectId(creatorId);
+    } catch { }
+
+    const conditions: any[] = [];
+    conditions.push({ creatorId });
+    if (objectId) {
+      conditions.push({ creatorId: objectId });
+    }
+
     return this.projectModel
-      .find({ creatorId, ...filter })
+      .find({
+        $or: conditions,
+        ...filter,
+      })
       .sort({ createdAt: -1 })
       .exec();
   }
