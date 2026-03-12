@@ -46,13 +46,23 @@ const createService = () => {
     findById: jest.fn(),
   };
 
+  const configService = {
+    get: jest.fn(),
+  };
+
+  const investmentModel = {
+    create: jest.fn(),
+  };
+
   const service = new ProjectsService(
     projectsRepo as any,
     milestonesRepo as any,
     usersRepo as any,
+    configService as any,
     agreementTemplatesService as any,
     attachmentRequirementsService as any,
     attachmentFilesRepo as any,
+    investmentModel as any,
   );
 
   return {

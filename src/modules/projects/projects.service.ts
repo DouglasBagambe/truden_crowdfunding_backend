@@ -717,16 +717,6 @@ export class ProjectsService {
       $inc: { raisedAmount: amount, backerCount: 1 },
     });
 
-    if (userId) {
-      await this.investmentModel.create({
-        projectId: project._id,
-        investorId: new Types.ObjectId(userId),
-        amount: amount,
-        status: InvestmentStatus.Active,
-        txHash: null,
-      });
-    }
-
     return this.getProjectWithMilestones(projectId);
   }
 
