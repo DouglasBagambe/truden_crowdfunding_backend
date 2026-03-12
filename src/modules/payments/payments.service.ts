@@ -526,7 +526,10 @@ export class PaymentsService {
                 amount: transaction.amount,
                 currency: transaction.currency,
             });
-        } else if (verify.status !== '000' && verify.status !== 'pending') {
+        } else if (verify.status === '801' || verify.status === '804' || verify.status === '900') {
+            // Pending states in DPO: 801 (Request accepted), 804 (Pending), 900 (Unpaid/Pending)
+            // Leave transaction status as Pending
+        } else if (verify.status !== '000') {
             transaction.status = PaymentStatus.Failed;
             transaction.failureReason = verify.message;
             await transaction.save();

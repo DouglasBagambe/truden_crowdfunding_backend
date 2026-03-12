@@ -120,6 +120,8 @@ export class PaymentsController {
                 const result = await this.paymentsService.verifyDPOPayment(token);
                 if (result.status === PaymentStatus.Successful) {
                     return { url: `${frontendUrl}/payment/result?status=success` };
+                } else if (result.status === PaymentStatus.Pending) {
+                    return { url: `${frontendUrl}/payment/result?status=pending` };
                 }
             } else {
                 await this.paymentsService.handleDPOWebhook(query).catch(() => null);

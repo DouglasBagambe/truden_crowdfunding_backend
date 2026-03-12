@@ -17,6 +17,7 @@ import { QueryProjectsDto } from './dto/query-projects.dto';
 import { ProjectDecisionDto } from './dto/decision.dto';
 import { ProjectsRepository } from './repositories/projects.repository';
 import { MilestonesRepository } from './repositories/milestones.repository';
+import { CharityDonationsRepository } from './repositories/charity-donations.repository';
 import type { ProjectDocument } from './schemas/project.schema';
 import { ProjectStatus } from '../../common/enums/project-status.enum';
 import { MilestoneStatus } from '../../common/enums/milestone-status.enum';
@@ -56,9 +57,12 @@ const OWNER_EDITABLE_STATUSES = [
 
 @Injectable()
 export class ProjectsService {
+  private readonly logger = new Logger(ProjectsService.name);
+
   constructor(
     private readonly projectsRepo: ProjectsRepository,
     private readonly milestonesRepo: MilestonesRepository,
+    private readonly charityDonationsRepo: CharityDonationsRepository,
     private readonly usersRepo: UsersRepository,
     private readonly configService: ConfigService,
     private readonly agreementTemplatesService: AgreementTemplatesService,
@@ -343,9 +347,9 @@ export class ProjectsService {
       throw new NotFoundException('Project not available');
     }
     const safeLimit = Math.max(1, Math.min(100, Number(limit) || 50));
-    // TODO: Re-implement when charityDonationsRepo is available
-    // const items = await this.charityDonationsRepo.listByProject(projectId, safeLimit);
-    const items: any[] = [];
+
+    // Fetch from CharityDonationsRepository
+    const items = await this.charityDonationsRepo.listByProject(projectId, safeLimit);
     return items.map((d) => ({
       id: String((d as any)._id),
       donorName: d.donorName || 'Anonymous',
@@ -716,6 +720,17 @@ export class ProjectsService {
     await this.projectsRepo.updateById(projectId, {
       $inc: { raisedAmount: amount, backerCount: 1 },
     });
+
+    try {
+      await this.charityDonationsRepo.create({
+        projectId: new Types.ObjectId(projectId),
+        amount,
+        donorName: normalizedDonorName,
+        message,
+      });
+    } catch (err) {
+      this.logger.error(`Failed to record charity donation for project ${projectId}: ${err}`);
+    }
 
     return this.getProjectWithMilestones(projectId);
   }

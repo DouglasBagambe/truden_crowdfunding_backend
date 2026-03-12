@@ -50,6 +50,11 @@ const createService = () => {
     get: jest.fn(),
   };
 
+  const charityDonationsRepo = {
+    listByProject: jest.fn().mockResolvedValue([]),
+    create: jest.fn(),
+  };
+
   const investmentModel = {
     create: jest.fn(),
   };
@@ -57,6 +62,7 @@ const createService = () => {
   const service = new ProjectsService(
     projectsRepo as any,
     milestonesRepo as any,
+    charityDonationsRepo as any,
     usersRepo as any,
     configService as any,
     agreementTemplatesService as any,
@@ -111,7 +117,7 @@ describe('ProjectsService', () => {
       .spyOn(service, 'getProjectWithMilestones')
       .mockResolvedValue(result as any);
 
-    const response = await service.createProject('user-1', dto as any);
+    const response = await service.createProject('507f1f77bcf86cd799439012', dto as any);
 
     expect(projectsRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -152,7 +158,7 @@ describe('ProjectsService', () => {
           }),
         ]),
         requiresAgreement: true,
-        status: ProjectStatus.DRAFT,
+        status: ProjectStatus.PENDING_REVIEW,
       }),
     );
     expect(milestonesRepo.createMany).not.toHaveBeenCalled();
@@ -185,7 +191,7 @@ describe('ProjectsService', () => {
       .spyOn(service, 'getProjectWithMilestones')
       .mockResolvedValue(result as any);
 
-    await service.createProject('user-1', dto as any);
+    await service.createProject('507f1f77bcf86cd799439012', dto as any);
 
     expect(projectsRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -220,7 +226,7 @@ describe('ProjectsService', () => {
     };
 
     await expect(
-      service.createProject('user', dto as any),
+      service.createProject('507f1f77bcf86cd799439015', dto as any),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -239,7 +245,7 @@ describe('ProjectsService', () => {
     };
 
     await expect(
-      service.createProject('user', dto as any),
+      service.createProject('507f1f77bcf86cd799439015', dto as any),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -247,12 +253,12 @@ describe('ProjectsService', () => {
     const { service, projectsRepo } = createService();
     projectsRepo.findById.mockResolvedValue({
       id: mockProjectId,
-      creatorId: 'owner-1',
+      creatorId: '507f1f77bcf86cd799439013',
       status: ProjectStatus.DRAFT,
     });
 
     await expect(
-      service.updateProject(mockProjectId, 'owner-2', {
+      service.updateProject(mockProjectId, '507f1f77bcf86cd799439014', {
         summary: 'new',
       } as any),
     ).rejects.toBeInstanceOf(ForbiddenException);
@@ -287,31 +293,16 @@ describe('ProjectsService', () => {
     );
   });
 
-  it('blocks access to non-public project', async () => {
+  it('blocks access to non-public project (e.g. REJECTED)', async () => {
     const { service, projectsRepo } = createService();
-    projectsRepo.findById.mockResolvedValue({ status: ProjectStatus.DRAFT });
+    projectsRepo.findById.mockResolvedValue({ status: ProjectStatus.REJECTED });
 
     await expect(
       service.getProjectPublic(mockProjectId),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('requires verification log before approval', async () => {
-    const { service, projectsRepo } = createService();
-    projectsRepo.findById.mockResolvedValue({
-      status: ProjectStatus.PENDING_REVIEW,
-      verificationLogs: [],
-      attachments: [],
-    });
-
-    await expect(
-      service.decide(mockProjectId, {
-        finalStatus: ProjectStatus.APPROVED,
-      } as any),
-    ).rejects.toBeInstanceOf(BadRequestException);
-  });
-
-  it('allows approval with verification log present', async () => {
+  it('allows approval (verification log not required)', async () => {
     const { service, projectsRepo, usersRepo } = createService();
     const logs: CreateVerificationLogDto[] = [
       { performedBy: 'agent', summary: 'checked', decision: 'approve' },
