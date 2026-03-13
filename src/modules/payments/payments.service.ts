@@ -461,9 +461,11 @@ export class PaymentsService {
         const description = dto.description
             ?? (isCharity ? 'Donation to charity project - Keibo' : 'Investment in ROI project - Keibo');
 
-        // RedirectURL: user lands here after paying (success)
-        const redirectUrl = `${frontendUrl}/payment/result?status=success&projectId=${dto.projectId}`;
-        // BackURL: DPO pings this as server-to-server webhook AND sends user here on cancel
+        // RedirectURL: user lands here after paying on DPO hosted page (card success path).
+        // DPO appends ?ID=<token>&CCDapproval=&PnrID=&TransactionApproval= etc.
+        const redirectUrl = `${frontendUrl}/payment/result?projectId=${dto.projectId}`;
+        // BackURL: DPO server-to-server IPN (POST) on cancel, and user redirect for mobile-money cancel.
+        // Use separate endpoint so we can handle both cases cleanly.
         const backUrl = `${backendUrl}/api/payments/dpo/webhook`;
 
         const { token } = await this.dpoService.createToken(
@@ -491,7 +493,8 @@ export class PaymentsService {
             metadata: {
                 projectType: dto.projectType,
                 description,
-                donorName: dto.donorName
+                donorName: dto.donorName,
+                projectId: dto.projectId,
             },
         });
 
@@ -525,10 +528,15 @@ export class PaymentsService {
                 projectId: transaction.projectId,
                 amount: transaction.amount,
                 currency: transaction.currency,
+                projectType: (transaction.metadata as any)?.projectType,
             });
-        } else if (verify.status === '801' || verify.status === '804' || verify.status === '900') {
-            // Pending states in DPO: 801 (Request accepted), 804 (Pending), 900 (Unpaid/Pending)
-            // Leave transaction status as Pending
+        } else if (
+            verify.status === '801' ||
+            verify.status === '804' ||
+            verify.status === '900' ||
+            verify.status === '001' // 001 = pending mobile money confirmation
+        ) {
+            // Pending states in DPO — leave transaction as Pending, webhook will finalize
         } else if (verify.status !== '000') {
             transaction.status = PaymentStatus.Failed;
             transaction.failureReason = verify.message;
@@ -566,9 +574,12 @@ export class PaymentsService {
                 projectId: transaction.projectId,
                 amount: transaction.amount,
                 currency: transaction.currency,
+                projectType: (transaction.metadata as any)?.projectType,
             });
 
             this.logger.log(`DPO payment confirmed via webhook: ${token}`);
+        } else {
+            this.logger.log(`DPO webhook: token=${token} status=${verify.status} (${verify.message}) — current tx status=${transaction.status}`);
         }
 
         return { received: true };
