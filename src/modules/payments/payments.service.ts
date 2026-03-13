@@ -453,7 +453,7 @@ export class PaymentsService {
         },
         userId: string,
     ) {
-        const backendUrl = this.configService.get<string>('BACKEND_URL') ?? 'https://keibo.onrender.com';
+        const backendUrl = this.configService.get<string>('BACKEND_URL') ?? 'https://trufund.onrender.com';
         const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? 'https://keibo.netlify.app';
 
         const currency = dto.currency ?? 'UGX';
