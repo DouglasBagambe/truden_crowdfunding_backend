@@ -188,8 +188,12 @@ export class FlutterwaveService {
         }
 
         try {
+            // Flutterwave requires 'MPS' as the destination bank for Mobile Money Wallets in Uganda
+            const isMomoUG = params.currency === 'UGX' && ['MTN', 'AIRTEL'].includes(params.accountBank.toUpperCase());
+            const finalAccountBank = isMomoUG ? 'MPS' : params.accountBank;
+
             const payload = {
-                account_bank: params.accountBank,
+                account_bank: finalAccountBank,
                 account_number: params.accountNumber,
                 amount: params.amount,
                 currency: params.currency,

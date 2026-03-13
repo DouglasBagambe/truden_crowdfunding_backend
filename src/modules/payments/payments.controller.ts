@@ -12,6 +12,7 @@ import {
     Query,
     Logger,
     HttpException,
+    Redirect,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
@@ -24,7 +25,7 @@ import {
     WalletInvestmentDto,
 } from './dto/wallet.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { PaymentMethod } from './schemas/payment-transaction.schema';
+import { PaymentMethod, PaymentStatus } from './schemas/payment-transaction.schema';
 import { EmailVerifiedGuard } from '../../common/guards/email-verified.guard';
 
 @ApiTags('Payments')
@@ -107,14 +108,34 @@ export class PaymentsController {
     }
 
     @Get('dpo/webhook')
-    @HttpCode(HttpStatus.OK)
-    @ApiOperation({ summary: 'DPO BackURL redirect handler (GET — used when user cancels)' })
+    @Redirect()
+    @ApiOperation({ summary: 'DPO BackURL / ReturnURL redirect handler (GET)' })
     async handleDPOWebhookGet(@Query() query: Record<string, string>) {
-        // When user cancels, DPO GET-redirects to BackURL with ?TransactionToken=XXX
-        await this.paymentsService.handleDPOWebhook(query).catch(() => null);
-        // Redirect user back to frontend cancel page
-        const frontendUrl = 'https://keibo.netlify.app';
-        return { redirect: `${frontendUrl}/payment/result?status=cancelled` };
+        const frontendUrl = process.env.FRONTEND_URL || 'https://keibo.netlify.app';
+
+        // DPO sends the token as 'TransactionToken' in query string on BackURL calls
+        const token = query.TransactionToken || query.token || query.ID;
+        const projectId = query.CompanyRef?.split('-')?.[1] || query.projectId || '';
+
+        try {
+            if (token) {
+                // Try to verify the payment — DPO may call BackURL for both success and cancel
+                const result = await this.paymentsService.verifyDPOPayment(token);
+
+                if (result.status === PaymentStatus.Successful) {
+                    // Payment confirmed — send user to success page with token for frontend verify
+                    return { url: `${frontendUrl}/payment/result?status=success&ID=${token}&projectId=${projectId}` };
+                } else if (result.status === PaymentStatus.Pending) {
+                    // Mobile money pending — tell user to wait
+                    return { url: `${frontendUrl}/payment/result?status=pending&ID=${token}&projectId=${projectId}` };
+                }
+                // Any other status (failed, cancelled) falls through to cancelled redirect
+            }
+        } catch (err) {
+            this.logger.error('Error in DPO GET Webhook handler:', err);
+        }
+
+        return { url: `${frontendUrl}/payment/result?status=cancelled&projectId=${projectId}` };
     }
 
     @Get('transaction/:id')
