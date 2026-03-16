@@ -4,14 +4,16 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Investment, InvestmentDocument } from '../schemas/investment.schema';
 import { InvestmentStatus } from '../interfaces/investment.interface';
-import { InvestmentNFTService } from '../services/investment-nft.service';
-import { CustodialWalletService } from '../../users/services/custodial-wallet.service';
 import { ProjectsService } from '../../projects/projects.service';
 import { PaymentsService } from '../../payments/payments.service';
 import {
     PaymentTransaction,
     PaymentTransactionDocument,
 } from '../../payments/schemas/payment-transaction.schema';
+
+// NOTE: CustodialWalletService and InvestmentNFTService (NFT minting after payment)
+// are temporarily removed and preserved in the `blockchain/nfts-future` branch.
+// When smart contracts and custodial wallets are ready, restore steps 4 & 5.
 
 export interface PaymentSuccessfulPayload {
     transactionId: Types.ObjectId | string;
@@ -31,8 +33,6 @@ export class PaymentInvestmentListener {
         private readonly investmentModel: Model<InvestmentDocument>,
         @InjectModel(PaymentTransaction.name)
         private readonly paymentTransactionModel: Model<PaymentTransactionDocument>,
-        private readonly investmentNFTService: InvestmentNFTService,
-        private readonly custodialWalletService: CustodialWalletService,
         private readonly projectsService: ProjectsService,
         private readonly paymentsService: PaymentsService,
     ) { }
@@ -48,7 +48,7 @@ export class PaymentInvestmentListener {
         );
 
         try {
-            // 1. Check for existing investment to avoid duplicates
+            // ── Step 1: Guard against duplicate processing ────────────────────────
             const existing = await this.investmentModel.findOne({
                 investorId: new Types.ObjectId(userId),
                 projectId: new Types.ObjectId(projectId),
@@ -60,107 +60,62 @@ export class PaymentInvestmentListener {
                 return;
             }
 
-            // 2. Create the investment record
-            const investment = await this.investmentModel.create({
-                projectId: new Types.ObjectId(projectId),
-                investorId: new Types.ObjectId(userId),
-                amount: payload.amount,
-                txHash: transactionId,
-                status: InvestmentStatus.Active,
-            });
+            // ── Step 2: Determine project type from payload or transaction metadata
+            const tx = await this.paymentTransactionModel.findById(transactionId).lean();
+            const projectType = (
+                payload.projectType ||
+                (tx?.metadata as any)?.projectType ||
+                ''
+            ).toString().toUpperCase();
 
-            this.logger.log(`Investment created: ${investment._id}`);
+            // ── Step 3: Record the investment / donation ──────────────────────────
+            if (projectType === 'CHARITY') {
+                // Charity donation path — mirror existing working flow
+                await this.projectsService.incrementCharityDonation(
+                    projectId,
+                    payload.amount,
+                    userId,
+                    (tx?.metadata as any)?.donorName,
+                );
+            } else {
+                // ROI investment path — create investment record + increment raised amount
+                const investment = await this.investmentModel.create({
+                    projectId: new Types.ObjectId(projectId),
+                    investorId: new Types.ObjectId(userId),
+                    amount: payload.amount,
+                    currency: (payload.currency ?? 'UGX').toUpperCase(),
+                    txHash: transactionId,
+                    status: InvestmentStatus.Active,
+                });
 
-            // 3. Increment project funding (look up project type from transaction metadata)
-            //    + credit the project creator's Keibo wallet for charity donations
-            try {
-                const tx = await this.paymentTransactionModel.findById(transactionId).lean();
-                const projectType = (payload.projectType
-                    || (tx?.metadata as any)?.projectType
-                    || '').toString().toUpperCase();
+                this.logger.log(`ROI investment created: ${investment._id}`);
 
-                if (projectType === 'CHARITY') {
-                    await this.projectsService.incrementCharityDonation(
-                        projectId,
-                        payload.amount,
-                        userId, // track the donor
-                        (tx?.metadata as any)?.donorName, // donor name
-                    );
-
-                    // ── Credit creator's Keibo wallet with the donated funds ──
-                    // This makes the money available for the creator to withdraw.
-                    try {
-                        const project = await this.projectsService.ensureProjectExists(projectId);
-                        if (project?.creatorId) {
-                            const creatorId = String(project.creatorId);
-                            const creatorWallet = await this.paymentsService.getOrCreateWallet(creatorId);
-                            const currency = (payload.currency ?? 'UGX').toUpperCase();
-                            (creatorWallet.fiatBalance as any)[currency] =
-                                ((creatorWallet.fiatBalance as any)[currency] || 0) + payload.amount;
-                            await creatorWallet.save();
-                            this.logger.log(
-                                `Credited creator ${creatorId} wallet ${currency} +${payload.amount} from charity donation`,
-                            );
-                        }
-                    } catch (creditErr: any) {
-                        this.logger.error(`Failed to credit creator wallet: ${creditErr.message}`);
-                        // Non-critical — donation is still recorded; admin can manually credit
-                    }
-                } else {
-                    await this.projectsService.incrementFunding(projectId, payload.amount);
-                }
-            } catch (err: any) {
-                this.logger.warn(`Failed to increment project funding: ${err.message}`);
+                await this.projectsService.incrementFunding(projectId, payload.amount);
             }
 
-            // 4. Get or create custodial wallet for user
-            let custodialAddress: string | null = null;
+            // ── Step 4: Credit creator's Keibo fiat wallet ────────────────────────
             try {
-                const wallet = await this.custodialWalletService.getOrCreateWallet(userId);
-                custodialAddress = wallet.address;
-            } catch (err: any) {
-                this.logger.warn(`Failed to get custodial wallet for user ${userId}: ${err.message}`);
-            }
-
-            // 5. Mint NFT to custodial address
-            if (custodialAddress) {
-                try {
-                    // Fetch project to get onchain ID
-                    const project = await this.projectsService.ensureProjectExists(projectId);
-                    const projectOnchainId = (project as any).projectOnchainId ?? projectId;
-
-                    const { tokenId, txHash: nftTxHash } =
-                        await this.investmentNFTService.mintForUser(
-                            custodialAddress,
-                            String(projectOnchainId),
-                            payload.amount,
-                            String(investment._id),
-                        );
-
-                    // 6. Update investment with NFT info
-                    investment.nftTokenId = tokenId;
-                    investment.nftTxHash = nftTxHash;
-                    investment.nftId = String(tokenId);
-                    await investment.save();
-
-                    // 7. Update payment transaction
-                    await this.paymentTransactionModel.findByIdAndUpdate(transactionId, {
-                        nftMinted: true,
-                        nftTokenId: String(tokenId),
-                        blockchainTxHash: nftTxHash,
-                        investmentId: investment._id,
-                    }).catch(() => {
-                        // PaymentTransaction ID is optional here
-                    });
-
+                const project = await this.projectsService.ensureProjectExists(projectId);
+                if (project?.creatorId) {
+                    const creatorId = String(project.creatorId);
+                    const creatorWallet = await this.paymentsService.getOrCreateWallet(creatorId);
+                    const currency = (payload.currency ?? 'UGX').toUpperCase();
+                    (creatorWallet.fiatBalance as any)[currency] =
+                        ((creatorWallet.fiatBalance as any)[currency] || 0) + payload.amount;
+                    await creatorWallet.save();
                     this.logger.log(
-                        `NFT minted for investment ${investment._id}: tokenId=${tokenId}, txHash=${nftTxHash}`,
+                        `Credited creator ${creatorId} wallet ${currency} +${payload.amount}`,
                     );
-                } catch (err: any) {
-                    this.logger.error(`NFT minting failed for investment ${investment._id}: ${err.message}`);
-                    // Don't fail the investment — NFT minting is non-critical
                 }
+            } catch (creditErr: any) {
+                this.logger.error(`Failed to credit creator wallet: ${creditErr.message}`);
+                // Non-critical — investment/donation is still recorded; admin can credit manually
             }
+
+            // ── Step 5 (FUTURE): Mint NFT to user's custodial wallet ──────────────
+            // Restore from blockchain/nfts-future branch when smart contracts are deployed.
+            // See payment-investment.listener.ts in that branch for the full implementation.
+
         } catch (err: any) {
             this.logger.error(
                 `Failed to handle payment.successful for transaction ${transactionId}: ${err.message}`,

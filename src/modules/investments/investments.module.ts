@@ -3,19 +3,20 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { InvestmentsController } from './controllers/investments.controller';
 import { InvestmentsService } from './services/investments.service';
-import { InvestmentNFTService } from './services/investment-nft.service';
 import { PaymentInvestmentListener } from './listeners/payment-investment.listener';
 import { Investment, InvestmentSchema } from './schemas/investment.schema';
 import { AuthModule } from '../auth/auth.module';
-import { EscrowModule } from '../escrow/escrow.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { PaymentsModule } from '../payments/payments.module';
-import { UsersModule } from '../users/users.module';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import {
   PaymentTransaction,
   PaymentTransactionSchema,
 } from '../payments/schemas/payment-transaction.schema';
+
+// NOTE: InvestmentNFTService, CustodialWalletService, EscrowModule, UsersModule
+// were removed and are preserved in the `blockchain/nfts-future` branch.
+// Restore them here when the NFT/custodial-wallet infrastructure is ready.
 
 @Module({
   imports: [
@@ -25,15 +26,11 @@ import {
     ]),
     EventEmitterModule.forRoot(),
     AuthModule,
-    EscrowModule,
     ProjectsModule,
     PaymentsModule,
-    UsersModule,
   ],
   controllers: [InvestmentsController],
-  providers: [InvestmentsService, InvestmentNFTService, PaymentInvestmentListener, RolesGuard],
-  // Note: ProjectsRepository and PaymentsService come via ProjectsModule and PaymentsModule exports
-  exports: [InvestmentsService, InvestmentNFTService],
+  providers: [InvestmentsService, PaymentInvestmentListener, RolesGuard],
+  exports: [InvestmentsService],
 })
 export class InvestmentsModule { }
-

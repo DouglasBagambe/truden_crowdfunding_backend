@@ -8,7 +8,15 @@ export class CreateInvestmentDto {
   @IsNumberString()
   amount!: string;
 
+  /** ISO-4217 currency code. Defaults to 'UGX'. */
   @IsString()
   @IsOptional()
-  projectOnchainId?: string;
+  currency?: string;
+
+  /** Optional note (e.g. investment terms acknowledged). */
+  @IsString()
+  @IsOptional()
+  notes?: string;
+
+  // projectOnchainId: preserved in blockchain/nfts-future branch
 }

@@ -7,16 +7,6 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
-import {
-  createPublicClient,
-  createWalletClient,
-  http,
-  type Abi,
-  type Address,
-  type Chain,
-  type Hash,
-} from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
 import { Investment, InvestmentDocument } from '../schemas/investment.schema';
 import { CreateInvestmentDto } from '../dto/create-investment.dto';
 import { UpdateInvestmentStatusDto } from '../dto/update-investment-status.dto';
@@ -26,59 +16,26 @@ import {
   InvestmentView,
 } from '../interfaces/investment.interface';
 import { AuthService } from '../../auth/auth.service';
-import { EscrowService } from '../../escrow/services/escrow.service';
 import { ProjectsService } from '../../projects/projects.service';
-import { EscrowCurrency, FundingSource } from '../../escrow/types';
-import type { DepositDto } from '../../escrow/dto/deposit.dto';
 import { KYCStatus, UserRole } from '../../../common/enums/role.enum';
 import type { JwtPayload } from '../../../common/interfaces/user.interface';
+
+// ─── NOTE ──────────────────────────────────────────────────────────────────────
+// Blockchain / custodial-wallet / NFT code has been moved to the
+// `blockchain/nfts-future` branch. This service now uses a pure fiat flow,
+// mirroring the charity-donation system. Real investment records are created
+// automatically by PaymentInvestmentListener after a successful DPO/Flutterwave
+// payment (see listeners/payment-investment.listener.ts).
+// ──────────────────────────────────────────────────────────────────────────────
 
 interface AuthUserView {
   id: string;
   email?: string;
-  walletAddress?: string;
   role: UserRole[];
   isActive: boolean;
   lastLogin?: Date;
   kycStatus: KYCStatus;
 }
-
-const ESCROW_ABI = [
-  {
-    type: 'function',
-    name: 'deposit',
-    stateMutability: 'payable',
-    inputs: [
-      { name: 'projectId', type: 'uint256' },
-      { name: 'investor', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    outputs: [],
-  },
-  {
-    type: 'function',
-    name: 'refund',
-    stateMutability: 'nonpayable',
-    inputs: [{ name: 'projectId', type: 'uint256' }],
-    outputs: [],
-  },
-] as const satisfies Abi;
-
-const INVESTMENT_NFT_ABI = [
-  {
-    type: 'function',
-    name: 'mintNFT',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'to', type: 'address' },
-      { name: 'projectId', type: 'string' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    outputs: [{ name: 'tokenId', type: 'uint256' }],
-  },
-] as const satisfies Abi;
-
-type Hex = `0x${string}`;
 
 @Injectable()
 export class InvestmentsService {
@@ -86,10 +43,11 @@ export class InvestmentsService {
     @InjectModel(Investment.name)
     private readonly investmentModel: Model<InvestmentDocument>,
     private readonly authService: AuthService,
-    private readonly escrowService: EscrowService,
     private readonly projectsService: ProjectsService,
     private readonly configService: ConfigService,
   ) { }
+
+  // ─── Helpers ────────────────────────────────────────────────────────────────
 
   private parseObjectId(id: string, fieldName: string): Types.ObjectId {
     if (!Types.ObjectId.isValid(id)) {
@@ -117,149 +75,44 @@ export class InvestmentsService {
     return profile;
   }
 
-  async createInvestment(
-    dto: CreateInvestmentDto,
-    currentUser: JwtPayload,
-  ): Promise<InvestmentView> {
-    this.ensureInvestorRole(currentUser);
-
-    const investmentsTestMode =
-      String(this.configService.get('INVESTMENTS_TEST_MODE') ?? '').toLowerCase() ===
-      'true';
-
-    const kycBypass =
-      String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() === 'true';
-
-    const investorId = currentUser.sub;
-    if (!investorId) {
-      throw new BadRequestException('Missing investor id in token');
+  private async safeLoadAuthUser(userId: string): Promise<AuthUserView | null> {
+    try {
+      return await this.loadAuthUser(userId);
+    } catch {
+      return null;
     }
-
-    const amountNumber = Number(dto.amount);
-    if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
-      throw new BadRequestException('Invalid amount');
-    }
-
-    const investorProfile = await this.loadAuthUser(investorId);
-    if (!investorProfile.isActive) {
-      throw new ForbiddenException('Investor account is inactive');
-    }
-
-    const shouldEnforceKyc = !investmentsTestMode && !kycBypass;
-    if (shouldEnforceKyc) {
-      if (investorProfile.kycStatus !== KYCStatus.VERIFIED) {
-        throw new ForbiddenException('Investor KYC is not verified');
-      }
-    }
-
-    const walletAddress =
-      investorProfile.walletAddress ?? currentUser.walletAddress;
-    if (shouldEnforceKyc && !walletAddress) {
-      throw new BadRequestException('Investor wallet address is required');
-    }
-
-    const projectObjectId = this.parseObjectId(dto.projectId, 'projectId');
-    const investorObjectId = this.parseObjectId(investorId, 'investorId');
-
-    await this.ensureProjectIsOpen(dto.projectId);
-
-    let txHash: string | null = null;
-    let nftId: string | null = null;
-
-    if (!investmentsTestMode && !kycBypass) {
-      txHash = await this.simulateEscrowDeposit(
-        dto.projectOnchainId ?? dto.projectId,
-        walletAddress as string,
-        amountNumber,
-      );
-
-      nftId = await this.simulateMintInvestmentNft(
-        walletAddress as string,
-        dto.projectId,
-        amountNumber,
-      );
-
-      const depositDto: DepositDto = {
-        projectId: dto.projectId,
-        amount: dto.amount,
-        currency: EscrowCurrency.ETH,
-        source: FundingSource.ONCHAIN,
-        txHash: txHash ?? undefined,
-        metadata: {
-          investorWallet: walletAddress as string,
-        },
-      };
-
-      await this.escrowService.createDeposit(depositDto, investorId);
-    }
-
-    const investment = await this.investmentModel.create({
-      projectId: projectObjectId,
-      investorId: investorObjectId,
-      amount: amountNumber,
-      nftId,
-      txHash,
-      status: InvestmentStatus.Pending,
-    });
-
-    await this.incrementProjectRaised(dto.projectId, amountNumber);
-
-    return this.toView(investment, {
-      investorWallet: walletAddress ?? undefined,
-      investorKyc: kycBypass ? KYCStatus.VERIFIED : investorProfile.kycStatus,
-      nftMetadata: null,
-    });
   }
 
-  async getInvestmentById(
-    id: string,
-    currentUser: JwtPayload,
-  ): Promise<InvestmentView> {
+  // ─── Read API ────────────────────────────────────────────────────────────────
+
+  async getInvestmentById(id: string, currentUser: JwtPayload): Promise<InvestmentView> {
     const investment = await this.investmentModel
       .findById(this.parseObjectId(id, 'id'))
       .exec();
 
-    if (!investment) {
-      throw new NotFoundException('Investment not found');
-    }
+    if (!investment) throw new NotFoundException('Investment not found');
 
     this.assertCanViewInvestment(investment, currentUser);
 
-    const investorProfile = await this.safeLoadAuthUser(
-      String(investment.investorId),
-    );
-
-    return this.toView(investment, {
-      investorWallet: investorProfile?.walletAddress,
-      investorKyc: investorProfile?.kycStatus,
-      nftMetadata: null,
-    });
+    const investorProfile = await this.safeLoadAuthUser(String(investment.investorId));
+    return this.toView(investment, { investorKyc: investorProfile?.kycStatus });
   }
 
   async getMyInvestments(currentUser: JwtPayload): Promise<InvestmentView[]> {
     this.ensureInvestorRole(currentUser);
     const userId = currentUser.sub;
-    if (!userId) {
-      throw new BadRequestException('Missing user id in token');
-    }
+    if (!userId) throw new BadRequestException('Missing user id in token');
     return this.getInvestmentsByUser(userId, currentUser);
   }
 
-  async getInvestmentsByUser(
-    userId: string,
-    currentUser: JwtPayload,
-  ): Promise<InvestmentView[]> {
+  async getInvestmentsByUser(userId: string, currentUser: JwtPayload): Promise<InvestmentView[]> {
     const isSelf = currentUser.sub === userId;
     const isAdmin = (currentUser.roles ?? []).includes(UserRole.ADMIN);
-
     if (!isSelf && !isAdmin) {
-      throw new ForbiddenException(
-        'Not allowed to view investments for this user',
-      );
+      throw new ForbiddenException('Not allowed to view investments for this user');
     }
 
     const investorObjectId = this.parseObjectId(userId, 'userId');
-
     const investments = await this.investmentModel
       .find({ investorId: investorObjectId })
       .sort({ createdAt: -1 })
@@ -267,37 +120,26 @@ export class InvestmentsService {
       .exec();
 
     const investorProfile = await this.safeLoadAuthUser(userId);
-
     return investments.map((investment: any) => {
       const project = investment.projectId;
       return this.toView(investment, {
-        investorWallet: investorProfile?.walletAddress,
         investorKyc: investorProfile?.kycStatus,
         projectTitle: project?.title || project?.name,
         projectCategory: project?.category,
         projectType: project?.projectType || project?.type,
         projectCreatorId: project?.creatorId?.toString(),
-        nftMetadata: null,
       });
     });
   }
 
-  async getInvestmentsByProject(
-    projectId: string,
-    currentUser: JwtPayload,
-  ): Promise<InvestmentView[]> {
+  async getInvestmentsByProject(projectId: string, currentUser: JwtPayload): Promise<InvestmentView[]> {
     const roles = currentUser.roles ?? [];
-    const canViewProject =
-      roles.includes(UserRole.ADMIN) || roles.includes(UserRole.INNOVATOR);
-
-    if (!canViewProject) {
-      throw new ForbiddenException(
-        'Only admins and innovators can view project investors',
-      );
+    const canView = roles.includes(UserRole.ADMIN) || roles.includes(UserRole.INNOVATOR);
+    if (!canView) {
+      throw new ForbiddenException('Only admins and innovators can view project investors');
     }
 
     const projectObjectId = this.parseObjectId(projectId, 'projectId');
-
     const investments = await this.investmentModel
       .find({ projectId: projectObjectId })
       .sort({ createdAt: -1 })
@@ -313,36 +155,77 @@ export class InvestmentsService {
     this.ensureAdminRole(currentUser);
 
     const filter: Record<string, unknown> = {};
-
-    if (filterDto.userId) {
-      filter.investorId = this.parseObjectId(filterDto.userId, 'userId');
-    }
-
-    if (filterDto.projectId) {
-      filter.projectId = this.parseObjectId(filterDto.projectId, 'projectId');
-    }
-
-    if (filterDto.status) {
-      filter.status = filterDto.status;
-    }
+    if (filterDto.userId) filter.investorId = this.parseObjectId(filterDto.userId, 'userId');
+    if (filterDto.projectId) filter.projectId = this.parseObjectId(filterDto.projectId, 'projectId');
+    if (filterDto.status) filter.status = filterDto.status;
 
     const limit = filterDto.limit ?? 25;
     const skip = filterDto.skip ?? 0;
 
     const [items, total] = await Promise.all([
-      this.investmentModel
-        .find(filter)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .exec(),
+      this.investmentModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).exec(),
       this.investmentModel.countDocuments(filter).exec(),
     ]);
 
-    return {
-      items: items.map((investment) => this.toView(investment)),
-      total,
-    };
+    return { items: items.map((i) => this.toView(i)), total };
+  }
+
+  // ─── Mutations ───────────────────────────────────────────────────────────────
+
+  /**
+   * Direct (test/admin) investment creation — bypasses payment flow.
+   * Production investments are created by PaymentInvestmentListener after
+   * a successful DPO/Flutterwave payment.
+   */
+  async createInvestment(dto: CreateInvestmentDto, currentUser: JwtPayload): Promise<InvestmentView> {
+    this.ensureInvestorRole(currentUser);
+
+    const kycBypass =
+      String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() === 'true';
+    const testMode =
+      String(this.configService.get('INVESTMENTS_TEST_MODE') ?? '').toLowerCase() === 'true';
+
+    const investorId = currentUser.sub;
+    if (!investorId) throw new BadRequestException('Missing investor id in token');
+
+    const amountNumber = Number(dto.amount);
+    if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+      throw new BadRequestException('Invalid amount');
+    }
+
+    const investorProfile = await this.loadAuthUser(investorId);
+    if (!investorProfile.isActive) throw new ForbiddenException('Investor account is inactive');
+
+    // Enforce KYC in production
+    if (!kycBypass && !testMode && investorProfile.kycStatus !== KYCStatus.VERIFIED) {
+      throw new ForbiddenException(
+        investorProfile.kycStatus === KYCStatus.PENDING
+          ? 'Your KYC is still under review. Please wait.'
+          : 'You must complete identity verification (KYC) before investing.',
+      );
+    }
+
+    const projectObjectId = this.parseObjectId(dto.projectId, 'projectId');
+    const investorObjectId = this.parseObjectId(investorId, 'investorId');
+
+    // Verify project is open for investment
+    if (!testMode && !kycBypass) {
+      await this.projectsService.ensureProjectIsOpenForInvestment(dto.projectId);
+    }
+
+    const investment = await this.investmentModel.create({
+      projectId: projectObjectId,
+      investorId: investorObjectId,
+      amount: amountNumber,
+      currency: dto.currency || 'UGX',
+      txHash: null,
+      status: InvestmentStatus.Active,
+      notes: dto.notes,
+    });
+
+    await this.projectsService.incrementFunding(dto.projectId, amountNumber);
+
+    return this.toView(investment, { investorKyc: investorProfile.kycStatus });
   }
 
   async updateStatus(
@@ -356,271 +239,67 @@ export class InvestmentsService {
       .findById(this.parseObjectId(id, 'id'))
       .exec();
 
-    if (!investment) {
-      throw new NotFoundException('Investment not found');
-    }
+    if (!investment) throw new NotFoundException('Investment not found');
 
-    const fromStatus = investment.status;
-    const toStatus = dto.status;
-
-    if (!this.isValidTransition(fromStatus, toStatus)) {
+    if (!this.isValidTransition(investment.status, dto.status)) {
       throw new BadRequestException('Invalid investment status transition');
     }
 
-    investment.status = toStatus;
+    investment.status = dto.status;
     await investment.save();
-
-    if (toStatus === InvestmentStatus.Refunded) {
-      await this.simulateEscrowRefund(investment);
-    }
 
     return this.toView(investment);
   }
 
-  private isValidTransition(
-    from: InvestmentStatus,
-    to: InvestmentStatus,
-  ): boolean {
+  // ─── Private helpers ─────────────────────────────────────────────────────────
+
+  private isValidTransition(from: InvestmentStatus, to: InvestmentStatus): boolean {
     const transitions: Record<InvestmentStatus, InvestmentStatus[]> = {
-      [InvestmentStatus.Pending]: [
-        InvestmentStatus.Active,
-        InvestmentStatus.Refunded,
-      ],
-      [InvestmentStatus.Active]: [
-        InvestmentStatus.Completed,
-        InvestmentStatus.Refunded,
-      ],
+      [InvestmentStatus.Pending]: [InvestmentStatus.Active, InvestmentStatus.Refunded],
+      [InvestmentStatus.Active]: [InvestmentStatus.Completed, InvestmentStatus.Refunded],
       [InvestmentStatus.Completed]: [],
       [InvestmentStatus.Refunded]: [],
     };
-
-    const allowedTargets = transitions[from] ?? [];
-    return allowedTargets.includes(to);
+    return (transitions[from] ?? []).includes(to);
   }
 
-  private assertCanViewInvestment(
-    investment: InvestmentDocument,
-    currentUser: JwtPayload,
-  ) {
+  private assertCanViewInvestment(investment: InvestmentDocument, currentUser: JwtPayload) {
     const isOwner = currentUser.sub === String(investment.investorId);
     const isAdmin = (currentUser.roles ?? []).includes(UserRole.ADMIN);
-
     if (!isOwner && !isAdmin) {
       throw new ForbiddenException('Not allowed to view this investment');
-    }
-  }
-
-  private async ensureProjectIsOpen(projectId: string): Promise<void> {
-    if (!Types.ObjectId.isValid(projectId)) {
-      throw new BadRequestException('Invalid projectId');
-    }
-
-    const investmentsTestMode =
-      String(this.configService.get('INVESTMENTS_TEST_MODE') ?? '').toLowerCase() ===
-      'true';
-    const kycBypass =
-      String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() === 'true';
-
-    if (investmentsTestMode || kycBypass) {
-      return;
-    }
-
-    await this.projectsService.ensureProjectIsOpenForInvestment(projectId);
-  }
-
-  private async incrementProjectRaised(
-    projectId: string,
-    amount: number,
-  ): Promise<void> {
-    if (!Number.isFinite(amount) || amount <= 0) {
-      throw new BadRequestException('Invalid amount');
-    }
-
-    await this.projectsService.incrementFunding(projectId, amount);
-  }
-
-  private getBlockchainClients() {
-    const blockchain = this.configService.get<{
-      rpcUrl?: string;
-      chainId?: number;
-      contracts?: { escrow?: string; nft?: string };
-      adminPrivateKey?: string;
-    }>('blockchain');
-
-    if (!blockchain?.rpcUrl || !blockchain.chainId) {
-      throw new BadRequestException('Blockchain RPC configuration is missing');
-    }
-
-    if (!blockchain.adminPrivateKey) {
-      throw new BadRequestException(
-        'Blockchain admin private key is not configured',
-      );
-    }
-
-    const chain: Chain = {
-      id: blockchain.chainId,
-      name: 'CrowdfundingChain',
-      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-      rpcUrls: {
-        default: { http: [blockchain.rpcUrl] },
-        public: { http: [blockchain.rpcUrl] },
-      },
-    };
-
-    const rawKey = blockchain.adminPrivateKey.trim();
-    const normalizedKey = (rawKey.startsWith('0x')
-      ? rawKey
-      : `0x${rawKey}`) as Hex;
-
-    const account = privateKeyToAccount(normalizedKey);
-
-    const publicClient = createPublicClient({
-      chain,
-      transport: http(blockchain.rpcUrl),
-    });
-
-    const walletClient = createWalletClient({
-      chain,
-      transport: http(blockchain.rpcUrl),
-      account,
-    });
-
-    return { blockchain, publicClient, walletClient };
-  }
-
-  private async simulateEscrowDeposit(
-    projectOnchainId: string,
-    investorWallet: string,
-    amount: number,
-  ): Promise<string | null> {
-    const { blockchain, publicClient, walletClient } =
-      this.getBlockchainClients();
-
-    if (!blockchain.contracts?.escrow) {
-      throw new BadRequestException('Escrow contract address is not configured');
-    }
-
-    const value = BigInt(Math.floor(amount * 1e18));
-
-    // If projectOnchainId is a simple number string (e.g. "0", "1"), use it directly.
-    // Otherwise fallback to hash (for testing/legacy).
-    const isNumeric = /^\d+$/.test(projectOnchainId);
-    const numericProjectId = isNumeric
-      ? BigInt(projectOnchainId)
-      : BigInt('0x' + projectOnchainId.substring(0, 12));
-
-    // const hash: Hash = await walletClient.writeContract({
-    //   address: blockchain.contracts.escrow as Address,
-    //   abi: ESCROW_ABI,
-    //   functionName: 'deposit',
-    //   args: [numericProjectId, investorWallet as Address, value],
-    //   value,
-    // });
-
-    // await publicClient.waitForTransactionReceipt({ hash });
-
-    // return hash;
-    return '0x' + '0'.repeat(64) as Hash; // Bypass for testing
-  }
-
-  private async simulateEscrowRefund(
-    investment: InvestmentDocument,
-  ): Promise<void> {
-    const { blockchain, publicClient, walletClient } =
-      this.getBlockchainClients();
-
-    if (!blockchain.contracts?.escrow) {
-      throw new BadRequestException('Escrow contract address is not configured');
-    }
-
-    const projectIdStr = investment.projectId.toHexString();
-    const isNumeric = /^\d+$/.test(projectIdStr);
-    const numericProjectId = isNumeric
-      ? BigInt(projectIdStr)
-      : BigInt('0x' + projectIdStr.substring(0, 12));
-
-    const hash: Hash = await walletClient.writeContract({
-      address: blockchain.contracts.escrow as Address,
-      abi: ESCROW_ABI,
-      functionName: 'refund',
-      args: [numericProjectId],
-    });
-
-    await publicClient.waitForTransactionReceipt({ hash });
-  }
-
-  private async simulateMintInvestmentNft(
-    walletAddress: string,
-    projectId: string,
-    amount: number,
-  ): Promise<string | null> {
-    const { blockchain, publicClient, walletClient } =
-      this.getBlockchainClients();
-
-    if (!blockchain.contracts?.nft) {
-      return null;
-    }
-
-    const numericProjectId = BigInt('0x' + projectId.substring(0, 12));
-
-    // const hash: Hash = await walletClient.writeContract({
-    //   address: blockchain.contracts.nft as Address,
-    //   abi: INVESTMENT_NFT_ABI,
-    //   functionName: 'mintNFT',
-    //   args: [
-    //     walletAddress as Address,
-    //     String(numericProjectId), 
-    //     BigInt(Math.floor(amount * 1e18)),
-    //   ],
-    // });
-
-    // await publicClient.waitForTransactionReceipt({ hash });
-
-    // return hash;
-    return '0x' + '0'.repeat(64) as Hash; // Bypass for testing
-  }
-
-  private async safeLoadAuthUser(
-    userId: string,
-  ): Promise<AuthUserView | null> {
-    try {
-      const profile = (await this.authService.getProfile(userId)) as unknown as AuthUserView;
-      return profile;
-    } catch {
-      return null;
     }
   }
 
   private toView(
     investment: InvestmentDocument,
     options?: {
-      investorWallet?: string;
       investorKyc?: KYCStatus;
       projectTitle?: string;
       projectCategory?: string;
       projectType?: string;
       projectCreatorId?: string;
-      nftMetadata?: Record<string, unknown> | null;
     },
   ): InvestmentView {
-    const createdAt =
-      (investment as InvestmentDocument & { createdAt?: Date }).createdAt ??
-      new Date();
-    const updatedAt =
-      (investment as InvestmentDocument & { updatedAt?: Date }).updatedAt ??
-      createdAt;
-
+    const createdAt = (investment as any).createdAt ?? new Date();
+    const updatedAt = (investment as any).updatedAt ?? createdAt;
     const projectDoc = investment.projectId as any;
-    const projectIdString = projectDoc?._id ? projectDoc._id.toString() : String(investment.projectId);
-    const investorIdString = (investment.investorId as any)?._id ? (investment.investorId as any)._id.toString() : String(investment.investorId);
+    const projectIdString = projectDoc?._id
+      ? projectDoc._id.toString()
+      : String(investment.projectId);
+    const investorIdString = (investment.investorId as any)?._id
+      ? (investment.investorId as any)._id.toString()
+      : String(investment.investorId);
 
     return {
       id: investment._id ? investment._id.toString() : (investment as any).id,
       projectId: projectIdString,
       investorId: investorIdString,
       amount: Number(investment.amount),
+      currency: (investment as any).currency ?? 'UGX',
       txHash: investment.txHash ?? null,
-      nftId: investment.nftId ?? null,
+      // NFT fields intentionally absent — see blockchain/nfts-future branch
+      nftId: null,
       status: investment.status,
       createdAt,
       updatedAt,
@@ -633,12 +312,7 @@ export class InvestmentsService {
       },
       investor: {
         id: investorIdString,
-        walletAddress: options?.investorWallet,
         kycStatus: options?.investorKyc,
-      },
-      nft: {
-        id: investment.nftId ?? null,
-        metadata: options?.nftMetadata ?? null,
       },
     };
   }

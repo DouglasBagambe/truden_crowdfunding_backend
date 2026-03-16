@@ -2,6 +2,10 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Schema as MongooseSchema, Types } from 'mongoose';
 import { InvestmentStatus } from '../interfaces/investment.interface';
 
+// NOTE: NFT fields (nftId, nftTokenId, nftTxHash, nftMetadataURI, nftContractAddress)
+// exist in the blockchain/nfts-future branch and will be restored when the
+// custodial-wallet + smart-contract infrastructure is ready.
+
 @Schema({ timestamps: true })
 export class Investment {
   @Prop({
@@ -23,22 +27,12 @@ export class Investment {
   @Prop({ type: Number, required: true })
   amount!: number;
 
-  @Prop({ type: String, default: null })
-  nftId?: string | null;
+  /** ISO-4217 currency code, e.g. 'UGX' */
+  @Prop({ type: String, default: 'UGX' })
+  currency!: string;
 
-  @Prop({ type: Number, default: null, index: true })
-  nftTokenId?: number | null;
-
-  @Prop({ type: String, default: null })
-  nftTxHash?: string | null;
-
-  @Prop({ type: String, default: null })
-  nftMetadataURI?: string | null;
-
-  @Prop({ type: String, default: null })
-  nftContractAddress?: string | null;
-
-  @Prop({ type: String, default: null })
+  /** Payment gateway transaction reference (DPO / Flutterwave) */
+  @Prop({ type: String, default: null, index: true })
   txHash?: string | null;
 
   @Prop({
@@ -47,10 +41,12 @@ export class Investment {
     default: InvestmentStatus.Pending,
   })
   status!: InvestmentStatus;
+
+  /** Optional admin or system notes */
+  @Prop({ type: String, default: null })
+  notes?: string | null;
 }
 
 export type InvestmentDocument = Investment & Document;
 
 export const InvestmentSchema = SchemaFactory.createForClass(Investment);
-
-
