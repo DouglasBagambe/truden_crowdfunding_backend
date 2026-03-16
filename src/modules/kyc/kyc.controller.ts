@@ -29,7 +29,7 @@ import { KycWebhookDto } from './dto/kyc-webhook.dto';
 @ApiBearerAuth()
 @Controller('kyc')
 export class KycController {
-  constructor(private readonly kycService: KycService) {}
+  constructor(private readonly kycService: KycService) { }
 
   @Get('profile')
   getMyProfile(@CurrentUser('sub') userId: string) {
@@ -55,10 +55,11 @@ export class KycController {
   }
 
   @Post('submit')
-  submitMyKyc(
+  async submitMyKyc(
     @CurrentUser('sub') userId: string,
     @Body() dto: SubmitKycApplicationDto,
   ) {
+    // Returns KycProfileView + optional verificationUrl (Didit hosted link)
     return this.kycService.submitForVerification(userId, dto);
   }
 
