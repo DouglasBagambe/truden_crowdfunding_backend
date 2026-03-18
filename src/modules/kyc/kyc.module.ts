@@ -7,7 +7,8 @@ import { KycService } from './kyc.service';
 import { KycProfile, KycProfileSchema } from './schemas/kyc-profile.schema';
 import { DummyKycProviderService } from './providers/dummy-kyc.provider';
 import { DiditKycProviderService } from './providers/didit-kyc.provider';
-import { LaboremusKycProviderService } from './providers/laboremus-kyc.provider';
+// NOTE: LaboremusKycProviderService removed — Didit handles all KYC for now.
+// Re-add when KYB (business verification) is needed.
 
 @Module({
   imports: [
@@ -22,7 +23,6 @@ import { LaboremusKycProviderService } from './providers/laboremus-kyc.provider'
     KycService,
     DummyKycProviderService,
     DiditKycProviderService,
-    LaboremusKycProviderService,
   ],
   exports: [KycService],
 })

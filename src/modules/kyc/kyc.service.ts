@@ -30,7 +30,8 @@ import { AdminOverrideKycStatusDto } from './dto/admin-override-kyc-status.dto';
 import { KycWebhookDto } from './dto/kyc-webhook.dto';
 import { KycProviderStatusResult } from './providers/kyc-provider.interface';
 import { DiditKycProviderService } from './providers/didit-kyc.provider';
-import { LaboremusKycProviderService } from './providers/laboremus-kyc.provider';
+// NOTE: LaboremusKycProviderService (KYB for businesses) removed for now.
+// Didit handles KYC for ALL user types. Re-add Laboremus when KYB is needed.
 import { DummyKycProviderService } from './providers/dummy-kyc.provider';
 
 /** KYC expires after 12 months and must be renewed */
@@ -47,7 +48,6 @@ export class KycService {
     private readonly userModel: Model<UserDocument>,
     private readonly configService: ConfigService,
     private readonly diditProvider: DiditKycProviderService,
-    private readonly laboremusProvider: LaboremusKycProviderService,
     private readonly dummyProvider: DummyKycProviderService,
   ) { }
 
@@ -419,7 +419,7 @@ export class KycService {
 
   private selectProvider(
     userType?: string,
-  ): DiditKycProviderService | LaboremusKycProviderService | DummyKycProviderService {
+  ): DiditKycProviderService | DummyKycProviderService {
     const configuredProvider = (
       this.configService.get<string>('KYC_PROVIDER') ?? ''
     ).toLowerCase();
@@ -428,25 +428,15 @@ export class KycService {
       return this.dummyProvider;
     }
 
-    // CREATOR / BUSINESS → Laboremus (full KYB)
-    if (
-      userType === 'CREATOR' ||
-      userType === 'BUSINESS' ||
-      configuredProvider === 'laboremus'
-    ) {
-      return this.laboremusProvider;
-    }
-
-    // Default: INVESTOR or unspecified → Didit
+    // Didit handles KYC for ALL user types (investors + creators)
+    // Re-add Laboremus for KYB when business verification is needed
     return this.diditProvider;
   }
 
   private getProviderByName(
     name: string,
-  ): DiditKycProviderService | LaboremusKycProviderService | DummyKycProviderService {
+  ): DiditKycProviderService | DummyKycProviderService {
     switch (name.toLowerCase()) {
-      case 'laboremus':
-        return this.laboremusProvider;
       case 'didit':
         return this.diditProvider;
       default:
