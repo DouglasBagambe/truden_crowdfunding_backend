@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
@@ -9,6 +11,7 @@ import {
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '../../common/swagger.decorators';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -29,7 +32,10 @@ import { KycWebhookDto } from './dto/kyc-webhook.dto';
 @ApiBearerAuth()
 @Controller('kyc')
 export class KycController {
-  constructor(private readonly kycService: KycService) { }
+  constructor(
+    private readonly kycService: KycService,
+    private readonly configService: ConfigService,
+  ) { }
 
   @Get('profile')
   getMyProfile(@CurrentUser('sub') userId: string) {
@@ -99,7 +105,15 @@ export class KycController {
   providerWebhook(
     @Param('provider') provider: string,
     @Body() dto: KycWebhookDto,
+    @Headers('x-webhook-secret') webhookSecret?: string,
   ) {
+    // Verify webhook secret if configured (prevents spoofed requests)
+    const expectedSecret = this.configService.get<string>('DIDIT_WEBHOOK_SECRET');
+    if (expectedSecret && provider === 'didit') {
+      if (webhookSecret !== expectedSecret) {
+        throw new ForbiddenException('Invalid webhook secret');
+      }
+    }
     return this.kycService.handleProviderWebhook(provider, dto);
   }
 }
