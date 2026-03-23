@@ -23,7 +23,7 @@ export class NftService {
     private readonly nftModel: Model<NftDocument>,
     private readonly viemNftClient: ViemNftClient,
     private readonly projectsService: ProjectsService,
-  ) {}
+  ) { }
 
   private parseObjectId(id: string, fieldName: string): Types.ObjectId {
     if (!Types.ObjectId.isValid(id)) {
@@ -161,12 +161,17 @@ export class NftService {
 
     const project = await this.projectsService.ensureProjectExists(dto.projectId);
 
-    const amountWei = BigInt(Math.floor(amountNumber * 1e18));
+    const projectOnchainId = BigInt(
+      /^\d+$/.test(dto.projectId)
+        ? dto.projectId
+        : '0',
+    );
+    const amountWei = BigInt(Math.floor(amountNumber * 1e6)); // UGX scaled to 6-decimal precision
 
-    const { hash, receipt } = await this.viemNftClient.mintInvestmentNft({
-      to: wallet as `0x${string}`,
-      projectId: dto.projectId,
-      amount: amountWei,
+    const { hash, receipt } = await this.viemNftClient.mintInvestmentTokens({
+      projectOnchainId,
+      investorWallet: wallet as `0x${string}`,
+      amountWei,
     });
 
     const tokenId = this.parseMintEvent(receipt);

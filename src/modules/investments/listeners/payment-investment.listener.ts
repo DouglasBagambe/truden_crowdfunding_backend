@@ -10,10 +10,7 @@ import {
     PaymentTransaction,
     PaymentTransactionDocument,
 } from '../../payments/schemas/payment-transaction.schema';
-
-// NOTE: CustodialWalletService and InvestmentNFTService (NFT minting after payment)
-// are temporarily removed and preserved in the `blockchain/nfts-future` branch.
-// When smart contracts and custodial wallets are ready, restore steps 4 & 5.
+import { InvestmentNFTService } from '../services/investment-nft.service';
 
 export interface PaymentSuccessfulPayload {
     transactionId: Types.ObjectId | string;
@@ -22,6 +19,8 @@ export interface PaymentSuccessfulPayload {
     amount: number;
     currency: string;
     projectType?: string; // 'CHARITY' | 'ROI'
+    /** Investor's self-custodial wallet address. Provided during checkout. */
+    walletAddress?: string;
 }
 
 @Injectable()
@@ -35,6 +34,7 @@ export class PaymentInvestmentListener {
         private readonly paymentTransactionModel: Model<PaymentTransactionDocument>,
         private readonly projectsService: ProjectsService,
         private readonly paymentsService: PaymentsService,
+        private readonly investmentNFTService: InvestmentNFTService,
     ) { }
 
     @OnEvent('payment.successful', { async: true })
@@ -60,15 +60,26 @@ export class PaymentInvestmentListener {
                 return;
             }
 
-            // ── Step 2: Determine project type from payload or transaction metadata
-            const tx = await this.paymentTransactionModel.findById(transactionId).lean();
+            // ── Step 2: Determine project type from payload or transaction metadata ─
+            const tx = await this.paymentTransactionModel
+                .findById(transactionId)
+                .lean() as PaymentTransactionDocument | null;
+
             const projectType = (
                 payload.projectType ||
                 (tx?.metadata as any)?.projectType ||
                 ''
             ).toString().toUpperCase();
 
+            // Wallet address can come from the event payload or from the tx metadata
+            const walletAddress: string | undefined =
+                payload.walletAddress ||
+                (tx?.metadata as any)?.walletAddress ||
+                undefined;
+
             // ── Step 3: Record the investment / donation ──────────────────────────
+            let investment: InvestmentDocument | null = null;
+
             if (projectType === 'CHARITY') {
                 // Charity donation path — mirror existing working flow
                 await this.projectsService.incrementCharityDonation(
@@ -79,13 +90,16 @@ export class PaymentInvestmentListener {
                 );
             } else {
                 // ROI investment path — create investment record + increment raised amount
-                const investment = await this.investmentModel.create({
+                investment = await this.investmentModel.create({
                     projectId: new Types.ObjectId(projectId),
                     investorId: new Types.ObjectId(userId),
                     amount: payload.amount,
                     currency: (payload.currency ?? 'UGX').toUpperCase(),
                     txHash: transactionId,
+                    walletAddress: walletAddress?.toLowerCase() ?? null,
                     status: InvestmentStatus.Active,
+                    nftMinted: false,
+                    listed: false,
                 });
 
                 this.logger.log(`ROI investment created: ${investment._id}`);
@@ -109,13 +123,56 @@ export class PaymentInvestmentListener {
                 }
             } catch (creditErr: any) {
                 this.logger.error(`Failed to credit creator wallet: ${creditErr.message}`);
-                // Non-critical — investment/donation is still recorded; admin can credit manually
             }
 
-            // ── Step 5 (FUTURE): Mint NFT to user's custodial wallet ──────────────
-            // Restore from blockchain/nfts-future branch when smart contracts are deployed.
-            // See payment-investment.listener.ts in that branch for the full implementation.
+            // ── Step 5: Mint NFT to investor's self-custodial wallet ──────────────
+            if (investment && walletAddress && projectType !== 'CHARITY') {
+                try {
+                    const project = await this.projectsService.ensureProjectExists(projectId);
+                    const projectOnchainId = String((project as any).projectOnchainId || projectId.replace(/[^0-9]/g, '').slice(0, 9) || '0');
 
+                    if (!projectOnchainId || projectOnchainId === '0') {
+                        this.logger.warn(
+                            `Project ${projectId} has no on-chain ID — skipping NFT mint. ` +
+                            `Set project.projectOnchainId when creating the project on-chain.`,
+                        );
+                        return;
+                    }
+
+                    const mintResult = await this.investmentNFTService.mintForUser(
+                        walletAddress,
+                        projectOnchainId,
+                        payload.amount,
+                        String(investment._id),
+                    );
+
+                    // Persist NFT metadata back to the investment record
+                    await this.investmentModel.findByIdAndUpdate(investment._id, {
+                        nftProjectId: mintResult.tokenId,
+                        nftTokenAmount: mintResult.tokenAmount,
+                        nftTxHash: mintResult.txHash,
+                        nftMinted: true,
+                    });
+
+                    this.logger.log(
+                        `NFT minted for investment ${investment._id}: tokenId=${mintResult.tokenId}, tx=${mintResult.txHash}`,
+                    );
+                } catch (nftErr: any) {
+                    // Non-fatal — investment is recorded; admin can re-trigger mint manually
+                    this.logger.error(
+                        `NFT mint failed for investment ${investment._id}: ${nftErr.message}`,
+                        nftErr.stack,
+                    );
+                    await this.investmentModel.findByIdAndUpdate(investment._id, {
+                        notes: `NFT mint failed: ${nftErr.message}`,
+                    });
+                }
+            } else if (investment && !walletAddress) {
+                this.logger.warn(
+                    `Investment ${investment._id} has no wallet address — NFT not minted. ` +
+                    `Investor must connect wallet in dashboard to trigger manual mint.`,
+                );
+            }
         } catch (err: any) {
             this.logger.error(
                 `Failed to handle payment.successful for transaction ${transactionId}: ${err.message}`,

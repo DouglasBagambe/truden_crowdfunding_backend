@@ -448,8 +448,9 @@ export class PaymentsService {
             phoneNumber?: string;
             mno?: 'MTN' | 'AIRTEL';
             description?: string;
-            projectType?: string; // 'CHARITY' | 'ROI'
+            projectType?: string;
             donorName?: string;
+            walletAddress?: string;
         },
         userId: string,
     ) {
@@ -495,6 +496,7 @@ export class PaymentsService {
                 description,
                 donorName: dto.donorName,
                 projectId: dto.projectId,
+                walletAddress: dto.walletAddress?.toLowerCase() || null,
             },
         });
 
@@ -529,6 +531,7 @@ export class PaymentsService {
                 amount: transaction.amount,
                 currency: transaction.currency,
                 projectType: (transaction.metadata as any)?.projectType,
+                walletAddress: (transaction.metadata as any)?.walletAddress || undefined,
             });
         } else if (
             verify.status === '801' ||
@@ -575,6 +578,7 @@ export class PaymentsService {
                 amount: transaction.amount,
                 currency: transaction.currency,
                 projectType: (transaction.metadata as any)?.projectType,
+                walletAddress: (transaction.metadata as any)?.walletAddress || undefined,
             });
 
             this.logger.log(`DPO payment confirmed via webhook: ${token}`);

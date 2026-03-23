@@ -10,7 +10,7 @@ export enum InvestmentStatus {
 export interface InvestmentViewInvestor {
   id: string;
   kycStatus?: KYCStatus;
-  // walletAddress and NFT data: see blockchain/nfts-future branch
+  walletAddress?: string | null;
 }
 
 export interface InvestmentViewProject {
@@ -21,7 +21,14 @@ export interface InvestmentViewProject {
   creatorId?: string;
 }
 
-// InvestmentViewNft is preserved in blockchain/nfts-future branch
+export interface InvestmentViewNft {
+  projectId?: number | null;
+  tokenAmount?: number | null;
+  txHash?: string | null;
+  metadataUri?: string | null;
+  minted: boolean;
+  listed: boolean;
+}
 
 export interface InvestmentView {
   id: string;
@@ -32,8 +39,9 @@ export interface InvestmentView {
   currency?: string;
   /** Payment gateway transaction reference */
   txHash?: string | null;
-  /** NFT placeholder — will be populated once blockchain/nfts-future is merged */
-  nftId?: string | null;
+  /** Self-custodial wallet address for NFT delivery */
+  walletAddress?: string | null;
+  nft?: InvestmentViewNft;
   status: InvestmentStatus;
   createdAt: Date;
   updatedAt: Date;

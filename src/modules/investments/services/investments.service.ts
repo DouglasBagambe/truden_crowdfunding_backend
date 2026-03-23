@@ -298,8 +298,15 @@ export class InvestmentsService {
       amount: Number(investment.amount),
       currency: (investment as any).currency ?? 'UGX',
       txHash: investment.txHash ?? null,
-      // NFT fields intentionally absent — see blockchain/nfts-future branch
-      nftId: null,
+      walletAddress: (investment as any).walletAddress ?? null,
+      nft: {
+        projectId: (investment as any).nftProjectId ?? null,
+        tokenAmount: (investment as any).nftTokenAmount ?? null,
+        txHash: (investment as any).nftTxHash ?? null,
+        metadataUri: (investment as any).nftMetadataUri ?? null,
+        minted: (investment as any).nftMinted ?? false,
+        listed: (investment as any).listed ?? false,
+      },
       status: investment.status,
       createdAt,
       updatedAt,
@@ -313,6 +320,7 @@ export class InvestmentsService {
       investor: {
         id: investorIdString,
         kycStatus: options?.investorKyc,
+        walletAddress: (investment as any).walletAddress ?? null,
       },
     };
   }
