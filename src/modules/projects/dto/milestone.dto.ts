@@ -15,6 +15,7 @@ export class MilestoneDto {
   title!: string;
 
   @ApiPropertyOptional({ description: 'Milestone description (optional — defaults to title if omitted)' })
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
   @IsOptional()
   @IsString()
   @Length(4, 2000)
