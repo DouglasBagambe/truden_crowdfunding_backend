@@ -69,11 +69,15 @@ export class DiditKycProviderService implements IKycProviderService {
                 vendor_data: userId, // echoed back in webhook — we use this to find the profile
             };
 
-            // Didit requires a workflow_id if configured
+            // Didit v3 API requires a workflow_id
             const workflowId = this.configService.get<string>('DIDIT_WORKFLOW_ID');
-            if (workflowId) {
-                payload.workflow_id = workflowId;
+            if (!workflowId) {
+                throw new Error(
+                    'DIDIT_WORKFLOW_ID is not configured. ' +
+                    'Go to app.didit.me → Workflows → copy the workflow ID and set it as DIDIT_WORKFLOW_ID env var.',
+                );
             }
+            payload.workflow_id = workflowId;
 
             const headers = this.buildHeaders();
 

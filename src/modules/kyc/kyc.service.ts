@@ -183,7 +183,18 @@ export class KycService {
     profile.status = KycApplicationStatus.PENDING;
     profile.submittedAt = new Date();
 
-    const submitResult = await provider.submitApplication(profile);
+    let submitResult;
+    try {
+      submitResult = await provider.submitApplication(profile);
+    } catch (err: any) {
+      this.logger.error(`KYC submit failed for user ${userId}: ${err.message}`);
+      // Reset status back so user can retry
+      profile.status = KycApplicationStatus.UNVERIFIED;
+      await profile.save();
+      throw new BadRequestException(
+        err.message || 'KYC provider session creation failed. Please try again.',
+      );
+    }
 
     profile.providerName = provider.getProviderName();
     profile.providerReference = submitResult.reference;
