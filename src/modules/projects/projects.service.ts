@@ -151,7 +151,7 @@ export class ProjectsService {
     if (dto.milestones?.length) {
       const milestonesPayload = dto.milestones.map((m) => ({
         title: m.title,
-        description: m.description,
+        description: m.description?.trim() || m.title,
         dueDate: m.dueDate,
         payoutPercentage: m.payoutPercentage ?? 0,
         status: MilestoneStatus.PLANNED,
@@ -323,7 +323,7 @@ export class ProjectsService {
       if (dto.milestones.length > 0) {
         const milestonesPayload = dto.milestones.map((m) => ({
           title: m.title,
-          description: m.description,
+          description: m.description?.trim() || m.title,
           dueDate: m.dueDate,
           payoutPercentage: m.payoutPercentage ?? 0,
           status: MilestoneStatus.PLANNED,
