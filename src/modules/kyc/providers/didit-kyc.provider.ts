@@ -67,17 +67,25 @@ export class DiditKycProviderService implements IKycProviderService {
             const payload: Record<string, any> = {
                 callback: `${this.backendUrl}/api/kyc/webhook/didit`,
                 vendor_data: userId, // echoed back in webhook — we use this to find the profile
-                steps: {
-                    face_authentication: {
-                        active: true,
-                    },
-                    review: {
-                        active: true,
-                    },
-                },
             };
 
+            // Didit requires a workflow_id if configured
+            const workflowId = this.configService.get<string>('DIDIT_WORKFLOW_ID');
+            if (workflowId) {
+                payload.workflow_id = workflowId;
+            }
+
             const headers = this.buildHeaders();
+
+            this.logger.log(
+                `[DIDIT] Creating session for user ${userId} at ${this.baseUrl}/v3/session/`,
+            );
+            this.logger.log(
+                `[DIDIT] Payload: ${JSON.stringify(payload)}`,
+            );
+            this.logger.log(
+                `[DIDIT] Headers: ${JSON.stringify({ ...headers, 'x-api-key': headers['x-api-key'] ? '***SET***' : '***MISSING***' })}`,
+            );
 
             const response = await axios.post(`${this.baseUrl}/v3/session/`, payload, { headers });
             const data = response.data as {
@@ -87,7 +95,7 @@ export class DiditKycProviderService implements IKycProviderService {
             };
 
             this.logger.log(
-                `Didit session created for user ${userId}: sessionId=${data.session_id}`,
+                `[DIDIT] Session created for user ${userId}: sessionId=${data.session_id}, url=${data.url}`,
             );
 
             return {
@@ -99,9 +107,13 @@ export class DiditKycProviderService implements IKycProviderService {
                 },
             };
         } catch (err: any) {
-            const msg = err?.response?.data?.message ?? err.message;
-            this.logger.error(`Didit session creation failed for user ${userId}: ${msg}`);
-            throw new Error(`Didit KYC session creation failed: ${msg}`);
+            const respData = err?.response?.data;
+            const status = err?.response?.status;
+            const msg = respData?.message ?? respData?.detail ?? err.message;
+            this.logger.error(
+                `[DIDIT] Session creation FAILED for user ${userId}: status=${status}, message=${msg}, full=${JSON.stringify(respData)}`,
+            );
+            throw new Error(`Didit KYC session creation failed (${status}): ${msg}`);
         }
     }
 
