@@ -59,7 +59,64 @@ export class KycService {
     const user = await this.findUser(userId);
     const profile = await this.getOrCreateProfileForUser(user._id);
     await this.checkAndMarkExpired(profile, user);
+
+    // Auto-refresh from Didit if status is still pending and we have a session
+    const pendingStatuses = [
+      KycApplicationStatus.PENDING,
+      KycApplicationStatus.SUBMITTED_TO_PROVIDER,
+      KycApplicationStatus.UNDER_REVIEW,
+    ];
+    if (
+      pendingStatuses.includes(profile.status) &&
+      profile.providerReference &&
+      profile.providerName
+    ) {
+      try {
+        const provider = this.getProviderByName(profile.providerName);
+        const fresh = await provider.refreshStatus(profile);
+        if (fresh.status && fresh.status !== 'UNDER_REVIEW' && fresh.status !== 'PENDING') {
+          this.logger.log(
+            `Auto-refresh: Didit status for user ${userId} updated from ${profile.providerStatus} to ${fresh.status}`,
+          );
+          profile.providerStatus = fresh.status;
+          profile.providerRawResponse = fresh.rawResponse ?? {};
+          this.applyMappedStatus(profile, fresh);
+          await profile.save();
+          await this.syncUserKycStatus(user, profile);
+          // Re-fetch user to get updated kycStatus
+          const updatedUser = await this.userModel.findById(user._id).exec();
+          return this.toProfileView(profile, updatedUser ?? user);
+        }
+      } catch (err: any) {
+        this.logger.warn(`Auto-refresh from Didit failed for user ${userId}: ${err.message}`);
+      }
+    }
+
     return this.toProfileView(profile, user);
+  }
+
+  /**
+   * User-facing endpoint: explicitly refresh KYC status from provider.
+   */
+  async syncMyStatus(userId: string): Promise<KycProfileView> {
+    const user = await this.findUser(userId);
+    const profile = await this.getOrCreateProfileForUser(user._id);
+
+    if (!profile.providerReference || !profile.providerName) {
+      return this.toProfileView(profile, user);
+    }
+
+    const provider = this.getProviderByName(profile.providerName);
+    const status = await provider.refreshStatus(profile);
+
+    profile.providerStatus = status.status;
+    profile.providerRawResponse = status.rawResponse ?? {};
+    this.applyMappedStatus(profile, status);
+    await profile.save();
+
+    await this.syncUserKycStatus(user, profile);
+    const updatedUser = await this.userModel.findById(user._id).exec();
+    return this.toProfileView(profile, updatedUser ?? user);
   }
 
   async updateProfile(

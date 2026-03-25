@@ -69,6 +69,12 @@ export class KycController {
     return this.kycService.submitForVerification(userId, dto);
   }
 
+  @Post('refresh')
+  async refreshMyStatus(@CurrentUser('sub') userId: string) {
+    // Polls Didit for the latest status and updates the local profile + user
+    return this.kycService.syncMyStatus(userId);
+  }
+
   @Get('admin/profiles')
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.MANAGE_USERS)
