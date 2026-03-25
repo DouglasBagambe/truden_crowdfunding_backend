@@ -197,6 +197,7 @@ export class PaymentsService {
             wallet = await this.walletModel.create({
                 userId: new Types.ObjectId(userId),
                 fiatBalance: { UGX: 0, USD: 0 },
+                roiBalance: { UGX: 0, USD: 0 },
                 cryptoBalance: { ETH: 0, USDC: 0 },
             });
             this.logger.log(`Wallet created for user ${userId}`);
@@ -285,10 +286,28 @@ export class PaymentsService {
 
         // Check balance
         const currency = dto.currency.toUpperCase();
-        const balance = (wallet.fiatBalance as any)[currency] || 0;
+        const isRoi = dto.balanceType === 'ROI';
+
+        const balance = isRoi
+            ? ((wallet.roiBalance as any)?.[currency] || 0)
+            : ((wallet.fiatBalance as any)?.[currency] || 0);
 
         if (balance < dto.amount) {
-            throw new BadRequestException(`Insufficient ${currency} balance`);
+            throw new BadRequestException(`Insufficient ${isRoi ? 'ROI' : 'Charity'} ${currency} balance`);
+        }
+
+        // Validate amount based on type
+        if (!isRoi && dto.amount < 500) {
+            throw new BadRequestException('Minimum charity withdrawal is UGX 500');
+        }
+
+        if (isRoi && dto.projectId) {
+            const project = await this.walletModel.db.collection('projects').findOne({ _id: new Types.ObjectId(dto.projectId) });
+            if (!project) throw new BadRequestException('Project not found');
+            const targetAmount = project.goalAmount || project.targetAmount || 1;
+            if ((project.raisedAmount || 0) < targetAmount) {
+                throw new BadRequestException('ROI investments can only be withdrawn once the project hits 100% of its target');
+            }
         }
 
         // Get withdrawal method
@@ -306,7 +325,45 @@ export class PaymentsService {
         // Create payout reference
         const payoutRef = `PAYOUT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-        // Process payout with Flutterwave (pays out the net amount after fee)
+        if (isRoi) {
+            // Deduct requested amount from creator's ROI wallet
+            (wallet.roiBalance as any)[currency] -= dto.amount;
+            wallet.markModified('roiBalance');
+            await wallet.save();
+
+            // Create pending transaction record
+            const transaction = await this.paymentTransactionModel.create({
+                userId: new Types.ObjectId(userId),
+                projectId: new Types.ObjectId(dto.projectId || '000000000000000000000000'),
+                amount: -dto.amount, // Negative for withdrawal
+                currency: dto.currency,
+                paymentMethod: method.type === 'mobile_money' ? PaymentMethod.MobileMoney : PaymentMethod.BankTransfer,
+                provider: PaymentProvider.Flutterwave,
+                status: PaymentStatus.Pending, // Requires Admin Approval
+                metadata: {
+                    type: 'WITHDRAWAL_ROI',
+                    method,
+                    platformFee,
+                    payoutAmount,
+                    feeRate: PLATFORM_FEE_RATE,
+                    pendingApproval: true,
+                    note: dto.note,
+                },
+            });
+
+            this.logger.log(`ROI Withdrawal initiated for user ${userId}: ${transaction._id}. Awaiting admin approval.`);
+
+            return {
+                transactionId: transaction._id,
+                status: PaymentStatus.Pending,
+                amount: dto.amount,
+                platformFee,
+                youReceive: payoutAmount,
+                message: 'ROI withdrawal requested. Awaiting administrator approval.',
+            };
+        }
+
+        // Process Charity payout directly with Flutterwave
         const payoutResult = await this.flutterwaveService.processPayout({
             amount: payoutAmount,
             currency: dto.currency,
@@ -316,7 +373,7 @@ export class PaymentsService {
             reference: payoutRef,
         });
 
-        // Deduct full requested amount from creator's wallet
+        // Deduct full requested amount from creator's Charity wallet
         (wallet.fiatBalance as any)[currency] -= dto.amount;
         wallet.markModified('fiatBalance');
         await wallet.save();
@@ -331,29 +388,25 @@ export class PaymentsService {
                 treasuryWallet.markModified('fiatBalance');
                 await treasuryWallet.save();
                 this.logger.log(
-                    `Platform fee ${currency} ${platformFee} credited to treasury wallet (userId=${treasuryUserId})`,
+                    `Platform fee ${currency} ${platformFee} credited to treasury wallet`,
                 );
             } catch (feeErr: any) {
-                // Non-critical: fee tracking failed, but payout proceeds
                 this.logger.warn(`Failed to credit treasury fee: ${feeErr.message}`);
             }
-        } else {
-            this.logger.warn(
-                `KEIBO_TREASURY_USER_ID not configured. Platform fee ${currency} ${platformFee} was not routed.`,
-            );
         }
 
         // Create transaction record
         const transaction = await this.paymentTransactionModel.create({
             userId: new Types.ObjectId(userId),
-            projectId: new Types.ObjectId('000000000000000000000000'), // Dummy project ID for withdrawals
-            amount: -dto.amount, // Negative for withdrawal
+            projectId: new Types.ObjectId(dto.projectId || '000000000000000000000000'),
+            amount: -dto.amount,
             currency: dto.currency,
             paymentMethod: method.type === 'mobile_money' ? PaymentMethod.MobileMoney : PaymentMethod.BankTransfer,
             provider: PaymentProvider.Flutterwave,
             status: PaymentStatus.Processing,
             flutterwaveReference: payoutRef,
             metadata: {
+                type: 'WITHDRAWAL_CHARITY',
                 payoutResult,
                 platformFee,
                 payoutAmount,
@@ -361,7 +414,7 @@ export class PaymentsService {
             },
         });
 
-        this.logger.log(`Withdrawal initiated for user ${userId}: ${transaction._id} | amount=${dto.amount} fee=${platformFee} payout=${payoutAmount}`);
+        this.logger.log(`Charity Withdrawal processed for user ${userId}`);
 
         return {
             transactionId: transaction._id,
@@ -369,10 +422,80 @@ export class PaymentsService {
             amount: dto.amount,
             platformFee,
             youReceive: payoutAmount,
+            message: 'Withdrawal processed successfully via Flutterwave.',
             newBalance: (wallet.fiatBalance as any)[currency],
         };
     }
 
+    async approveRoiWithdrawal(transactionId: string) {
+        const transaction = await this.paymentTransactionModel.findById(transactionId);
+        if (!transaction || transaction.status !== PaymentStatus.Pending) {
+            throw new BadRequestException('Invalid transaction or not pending approval');
+        }
+
+        const payoutRef = `PAYOUT-ROI-${Date.now()}`;
+        const payoutResult = await this.flutterwaveService.processPayout({
+            amount: transaction.metadata!.payoutAmount,
+            currency: transaction.currency,
+            accountNumber: transaction.metadata!.method.accountNumber,
+            accountBank: transaction.metadata!.method.provider,
+            narration: transaction.metadata!.note || 'ROI Wallet withdrawal - Keibo',
+            reference: payoutRef,
+        });
+
+        const platformFee = transaction.metadata!.platformFee;
+        const currency = transaction.currency;
+        const treasuryUserId = this.configService.get<string>('KEIBO_TREASURY_USER_ID');
+        if (treasuryUserId && platformFee > 0) {
+            try {
+                const treasuryWallet = await this.getOrCreateWallet(treasuryUserId);
+                (treasuryWallet.fiatBalance as any)[currency] =
+                    ((treasuryWallet.fiatBalance as any)[currency] || 0) + platformFee;
+                treasuryWallet.markModified('fiatBalance');
+                await treasuryWallet.save();
+            } catch (feeErr: any) {
+                this.logger.warn(`Failed to credit treasury fee for approved ROI payout: ${feeErr.message}`);
+            }
+        }
+
+        transaction.status = PaymentStatus.Processing;
+        transaction.flutterwaveReference = payoutRef;
+        transaction.metadata!.payoutResult = payoutResult;
+        transaction.metadata!.pendingApproval = false;
+        transaction.markModified('metadata');
+        await transaction.save();
+
+        return { success: true, message: 'Payout approved and processing' };
+    }
+
+    async rejectRoiWithdrawal(transactionId: string) {
+        const transaction = await this.paymentTransactionModel.findById(transactionId);
+        if (!transaction || transaction.status !== PaymentStatus.Pending) {
+            throw new BadRequestException('Invalid transaction or not pending approval');
+        }
+
+        // Refund the user's roiBalance
+        const wallet = await this.getOrCreateWallet(transaction.userId.toString());
+        (wallet.roiBalance as any)[transaction.currency] += Math.abs(transaction.amount);
+        wallet.markModified('roiBalance');
+        await wallet.save();
+
+        transaction.status = PaymentStatus.Failed;
+        transaction.metadata!.pendingApproval = false;
+        transaction.metadata!.rejectReason = 'Rejected by administrator';
+        transaction.markModified('metadata');
+        await transaction.save();
+
+        return { success: true, message: 'Payout rejected and refunded' };
+    }
+
+    async getPendingWithdrawals() {
+        const transactions = await this.paymentTransactionModel.find({
+            status: PaymentStatus.Pending,
+            'metadata.type': 'WITHDRAWAL_ROI'
+        }).populate('userId', 'firstName lastName email').populate('projectId', 'name').sort({ createdAt: -1 });
+        return transactions;
+    }
 
     /**
      * Add withdrawal method

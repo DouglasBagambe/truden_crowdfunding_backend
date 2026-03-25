@@ -27,6 +27,8 @@ import {
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PaymentMethod, PaymentStatus } from './schemas/payment-transaction.schema';
 import { EmailVerifiedGuard } from '../../common/guards/email-verified.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { UserRole } from '../../common/enums/role.enum';
 
 @ApiTags('Payments')
 @Controller('payments')
@@ -171,6 +173,7 @@ export class WalletController {
         const wallet = await this.paymentsService.getOrCreateWallet(req.user.userId);
         return {
             fiatBalance: wallet.fiatBalance,
+            roiBalance: wallet.roiBalance,
             cryptoBalance: wallet.cryptoBalance,
             totalBalanceUSD: wallet.totalBalanceUSD,
         };
@@ -200,6 +203,30 @@ export class WalletController {
     @ApiResponse({ status: 201, description: 'Withdrawal initiated' })
     async withdraw(@Body() dto: WithdrawFromWalletDto, @Request() req: any) {
         return this.paymentsService.withdrawFromWallet(dto, req.user.userId);
+    }
+
+    @Post('admin/withdrawals/:id/approve')
+    @Roles(UserRole.ADMIN)
+    @ApiOperation({ summary: 'Admin approve an ROI withdrawal' })
+    @ApiResponse({ status: 200, description: 'Withdrawal approved and processed' })
+    async approveRoiWithdrawal(@Param('id') transactionId: string) {
+        return this.paymentsService.approveRoiWithdrawal(transactionId);
+    }
+
+    @Get('admin/withdrawals/pending')
+    @Roles(UserRole.ADMIN)
+    @ApiOperation({ summary: 'Admin get pending ROI withdrawals' })
+    @ApiResponse({ status: 200, description: 'List of pending withdrawals' })
+    async getPendingWithdrawals() {
+        return this.paymentsService.getPendingWithdrawals();
+    }
+
+    @Post('admin/withdrawals/:id/reject')
+    @Roles(UserRole.ADMIN)
+    @ApiOperation({ summary: 'Admin reject an ROI withdrawal' })
+    @ApiResponse({ status: 200, description: 'Withdrawal rejected and refunded' })
+    async rejectRoiWithdrawal(@Param('id') transactionId: string) {
+        return this.paymentsService.rejectRoiWithdrawal(transactionId);
     }
 
     @Post('withdrawal-method')

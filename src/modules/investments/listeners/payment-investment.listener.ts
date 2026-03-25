@@ -114,9 +114,18 @@ export class PaymentInvestmentListener {
                     const creatorId = String(project.creatorId);
                     const creatorWallet = await this.paymentsService.getOrCreateWallet(creatorId);
                     const currency = (payload.currency ?? 'UGX').toUpperCase();
-                    (creatorWallet.fiatBalance as any)[currency] =
-                        ((creatorWallet.fiatBalance as any)[currency] || 0) + payload.amount;
-                    creatorWallet.markModified('fiatBalance');
+
+                    if (projectType === 'CHARITY') {
+                        (creatorWallet.fiatBalance as any)[currency] =
+                            ((creatorWallet.fiatBalance as any)[currency] || 0) + payload.amount;
+                        creatorWallet.markModified('fiatBalance');
+                    } else {
+                        if (!creatorWallet.roiBalance) creatorWallet.roiBalance = { UGX: 0, USD: 0 };
+                        (creatorWallet.roiBalance as any)[currency] =
+                            ((creatorWallet.roiBalance as any)[currency] || 0) + payload.amount;
+                        creatorWallet.markModified('roiBalance');
+                    }
+
                     await creatorWallet.save();
                     this.logger.log(
                         `Credited creator ${creatorId} wallet ${currency} +${payload.amount}`,
