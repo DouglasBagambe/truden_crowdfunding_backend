@@ -359,7 +359,9 @@ export class InvestmentsService {
       const creatorId = user._id;
 
       // Calculate total raised exactly from projects where this user is the creator
-      const projects = await db.collection('projects').find({ creatorId }).toArray();
+      const projects = await db.collection('projects').find({
+        creatorId: { $in: [creatorId, creatorId.toString()] }
+      }).toArray();
       if (projects.length === 0) continue;
 
       let expectedCharity = 0;
@@ -373,8 +375,10 @@ export class InvestmentsService {
         else expectedCharity += amt; // Fallback
       }
 
-      if (expectedCharity > 0 || expectedRoi > 0) {
-        const wallet = await db.collection('wallets').findOne({ userId: creatorId });
+      if (expectedCharity > 0 || expectedRoi > 0 || projects.length > 0) {
+        const wallet = await db.collection('wallets').findOne({
+          userId: { $in: [creatorId, creatorId.toString()] }
+        });
         if (wallet) {
           const currentFiat = wallet.fiatBalance?.UGX || 0;
           const currentRoi = wallet.roiBalance?.UGX || 0;
