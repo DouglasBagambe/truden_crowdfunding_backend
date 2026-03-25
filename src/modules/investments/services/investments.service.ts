@@ -380,21 +380,30 @@ export class InvestmentsService {
           userId: { $in: [creatorId, creatorId.toString()] }
         });
         if (wallet) {
-          const currentFiat = wallet.fiatBalance?.UGX || 0;
-          const currentRoi = wallet.roiBalance?.UGX || 0;
-
-          if (currentFiat !== expectedCharity || currentRoi !== expectedRoi) {
-            await db.collection('wallets').updateOne(
-              { _id: wallet._id },
-              {
-                $set: {
-                  'fiatBalance.UGX': expectedCharity,
-                  'roiBalance.UGX': expectedRoi
-                }
+          // Always overwrite — don't skip on equality, data may be stale
+          await db.collection('wallets').updateOne(
+            { _id: wallet._id },
+            {
+              $set: {
+                'fiatBalance.UGX': expectedCharity,
+                'roiBalance.UGX': expectedRoi
               }
-            );
-            fixedWallets++;
-          }
+            }
+          );
+          fixedWallets++;
+        } else if (expectedCharity > 0 || expectedRoi > 0) {
+          // No wallet exists — create one now
+          await db.collection('wallets').insertOne({
+            userId: creatorId,
+            fiatBalance: { UGX: expectedCharity, USD: 0 },
+            roiBalance: { UGX: expectedRoi, USD: 0 },
+            cryptoBalance: { ETH: 0, USDC: 0 },
+            totalBalanceUSD: 0,
+            withdrawalMethods: [],
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+          fixedWallets++;
         }
       }
     }
