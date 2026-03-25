@@ -151,13 +151,15 @@ export class DiditKycProviderService implements IKycProviderService {
             };
         } catch (err: any) {
             const msg = err?.response?.data?.message ?? err.message;
-            this.logger.error(
-                `Didit status refresh failed for session ${sessionId}: ${msg}`,
+            this.logger.warn(
+                `Didit status refresh skipped (requires OAuth webhooks): session ${sessionId}: ${msg}`,
             );
+            // Return PENDING so we don't accidentally overwrite an APPROVED state
+            // and we let the Webhook be the source of truth.
             return {
                 reference: sessionId,
-                status: 'UNDER_REVIEW',
-                rawResponse: { error: msg },
+                status: 'PENDING',
+                rawResponse: { info: 'Waiting for webhook' },
             };
         }
     }
