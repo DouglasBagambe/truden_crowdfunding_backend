@@ -430,9 +430,16 @@ export class KycService {
     const items: AdminKycProfileListItem[] = profiles.map((p) => {
       const user = userMap.get(p.userId.toString());
       const userKycStatus = user?.kycStatus ?? KYCStatus.NOT_VERIFIED;
+      // Also get the creator's precise name from profile
+      const firstName = user?.profile?.firstName ?? '';
+      const lastName = user?.profile?.lastName ?? '';
+      const userName = [firstName, lastName].filter(Boolean).join(' ').trim() || undefined;
+
       return {
         id: p._id.toString(),
         userId: p.userId.toString(),
+        userEmail: user?.email,
+        userName,
         status: p.status,
         userKycStatus,
         level: (p.level as any) ?? null,

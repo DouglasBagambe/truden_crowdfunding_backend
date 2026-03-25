@@ -71,6 +71,8 @@ export interface KycProfileView {
 export interface AdminKycProfileListItem {
   id: string;
   userId: string;
+  userEmail?: string;
+  userName?: string;
   status: KycApplicationStatus;
   userKycStatus: KYCStatus;
   level?: KycLevel | null;
