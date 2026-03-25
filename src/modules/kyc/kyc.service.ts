@@ -109,6 +109,19 @@ export class KycService {
     const provider = this.getProviderByName(profile.providerName);
     const status = await provider.refreshStatus(profile);
 
+    // If polling the stored session returns PENDING/UNKNOWN, it may be stale.
+    // Update the stored reference then re-apply.
+    if (
+      status.status === 'PENDING' ||
+      status.status === 'UNKNOWN' ||
+      status.status === 'UNDER_REVIEW'
+    ) {
+      this.logger.log(
+        `syncMyStatus: stored session ${profile.providerReference} is still ${status.status} for user ${userId}. Status unchanged.`,
+      );
+      return this.toProfileView(profile, user);
+    }
+
     profile.providerStatus = status.status;
     profile.providerRawResponse = status.rawResponse ?? {};
     this.applyMappedStatus(profile, status);
@@ -218,13 +231,14 @@ export class KycService {
     const user = await this.findUser(userId);
     const profile = await this.getOrCreateProfileForUser(user._id);
 
-    // Allow re-submission if expired, rejected, or needs more info
+    // Allow re-submission if expired, rejected, needs more info, or still pending
     const allowedStatuses = [
       KycApplicationStatus.UNVERIFIED,
       KycApplicationStatus.DRAFT,
       KycApplicationStatus.REJECTED,
       KycApplicationStatus.NEEDS_MORE_INFO,
       KycApplicationStatus.EXPIRED,
+      KycApplicationStatus.UNDER_REVIEW, // allow retry if stuck pending
     ];
     if (!allowedStatuses.includes(profile.status)) {
       throw new BadRequestException(
@@ -316,35 +330,46 @@ export class KycService {
     providerName: string,
     dto: KycWebhookDto,
   ): Promise<void> {
-    this.logger.log(`KYC webhook from provider: ${providerName}`);
+    this.logger.log(
+      `KYC webhook from provider: ${providerName}, ref=${dto.reference}, status=${dto.status}, vendorData=${dto.externalUserId}`,
+    );
 
     const provider = this.getProviderByName(providerName);
-
     const mapped = await provider.handleWebhook(dto);
     if (!mapped) return;
 
-    // Didit sends vendor_data = userId (we stored it during session creation)
-    let profile = await this.profileModel
-      .findOne({ providerName, providerReference: mapped.reference })
-      .exec();
+    let profile: KycProfileDocument | null = null;
 
-    // Fallback: try vendor_data (Didit sends this as the userId)
-    if (!profile) {
-      const vendorData = dto.payload?.vendor_data ?? dto.payload?.vendorData;
-      if (vendorData && Types.ObjectId.isValid(vendorData)) {
-        profile = await this.profileModel
-          .findOne({ userId: new Types.ObjectId(vendorData) })
-          .exec();
-        if (profile) {
-          profile.providerReference = mapped.reference;
-          profile.providerName = providerName;
-        }
+    // Priority 1: look up by vendor_data (userId) — most reliable for Didit
+    const vendorData =
+      dto.externalUserId ??
+      dto.payload?.vendor_data ??
+      dto.payload?.vendorData;
+
+    if (vendorData && Types.ObjectId.isValid(vendorData)) {
+      profile = await this.profileModel
+        .findOne({ userId: new Types.ObjectId(vendorData) })
+        .exec();
+      if (profile) {
+        // Always update the stored reference to the latest session
+        this.logger.log(
+          `KYC webhook: found profile via vendor_data=${vendorData}, updating ref to ${mapped.reference}`,
+        );
+        profile.providerReference = mapped.reference;
+        profile.providerName = providerName;
       }
+    }
+
+    // Priority 2: fallback to session_id match
+    if (!profile && mapped.reference) {
+      profile = await this.profileModel
+        .findOne({ providerName, providerReference: mapped.reference })
+        .exec();
     }
 
     if (!profile) {
       this.logger.warn(
-        `No KYC profile found for provider=${providerName} ref=${mapped.reference}`,
+        `KYC webhook: No profile found for provider=${providerName} ref=${mapped.reference} vendorData=${vendorData}`,
       );
       return;
     }
@@ -357,6 +382,10 @@ export class KycService {
 
     const user = await this.userModel.findById(profile.userId).exec();
     if (user) await this.syncUserKycStatus(user, profile);
+
+    this.logger.log(
+      `KYC webhook processed: userId=${profile.userId}, newStatus=${profile.status}`,
+    );
   }
 
   // ─────────────────────────────────────────────

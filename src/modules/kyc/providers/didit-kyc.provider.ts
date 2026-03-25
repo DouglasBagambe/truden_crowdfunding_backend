@@ -169,19 +169,26 @@ export class DiditKycProviderService implements IKycProviderService {
     async handleWebhook(
         dto: KycWebhookDto,
     ): Promise<KycProviderStatusResult | null> {
+        // dto.payload = the full flat Didit body
+        // dto.reference = session_id (already extracted in controller)
+        // dto.externalUserId = vendor_data (already extracted in controller)
         const payload = dto.payload ?? {};
-        const sessionId = (payload.session_id ?? dto.reference ?? '').toString();
+        const sessionId = dto.reference || (payload.session_id ?? '').toString();
+
+        this.logger.log(
+            `[DIDIT] Webhook received: sessionId=${sessionId}, status=${dto.status}, vendorData=${dto.externalUserId}, payload=${JSON.stringify(payload)}`,
+        );
 
         if (!sessionId) {
             this.logger.warn('Didit webhook: missing session_id');
             return null;
         }
 
-        const rawStatus = (payload.status ?? dto.status ?? '').toString();
+        const rawStatus = dto.status || (payload.status ?? '').toString();
         const mappedStatus = this.mapDiditStatus(rawStatus);
 
         this.logger.log(
-            `Didit webhook: sessionId=${sessionId}, rawStatus=${rawStatus}, mapped=${mappedStatus}`,
+            `[DIDIT] Webhook mapped: sessionId=${sessionId}, rawStatus=${rawStatus}, mapped=${mappedStatus}`,
         );
 
         return {
