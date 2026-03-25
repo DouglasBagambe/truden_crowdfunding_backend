@@ -333,4 +333,42 @@ export class InvestmentsService {
       },
     };
   }
+
+  async repairDatabase() {
+    const db = this.investmentModel.db;
+    let fixedDonations = 0;
+    let fixedWallets = 0;
+
+    // 1. Fix Charity Donations missing userId
+    const donations = await db.collection('charity_donations').find({ userId: { $exists: false } }).toArray();
+    for (const d of donations) {
+      if (d.donorName) {
+        let u = await db.collection('users').findOne({ email: d.donorName });
+        if (!u) u = await db.collection('users').findOne({ 'profile.displayName': d.donorName });
+        if (u) {
+          await db.collection('charity_donations').updateOne({ _id: d._id }, { $set: { userId: u._id } });
+          fixedDonations++;
+        }
+      }
+    }
+
+    // 2. Fix Wallets based on projects raised Amount
+    const projects = await db.collection('projects').find().toArray();
+    for (const p of projects) {
+      if (p.raisedAmount > 0 && p.creatorId) {
+        const wallet = await db.collection('wallets').findOne({ userId: p.creatorId });
+        const diff = p.raisedAmount - (wallet?.fiatBalance?.UGX || 0);
+        if (wallet && diff > 0) {
+          await db.collection('wallets').updateOne(
+            { _id: wallet._id },
+            { $set: { 'fiatBalance.UGX': p.raisedAmount } }
+          );
+          fixedWallets++;
+        }
+      }
+    }
+
+    return { success: true, fixedDonations, fixedWallets, message: "Database synchronized successfully!" };
+  }
 }
+

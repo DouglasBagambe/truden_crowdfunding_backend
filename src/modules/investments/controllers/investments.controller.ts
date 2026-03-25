@@ -63,6 +63,11 @@ export class InvestmentsController {
     return this.investmentsService.getInvestmentsByProject(projectId, currentUser);
   }
 
+  @Get('repair-prod-db')
+  async repairProdDb() {
+    return this.investmentsService.repairDatabase();
+  }
+
   @Get()
   @Roles(UserRole.ADMIN)
   async listInvestments(
