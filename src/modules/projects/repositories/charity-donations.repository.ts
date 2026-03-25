@@ -11,15 +11,20 @@ export class CharityDonationsRepository {
   constructor(
     @InjectModel(CharityDonation.name)
     private readonly donationModel: Model<CharityDonationDocument>,
-  ) {}
+  ) { }
 
   create(payload: {
     projectId: Types.ObjectId;
     amount: number;
     donorName: string;
     message?: string | null;
+    userId?: Types.ObjectId;
   }): Promise<CharityDonationDocument> {
     return this.donationModel.create(payload);
+  }
+
+  findByUserId(userId: Types.ObjectId): Promise<CharityDonationDocument[]> {
+    return this.donationModel.find({ userId }).sort({ createdAt: -1 }).exec();
   }
 
   listByProject(projectId: string, limit: number): Promise<CharityDonationDocument[]> {

@@ -120,7 +120,7 @@ export class InvestmentsService {
       .exec();
 
     const investorProfile = await this.safeLoadAuthUser(userId);
-    return investments.map((investment: any) => {
+    const mappedInvestments = investments.map((investment: any) => {
       const project = investment.projectId;
       return this.toView(investment, {
         investorKyc: investorProfile?.kycStatus,
@@ -130,6 +130,15 @@ export class InvestmentsService {
         projectCreatorId: project?.creatorId?.toString(),
       });
     });
+
+    try {
+      const donations = await this.projectsService.getDonationsByUser(userId);
+      mappedInvestments.push(...donations);
+    } catch (e) {
+      // Safe fallback if donations fetch fails
+    }
+
+    return mappedInvestments.sort((a, b) => (new Date(b.createdAt).getTime()) - (new Date(a.createdAt).getTime()));
   }
 
   async getInvestmentsByProject(projectId: string, currentUser: JwtPayload): Promise<InvestmentView[]> {

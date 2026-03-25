@@ -19,6 +19,14 @@ export class CharityDonation {
 
   @Prop({ type: String, trim: true, default: null })
   message?: string | null;
+
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    required: false,
+    index: true,
+    ref: 'User',
+  })
+  userId?: Types.ObjectId;
 }
 
 export type CharityDonationDocument = CharityDonation & Document;

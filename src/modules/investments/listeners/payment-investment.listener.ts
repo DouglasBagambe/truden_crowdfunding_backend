@@ -116,6 +116,7 @@ export class PaymentInvestmentListener {
                     const currency = (payload.currency ?? 'UGX').toUpperCase();
                     (creatorWallet.fiatBalance as any)[currency] =
                         ((creatorWallet.fiatBalance as any)[currency] || 0) + payload.amount;
+                    creatorWallet.markModified('fiatBalance');
                     await creatorWallet.save();
                     this.logger.log(
                         `Credited creator ${creatorId} wallet ${currency} +${payload.amount}`,

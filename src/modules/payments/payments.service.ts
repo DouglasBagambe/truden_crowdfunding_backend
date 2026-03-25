@@ -242,6 +242,7 @@ export class PaymentsService {
 
         // Deduct from wallet
         (wallet.fiatBalance as any)[currency] -= dto.amount;
+        wallet.markModified('fiatBalance');
         await wallet.save();
 
         // Create transaction record
@@ -317,6 +318,7 @@ export class PaymentsService {
 
         // Deduct full requested amount from creator's wallet
         (wallet.fiatBalance as any)[currency] -= dto.amount;
+        wallet.markModified('fiatBalance');
         await wallet.save();
 
         // Credit the 2% fee to the Keibo Treasury wallet
@@ -326,6 +328,7 @@ export class PaymentsService {
                 const treasuryWallet = await this.getOrCreateWallet(treasuryUserId);
                 (treasuryWallet.fiatBalance as any)[currency] =
                     ((treasuryWallet.fiatBalance as any)[currency] || 0) + platformFee;
+                treasuryWallet.markModified('fiatBalance');
                 await treasuryWallet.save();
                 this.logger.log(
                     `Platform fee ${currency} ${platformFee} credited to treasury wallet (userId=${treasuryUserId})`,

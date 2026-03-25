@@ -727,12 +727,44 @@ export class ProjectsService {
         amount,
         donorName: normalizedDonorName,
         message,
+        userId: userId ? new Types.ObjectId(userId) : undefined,
       });
     } catch (err) {
       this.logger.error(`Failed to record charity donation for project ${projectId}: ${err}`);
     }
 
     return this.getProjectWithMilestones(projectId);
+  }
+
+  async getDonationsByUser(userId: string) {
+    this.ensureValidObjectId(userId);
+    const donations = await this.charityDonationsRepo.findByUserId(new Types.ObjectId(userId));
+    const populated: any[] = [];
+    for (const d of donations) {
+      const project = await this.projectsRepo.findById(String(d.projectId));
+      if (project) {
+        populated.push({
+          id: d._id.toString(),
+          projectId: project._id.toString(),
+          investorId: userId,
+          amount: d.amount,
+          currency: 'UGX',
+          status: 'Active',
+          project: {
+            id: project._id.toString(),
+            title: (project as any).title || project.name,
+            name: (project as any).title || project.name,
+            category: project.category,
+            projectType: project.projectType || (project as any).type,
+            type: project.projectType || (project as any).type,
+            creatorId: project.creatorId?.toString(),
+            imageUrl: project.imageUrl,
+          },
+          createdAt: (d as any).createdAt,
+        });
+      }
+    }
+    return populated;
   }
 
   async requestAttachment(projectId: string, dto: RequestAttachmentDto) {
