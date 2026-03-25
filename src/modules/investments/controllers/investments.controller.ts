@@ -16,6 +16,7 @@ import { UpdateInvestmentStatusDto } from '../dto/update-investment-status.dto';
 import { FilterInvestmentsDto } from '../dto/filter-investments.dto';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { Roles } from '../../../common/decorators/roles.decorator';
+import { Public } from '../../../common/decorators/public.decorator';
 import { RolesGuard } from '../../../common/guards/roles.guard';
 import { UserRole } from '../../../common/enums/role.enum';
 import type { JwtPayload } from '../../../common/interfaces/user.interface';
@@ -64,6 +65,7 @@ export class InvestmentsController {
   }
 
   @Get('repair-prod-db')
+  @Public()
   async repairProdDb() {
     return this.investmentsService.repairDatabase();
   }
