@@ -352,23 +352,50 @@ export class InvestmentsService {
       }
     }
 
-    // 2. Fix Wallets based on projects raised Amount
-    const projects = await db.collection('projects').find().toArray();
-    for (const p of projects) {
-      if (p.raisedAmount > 0 && p.creatorId) {
-        const wallet = await db.collection('wallets').findOne({ userId: p.creatorId });
-        const diff = p.raisedAmount - (wallet?.fiatBalance?.UGX || 0);
-        if (wallet && diff > 0) {
-          await db.collection('wallets').updateOne(
-            { _id: wallet._id },
-            { $set: { 'fiatBalance.UGX': p.raisedAmount } }
-          );
-          fixedWallets++;
+    // 2. Accurately recalculate Wallets based on sum of project raisedAmounts per type
+    const usersCursor = await db.collection('users').find().toArray();
+
+    for (const user of usersCursor) {
+      const creatorId = user._id;
+
+      // Calculate total raised exactly from projects where this user is the creator
+      const projects = await db.collection('projects').find({ creatorId }).toArray();
+      if (projects.length === 0) continue;
+
+      let expectedCharity = 0;
+      let expectedRoi = 0;
+
+      for (const p of projects) {
+        const type = (p.projectType || '').toUpperCase();
+        const amt = p.raisedAmount || 0;
+        if (type === 'CHARITY') expectedCharity += amt;
+        else if (type === 'ROI') expectedRoi += amt;
+        else expectedCharity += amt; // Fallback
+      }
+
+      if (expectedCharity > 0 || expectedRoi > 0) {
+        const wallet = await db.collection('wallets').findOne({ userId: creatorId });
+        if (wallet) {
+          const currentFiat = wallet.fiatBalance?.UGX || 0;
+          const currentRoi = wallet.roiBalance?.UGX || 0;
+
+          if (currentFiat !== expectedCharity || currentRoi !== expectedRoi) {
+            await db.collection('wallets').updateOne(
+              { _id: wallet._id },
+              {
+                $set: {
+                  'fiatBalance.UGX': expectedCharity,
+                  'roiBalance.UGX': expectedRoi
+                }
+              }
+            );
+            fixedWallets++;
+          }
         }
       }
     }
 
-    return { success: true, fixedDonations, fixedWallets, message: "Database synchronized successfully!" };
+    return { success: true, fixedDonations, fixedWallets, message: "Database accurately synchronized separated balances!" };
   }
 }
 
