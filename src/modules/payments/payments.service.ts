@@ -371,6 +371,8 @@ export class PaymentsService {
             accountBank: method.provider,
             narration: dto.note || 'Wallet withdrawal - Keibo',
             reference: payoutRef,
+            beneficiaryName: method.accountName,
+            mobileNumber: method.accountNumber,
         });
 
         // Deduct full requested amount from creator's Charity wallet
@@ -441,6 +443,8 @@ export class PaymentsService {
             accountBank: transaction.metadata!.method.provider,
             narration: transaction.metadata!.note || 'ROI Wallet withdrawal - Keibo',
             reference: payoutRef,
+            beneficiaryName: transaction.metadata!.method.accountName,
+            mobileNumber: transaction.metadata!.method.accountNumber,
         });
 
         const platformFee = transaction.metadata!.platformFee;

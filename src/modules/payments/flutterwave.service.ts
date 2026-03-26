@@ -182,6 +182,9 @@ export class FlutterwaveService {
         accountBank: string;
         narration: string;
         reference: string;
+        beneficiaryName?: string;
+        email?: string;
+        mobileNumber?: string;
     }) {
         if (!this.secretKey) {
             throw new BadRequestException('Payment service not configured');
@@ -201,6 +204,17 @@ export class FlutterwaveService {
                 reference: params.reference,
                 callback_url: this.configService.get<string>('BACKEND_URL') + '/api/payments/payout-callback',
                 debit_currency: params.currency,
+                ...(params.beneficiaryName && { beneficiary_name: params.beneficiaryName }),
+                ...(isMomoUG && {
+                    meta: [
+                        {
+                            mobile_number: params.mobileNumber || params.accountNumber,
+                            email: params.email || 'noreply@keiboroi.com',
+                            beneficiary_name: params.beneficiaryName || 'User',
+                            beneficiary_country: 'UG',
+                        }
+                    ]
+                }),
             };
 
             const response = await firstValueFrom(
@@ -219,8 +233,9 @@ export class FlutterwaveService {
             this.logger.log(`Payout initiated: ${params.reference}`);
             return response.data;
         } catch (error: any) {
-            this.logger.error(`Failed to process payout: ${error.message}`, error.stack);
-            throw new BadRequestException(`Payout failed: ${error.message}`);
+            const providerError = error.response?.data?.message || error.response?.data?.error || error.message;
+            this.logger.error(`Failed to process payout: ${providerError}`, error.stack);
+            throw new BadRequestException(`Payout failed: ${providerError}`);
         }
     }
 
