@@ -45,7 +45,7 @@ export class PaymentsController {
         @Body() dto: InitializePaymentDto,
         @Request() req: any,
     ) {
-        return this.paymentsService.initializePayment(dto, req.user.userId);
+        return this.paymentsService.initializePayment(dto, req.user.userId ?? req.user.sub);
     }
 
     @Post('verify/:txRef')
@@ -155,7 +155,7 @@ export class PaymentsController {
     @ApiOperation({ summary: 'Get user payment history' })
     @ApiResponse({ status: 200, description: 'List of user transactions' })
     async getUserTransactions(@Request() req: any) {
-        return this.paymentsService.getUserTransactions(req.user.userId);
+        return this.paymentsService.getUserTransactions(req.user.userId ?? req.user.sub);
     }
 }
 
@@ -170,7 +170,8 @@ export class WalletController {
     @ApiOperation({ summary: 'Get wallet balance' })
     @ApiResponse({ status: 200, description: 'Wallet balance' })
     async getBalance(@Request() req: any) {
-        const wallet = await this.paymentsService.getOrCreateWallet(req.user.userId);
+        const userId = req.user.userId ?? req.user.sub;
+        const wallet = await this.paymentsService.getOrCreateWallet(userId);
         return {
             fiatBalance: wallet.fiatBalance,
             roiBalance: wallet.roiBalance,
@@ -185,7 +186,7 @@ export class WalletController {
     async deposit(@Body() dto: DepositToWalletDto, @Request() req: any) {
         return this.paymentsService.depositToWallet(
             dto,
-            req.user.userId,
+            req.user.userId ?? req.user.sub,
             req.user.email,
         );
     }
@@ -194,7 +195,7 @@ export class WalletController {
     @ApiOperation({ summary: 'Invest using wallet balance' })
     @ApiResponse({ status: 201, description: 'Investment processed' })
     async invest(@Body() dto: WalletInvestmentDto, @Request() req: any) {
-        return this.paymentsService.processWalletInvestment(dto, req.user.userId);
+        return this.paymentsService.processWalletInvestment(dto, req.user.userId ?? req.user.sub);
     }
 
     @Post('withdraw')
@@ -202,7 +203,7 @@ export class WalletController {
     @ApiOperation({ summary: 'Withdraw from wallet' })
     @ApiResponse({ status: 201, description: 'Withdrawal initiated' })
     async withdraw(@Body() dto: WithdrawFromWalletDto, @Request() req: any) {
-        return this.paymentsService.withdrawFromWallet(dto, req.user.userId);
+        return this.paymentsService.withdrawFromWallet(dto, req.user.userId ?? req.user.sub);
     }
 
     @Post('admin/withdrawals/:id/approve')
@@ -236,20 +237,20 @@ export class WalletController {
         @Body() dto: AddWithdrawalMethodDto,
         @Request() req: any,
     ) {
-        return this.paymentsService.addWithdrawalMethod(dto, req.user.userId);
+        return this.paymentsService.addWithdrawalMethod(dto, req.user.userId ?? req.user.sub);
     }
 
     @Get('transactions')
     @ApiOperation({ summary: 'Get wallet transactions' })
     @ApiResponse({ status: 200, description: 'List of wallet transactions' })
     async getTransactions(@Request() req: any) {
-        return this.paymentsService.getUserTransactions(req.user.userId);
+        return this.paymentsService.getUserTransactions(req.user.userId ?? req.user.sub);
     }
 
     @Get()
     @ApiOperation({ summary: 'Get full wallet details' })
     @ApiResponse({ status: 200, description: 'Wallet details' })
     async getWallet(@Request() req: any) {
-        return this.paymentsService.getOrCreateWallet(req.user.userId);
+        return this.paymentsService.getOrCreateWallet(req.user.userId ?? req.user.sub);
     }
 }
