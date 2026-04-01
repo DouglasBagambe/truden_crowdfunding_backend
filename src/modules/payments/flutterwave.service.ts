@@ -26,6 +26,13 @@ export class FlutterwaveService {
         }
     }
 
+    private getBackendUrl(): string {
+        return (this.configService.get<string>('BACKEND_URL') || 'https://trufund.onrender.com')
+            .trim()
+            .replace(/[,\s]+$/, '')
+            .replace(/\/+$/, '');
+    }
+
     /**
      * Initialize a payment with Flutterwave
      */
@@ -202,7 +209,7 @@ export class FlutterwaveService {
                 currency: params.currency,
                 narration: params.narration,
                 reference: params.reference,
-                callback_url: this.configService.get<string>('BACKEND_URL') + '/api/payments/payout-callback',
+                callback_url: `${this.getBackendUrl()}/api/payments/payout-callback`,
                 debit_currency: params.currency,
                 ...(params.beneficiaryName && { beneficiary_name: params.beneficiaryName }),
                 ...(isMomoUG && {

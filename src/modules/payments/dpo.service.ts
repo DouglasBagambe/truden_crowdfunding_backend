@@ -57,13 +57,23 @@ export class DpoService {
     }
 
     private async postToApi(xml: string): Promise<Record<string, any>> {
-        const response = await firstValueFrom(
-            this.httpService.post(this.apiUrl, xml, {
-                headers: { 'Content-Type': 'application/xml' },
-            }),
-        );
-        const parsed = await parseStringPromise(response.data, { explicitArray: false });
-        return (parsed.API3G ?? parsed) as Record<string, any>;
+        try {
+            const response = await firstValueFrom(
+                this.httpService.post(this.apiUrl, xml, {
+                    headers: { 'Content-Type': 'application/xml' },
+                }),
+            );
+            const parsed = await parseStringPromise(response.data, { explicitArray: false });
+            return (parsed.API3G ?? parsed) as Record<string, any>;
+        } catch (error: any) {
+            const providerMessage =
+                error?.response?.data?.API3G?.ResultExplanation ||
+                error?.response?.data?.ResultExplanation ||
+                error?.response?.data?.message ||
+                error?.message ||
+                'Unknown DPO error';
+            throw new BadRequestException(`DPO request failed: ${providerMessage}`);
+        }
     }
 
     // ─── createToken ────────────────────────────────────────────────────

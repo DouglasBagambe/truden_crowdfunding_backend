@@ -13,6 +13,8 @@ import {
     Logger,
     HttpException,
     Redirect,
+    ForbiddenException,
+    UnauthorizedException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
@@ -25,16 +27,30 @@ import {
     WalletInvestmentDto,
 } from './dto/wallet.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
 import { PaymentMethod, PaymentStatus } from './schemas/payment-transaction.schema';
 import { EmailVerifiedGuard } from '../../common/guards/email-verified.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/role.enum';
+import { KYCStatus } from '../../common/enums/role.enum';
+import { UsersService } from '../users/users.service';
+import { Public } from '../../common/decorators/public.decorator';
 
 @ApiTags('Payments')
 @Controller('payments')
 export class PaymentsController {
     private readonly logger = new Logger(PaymentsController.name);
-    constructor(private readonly paymentsService: PaymentsService) { }
+    constructor(
+        private readonly paymentsService: PaymentsService,
+        private readonly usersService: UsersService,
+    ) { }
+
+    private getFrontendUrl(): string {
+        return (process.env.FRONTEND_URL || 'https://keibo.netlify.app')
+            .trim()
+            .replace(/[,\s]+$/, '')
+            .replace(/\/+$/, '');
+    }
 
     @Post('initialize')
     @UseGuards(JwtAuthGuard)
@@ -69,8 +85,8 @@ export class PaymentsController {
     }
 
     @Post('dpo/initialize')
-    @UseGuards(JwtAuthGuard, EmailVerifiedGuard)
-    @ApiBearerAuth('JWT-auth')
+    @Public()
+    @UseGuards(OptionalJwtAuthGuard)
     @ApiOperation({ summary: 'Create DPO payment token — returns redirect URL to DPO hosted payment page' })
     @ApiResponse({ status: 201, description: 'Returns token + redirectUrl. Frontend should window.location.href to redirectUrl.' })
     async initializeDPOPayment(
@@ -78,11 +94,36 @@ export class PaymentsController {
         @Request() req: any,
     ) {
         try {
+            const userId = req.user?.userId ?? req.user?.sub;
+            const isCharity = (dto.projectType ?? '').toUpperCase() === 'CHARITY';
+
+            if (!isCharity && !userId) {
+                throw new UnauthorizedException('Please sign in to invest in ROI projects.');
+            }
+
+            if (!isCharity && req.user?.emailVerified === false) {
+                throw new ForbiddenException(
+                    'Email not verified. Please verify your email address to perform this action.',
+                );
+            }
+
+            if (!isCharity && userId) {
+                const user = await this.usersService.getUserById(userId);
+                if (user?.kycStatus !== KYCStatus.VERIFIED) {
+                    throw new ForbiddenException(
+                        'KYC not verified. Please complete and verify KYC before investing.',
+                    );
+                }
+            }
+
             return await this.paymentsService.initializeDPOPayment(
                 { ...dto, paymentMethod: dto.paymentMethod ?? PaymentMethod.Card },
-                req.user.userId ?? req.user.sub,
+                userId,
             );
         } catch (err: any) {
+            if (err instanceof HttpException) {
+                throw err;
+            }
             this.logger.error('DPO initialize error:', err?.message, err?.stack);
             throw new HttpException(
                 err?.message || 'Failed to initialize DPO payment',
@@ -92,11 +133,20 @@ export class PaymentsController {
     }
 
     @Get('dpo/verify/:token')
-    @UseGuards(JwtAuthGuard)
+    @Public()
+    @UseGuards(OptionalJwtAuthGuard)
     @ApiBearerAuth('JWT-auth')
     @ApiOperation({ summary: 'Verify DPO payment status by token' })
     async verifyDPOPayment(@Param('token') token: string) {
         return this.paymentsService.verifyDPOPayment(token);
+    }
+
+    @Post('payout-callback')
+    @HttpCode(HttpStatus.OK)
+    @Public()
+    @ApiOperation({ summary: 'Flutterwave payout callback handler' })
+    async handlePayoutCallback(@Body() payload: any) {
+        return this.paymentsService.handlePayoutCallback(payload);
     }
 
     @Post('dpo/webhook')
@@ -113,7 +163,7 @@ export class PaymentsController {
     @Redirect()
     @ApiOperation({ summary: 'DPO BackURL / ReturnURL redirect handler (GET)' })
     async handleDPOWebhookGet(@Query() query: Record<string, string>) {
-        const frontendUrl = process.env.FRONTEND_URL || 'https://keibo.netlify.app';
+        const frontendUrl = this.getFrontendUrl();
 
         // DPO sends the token as 'TransactionToken' in query string on BackURL calls
         const token = query.TransactionToken || query.token || query.ID;

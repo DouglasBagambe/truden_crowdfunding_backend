@@ -51,7 +51,10 @@ export class DiditKycProviderService implements IKycProviderService {
     }
 
     private get backendUrl(): string {
-        return this.configService.get<string>('BACKEND_URL') ?? 'https://trufund.onrender.com';
+        return (this.configService.get<string>('BACKEND_URL') ?? 'https://trufund.onrender.com')
+            .trim()
+            .replace(/[,\s]+$/, '')
+            .replace(/\/+$/, '');
     }
 
     /**

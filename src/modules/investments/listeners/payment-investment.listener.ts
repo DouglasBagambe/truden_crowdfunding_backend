@@ -14,7 +14,7 @@ import { InvestmentNFTService } from '../services/investment-nft.service';
 
 export interface PaymentSuccessfulPayload {
     transactionId: Types.ObjectId | string;
-    userId: Types.ObjectId | string;
+    userId?: Types.ObjectId | string;
     projectId: Types.ObjectId | string;
     amount: number;
     currency: string;
@@ -39,28 +39,16 @@ export class PaymentInvestmentListener {
 
     @OnEvent('payment.successful', { async: true })
     async handlePaymentSuccessful(payload: PaymentSuccessfulPayload): Promise<void> {
-        const userId = String(payload.userId);
+        const userId = payload.userId ? String(payload.userId) : undefined;
         const projectId = String(payload.projectId);
         const transactionId = String(payload.transactionId);
 
         this.logger.log(
-            `Payment successful event received: userId=${userId}, projectId=${projectId}, amount=${payload.amount}`,
+            `Payment successful event received: userId=${userId ?? 'anonymous'}, projectId=${projectId}, amount=${payload.amount}`,
         );
 
         try {
-            // ── Step 1: Guard against duplicate processing ────────────────────────
-            const existing = await this.investmentModel.findOne({
-                investorId: new Types.ObjectId(userId),
-                projectId: new Types.ObjectId(projectId),
-                txHash: transactionId,
-            });
-
-            if (existing) {
-                this.logger.warn(`Investment already exists for transaction ${transactionId}`);
-                return;
-            }
-
-            // ── Step 2: Determine project type from payload or transaction metadata ─
+            // ── Step 1: Determine project type from payload or transaction metadata ─
             const tx = await this.paymentTransactionModel
                 .findById(transactionId)
                 .lean() as PaymentTransactionDocument | null;
@@ -89,6 +77,22 @@ export class PaymentInvestmentListener {
                     (tx?.metadata as any)?.donorName,
                 );
             } else {
+                if (!userId) {
+                    this.logger.error(`Skipping ROI payment ${transactionId}: missing userId`);
+                    return;
+                }
+
+                const existing = await this.investmentModel.findOne({
+                    investorId: new Types.ObjectId(userId),
+                    projectId: new Types.ObjectId(projectId),
+                    txHash: transactionId,
+                });
+
+                if (existing) {
+                    this.logger.warn(`Investment already exists for transaction ${transactionId}`);
+                    return;
+                }
+
                 // ROI investment path — create investment record + increment raised amount
                 investment = await this.investmentModel.create({
                     projectId: new Types.ObjectId(projectId),

@@ -187,6 +187,49 @@ export class PaymentsService {
         return { received: true };
     }
 
+    async handlePayoutCallback(payload: any) {
+        const data = payload?.data || payload || {};
+        const reference = data.reference || data.tx_ref || data.txRef;
+        const normalizedStatus = String(data.status || payload?.status || '').toLowerCase();
+
+        if (!reference) {
+            this.logger.warn('Payout callback received without reference');
+            return { received: true };
+        }
+
+        const transaction = await this.paymentTransactionModel.findOne({
+            flutterwaveReference: reference,
+        });
+
+        if (!transaction) {
+            this.logger.warn(`Payout callback received for unknown transfer reference: ${reference}`);
+            return { received: true };
+        }
+
+        transaction.webhookData = payload;
+
+        if (
+            ['successful', 'success', 'completed'].includes(normalizedStatus) &&
+            transaction.status !== PaymentStatus.Successful
+        ) {
+            transaction.status = PaymentStatus.Successful;
+            transaction.completedAt = new Date();
+            transaction.failureReason = undefined;
+            await transaction.save();
+            this.logger.log(`Payout marked successful: ${reference}`);
+            return { received: true };
+        }
+
+        if (['failed', 'error', 'cancelled', 'reversed'].includes(normalizedStatus)) {
+            await this.refundFailedWithdrawal(transaction, data.message || data.complete_message || 'Payout failed');
+            this.logger.warn(`Payout failed and refunded: ${reference}`);
+            return { received: true };
+        }
+
+        await transaction.save();
+        return { received: true };
+    }
+
     /**
      * Get or create wallet for user
      */
@@ -359,7 +402,8 @@ export class PaymentsService {
                 amount: dto.amount,
                 platformFee,
                 youReceive: payoutAmount,
-                message: 'ROI withdrawal requested. Awaiting administrator approval.',
+                providerReference: payoutRef,
+                message: 'ROI withdrawal request received. Funds are reserved and now awaiting administrator approval.',
             };
         }
 
@@ -413,6 +457,7 @@ export class PaymentsService {
                 platformFee,
                 payoutAmount,
                 feeRate: PLATFORM_FEE_RATE,
+                method,
             },
         });
 
@@ -424,7 +469,10 @@ export class PaymentsService {
             amount: dto.amount,
             platformFee,
             youReceive: payoutAmount,
-            message: 'Withdrawal processed successfully via Flutterwave.',
+            providerReference: payoutRef,
+            providerTransferId: payoutResult?.data?.id || payoutResult?.data?.data?.id,
+            providerStatus: payoutResult?.status || payoutResult?.data?.status || 'processing',
+            message: 'Withdrawal request submitted to Flutterwave. Final delivery depends on network and provider confirmation.',
             newBalance: (wallet.fiatBalance as any)[currency],
         };
     }
@@ -499,6 +547,74 @@ export class PaymentsService {
             'metadata.type': 'WITHDRAWAL_ROI'
         }).populate('userId', 'firstName lastName email').populate('projectId', 'name').sort({ createdAt: -1 });
         return transactions;
+    }
+
+    private async refundFailedWithdrawal(
+        transaction: PaymentTransactionDocument,
+        reason: string,
+    ) {
+        if (transaction.status === PaymentStatus.Failed || transaction.metadata?.refundApplied) {
+            transaction.status = PaymentStatus.Failed;
+            transaction.failureReason = reason;
+            transaction.metadata = {
+                ...(transaction.metadata || {}),
+                refundApplied: true,
+            };
+            transaction.markModified('metadata');
+            await transaction.save();
+            return;
+        }
+
+        const absoluteAmount = Math.abs(transaction.amount);
+        const currency = transaction.currency.toUpperCase();
+        const withdrawalType = String(transaction.metadata?.type || '');
+        const platformFee = Number(transaction.metadata?.platformFee || 0);
+
+        if (!transaction.userId) {
+            transaction.status = PaymentStatus.Failed;
+            transaction.failureReason = reason;
+            transaction.metadata = {
+                ...(transaction.metadata || {}),
+                refundApplied: false,
+            };
+            transaction.markModified('metadata');
+            await transaction.save();
+            return;
+        }
+
+        const wallet = await this.getOrCreateWallet(String(transaction.userId));
+        if (withdrawalType === 'WITHDRAWAL_ROI') {
+            (wallet.roiBalance as any)[currency] = ((wallet.roiBalance as any)[currency] || 0) + absoluteAmount;
+            wallet.markModified('roiBalance');
+        } else {
+            (wallet.fiatBalance as any)[currency] = ((wallet.fiatBalance as any)[currency] || 0) + absoluteAmount;
+            wallet.markModified('fiatBalance');
+        }
+        await wallet.save();
+
+        const treasuryUserId = this.configService.get<string>('KEIBO_TREASURY_USER_ID');
+        if (treasuryUserId && platformFee > 0) {
+            try {
+                const treasuryWallet = await this.getOrCreateWallet(treasuryUserId);
+                const currentTreasuryBalance = Number((treasuryWallet.fiatBalance as any)[currency] || 0);
+                (treasuryWallet.fiatBalance as any)[currency] = Math.max(0, currentTreasuryBalance - platformFee);
+                treasuryWallet.markModified('fiatBalance');
+                await treasuryWallet.save();
+            } catch (err: any) {
+                this.logger.warn(`Failed to reverse treasury fee for refund: ${err.message}`);
+            }
+        }
+
+        transaction.status = PaymentStatus.Failed;
+        transaction.failureReason = reason;
+        transaction.metadata = {
+            ...(transaction.metadata || {}),
+            refundApplied: true,
+            refundReason: reason,
+            refundedAt: new Date(),
+        };
+        transaction.markModified('metadata');
+        await transaction.save();
     }
 
     /**
@@ -582,15 +698,25 @@ export class PaymentsService {
             donorName?: string;
             walletAddress?: string;
         },
-        userId: string,
+        userId?: string,
     ) {
-        const backendUrl = this.configService.get<string>('BACKEND_URL') ?? 'https://trufund.onrender.com';
-        const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? 'https://keibo.netlify.app';
+        const backendUrl = (this.configService.get<string>('BACKEND_URL') ?? 'https://trufund.onrender.com')
+            .trim()
+            .replace(/[,\s]+$/, '')
+            .replace(/\/+$/, '');
+        const frontendUrl = (this.configService.get<string>('FRONTEND_URL') ?? 'https://keibo.netlify.app')
+            .trim()
+            .replace(/[,\s]+$/, '')
+            .replace(/\/+$/, '');
 
         const currency = dto.currency ?? 'UGX';
         const isCharity = (dto.projectType ?? '').toUpperCase() === 'CHARITY';
         const description = dto.description
             ?? (isCharity ? 'Donation to charity project - Keibo' : 'Investment in ROI project - Keibo');
+        const isLocalDonationBypass =
+            isCharity &&
+            this.configService.get<string>('NODE_ENV') === 'development' &&
+            (backendUrl.includes('localhost') || frontendUrl.includes('localhost'));
 
         // RedirectURL: user lands here after paying on DPO hosted page (card success path).
         // DPO appends ?ID=<token>&CCDapproval=&PnrID=&TransactionApproval= etc.
@@ -599,19 +725,20 @@ export class PaymentsService {
         // Use separate endpoint so we can handle both cases cleanly.
         const backUrl = `${backendUrl}/api/payments/dpo/webhook`;
 
-        const { token } = await this.dpoService.createToken(
-            dto.projectId,
-            dto.amount,
-            currency,
-            backUrl,
-            redirectUrl,
-            description,
-        );
-
         const txRef = `DPO-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const token = isLocalDonationBypass
+            ? `LOCAL-DPO-${Date.now()}`
+            : (await this.dpoService.createToken(
+                dto.projectId,
+                dto.amount,
+                currency,
+                backUrl,
+                redirectUrl,
+                description,
+            )).token;
 
-        await this.paymentTransactionModel.create({
-            userId: new Types.ObjectId(userId),
+        const transaction = await this.paymentTransactionModel.create({
+            ...(userId ? { userId: new Types.ObjectId(userId) } : {}),
             projectId: new Types.ObjectId(dto.projectId),
             amount: dto.amount,
             currency,
@@ -620,17 +747,37 @@ export class PaymentsService {
             dpoToken: token,
             flutterwaveReference: txRef,
             phoneNumber: dto.phoneNumber,
-            status: PaymentStatus.Pending,
+            status: isLocalDonationBypass ? PaymentStatus.Successful : PaymentStatus.Pending,
+            ...(isLocalDonationBypass ? { completedAt: new Date() } : {}),
             metadata: {
                 projectType: dto.projectType,
                 description,
                 donorName: dto.donorName,
                 projectId: dto.projectId,
                 walletAddress: dto.walletAddress?.toLowerCase() || null,
+                localBypass: isLocalDonationBypass,
             },
         });
 
-        this.logger.log(`DPO payment token created for user ${userId}: token=${token}`);
+        if (isLocalDonationBypass) {
+            this.eventEmitter.emit('payment.successful', {
+                transactionId: transaction._id,
+                userId: transaction.userId,
+                projectId: transaction.projectId,
+                amount: transaction.amount,
+                currency: transaction.currency,
+                projectType: (transaction.metadata as any)?.projectType,
+                walletAddress: (transaction.metadata as any)?.walletAddress || undefined,
+            });
+
+            return {
+                token,
+                redirectUrl: `${frontendUrl}/payment/result?status=success&projectId=${dto.projectId}`,
+                status: PaymentStatus.Successful,
+            };
+        }
+
+        this.logger.log(`DPO payment token created for ${userId ? `user ${userId}` : 'anonymous donor'}: token=${token}`);
 
         // Return the DPO hosted payment page URL — frontend redirects user here
         return {
@@ -646,6 +793,16 @@ export class PaymentsService {
     async verifyDPOPayment(token: string) {
         const transaction = await this.paymentTransactionModel.findOne({ dpoToken: token });
         if (!transaction) throw new NotFoundException('DPO transaction not found');
+
+        if ((transaction.metadata as any)?.localBypass) {
+            return {
+                status: transaction.status,
+                verify: {
+                    status: '000',
+                    message: 'Local development donation bypass confirmed.',
+                },
+            };
+        }
 
         const verify = await this.dpoService.verifyToken(token);
 
@@ -719,4 +876,3 @@ export class PaymentsService {
         return { received: true };
     }
 }
-
