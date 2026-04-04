@@ -45,6 +45,7 @@ docs/
 .env.test.local
 .env.production.local
 .env.local
+.env.example.prod
 
 # temp directory
 .temp

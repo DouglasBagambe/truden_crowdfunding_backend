@@ -1,259 +1,131 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-    createWalletClient,
-    createPublicClient,
-    http,
-    type Abi,
-    type Address,
-    type Chain,
-    type Hash,
-} from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import { type Address } from 'viem';
+import { ViemNftClient } from '../../nfts/helpers/viem-nft-client';
 import { ProjectsService } from '../../projects/projects.service';
-
-type Hex = `0x${string}`;
-
-// Minimal ABI for InvestmentNFT ERC-1155 contract
-const INVESTMENT_NFT_ABI = [
-    {
-        type: 'function',
-        name: 'mintInvestmentTokens',
-        stateMutability: 'nonpayable',
-        inputs: [
-            { name: 'to', type: 'address' },
-            { name: 'projectOnchainId', type: 'uint256' },
-            { name: 'amount', type: 'uint256' },
-            { name: 'investmentId', type: 'string' },
-        ],
-        outputs: [{ name: 'tokenId', type: 'uint256' }],
-    },
-    {
-        type: 'function',
-        name: 'balanceOf',
-        stateMutability: 'view',
-        inputs: [
-            { name: 'account', type: 'address' },
-            { name: 'id', type: 'uint256' },
-        ],
-        outputs: [{ name: '', type: 'uint256' }],
-    },
-    {
-        type: 'function',
-        name: 'totalSupply',
-        stateMutability: 'view',
-        inputs: [{ name: 'id', type: 'uint256' }],
-        outputs: [{ name: '', type: 'uint256' }],
-    },
-    {
-        type: 'function',
-        name: 'uri',
-        stateMutability: 'view',
-        inputs: [{ name: 'id', type: 'uint256' }],
-        outputs: [{ name: '', type: 'string' }],
-    },
-] as const satisfies Abi;
-
-export interface InvestmentNFTData {
-    tokenId: number;
-    projectId: string;
-    investor: string;
-    initialAmount: string;
-    currentValue: string;
-    investmentDate: Date;
-    isActive: boolean;
-    investmentId: string;
-    profitLoss: string;
-    roiPercentage: number;
-}
 
 export interface MintResult {
     tokenId: number;
     txHash: string;
+    tokenAmount: number;
 }
 
 @Injectable()
 export class InvestmentNFTService {
     private readonly logger = new Logger(InvestmentNFTService.name);
-    private initialized = false;
-    private contractAddress: string | null = null;
-    private rpcUrl: string | null = null;
-    private adminPrivateKey: Hex | null = null;
-    private chain: Chain | null = null;
 
     constructor(
         private readonly configService: ConfigService,
         private readonly projectsService: ProjectsService,
-    ) {
-        this.initializeConfig();
-    }
-
-    private initializeConfig() {
-        try {
-            const rpcUrl = this.configService.get<string>('blockchain.rpcUrl');
-            const privateKey = this.configService.get<string>('blockchain.adminPrivateKey');
-            const contractAddress = this.configService.get<string>('blockchain.contracts.nft');
-            const chainId = this.configService.get<number>('blockchain.chainId');
-
-            if (!rpcUrl || !privateKey || !contractAddress) {
-                this.logger.warn('NFT contract configuration incomplete. NFT minting will be simulated.');
-                return;
-            }
-
-            this.contractAddress = contractAddress;
-            this.rpcUrl = rpcUrl;
-            const rawKey = privateKey.trim();
-            this.adminPrivateKey = (rawKey.startsWith('0x') ? rawKey : `0x${rawKey}`) as Hex;
-            this.chain = {
-                id: chainId ?? 1,
-                name: 'CrowdfundingChain',
-                nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-                rpcUrls: {
-                    default: { http: [rpcUrl] },
-                    public: { http: [rpcUrl] },
-                },
-            };
-            this.initialized = true;
-            this.logger.log(`NFT contract initialized at ${contractAddress}`);
-        } catch (error) {
-            this.logger.error('Failed to initialize NFT contract config', error);
-        }
-    }
+        private readonly viemNftClient: ViemNftClient,
+    ) { }
 
     isInitialized(): boolean {
-        return this.initialized;
+        // ViemNftClient throws in constructor if not configured — so if it exists, it's ready
+        return !!this.viemNftClient;
     }
 
     // ─── Minting ────────────────────────────────────────────────────────────────
 
     /**
-     * Mint investment NFT to the user's custodial wallet address.
-     * Uses the platform admin key to sign the transaction.
-     * Falls back to simulated mode if contract not configured.
+     * Mint investment tokens to the investor's self-custodial wallet.
+     *
+     * The contract's mintInvestmentTokens takes:
+     *   _projectId  (uint256) — the on-chain project ID
+     *   _investor   (address) — the investor's wallet
+     *   _amount     (uint256) — the fiat investment amount scaled to wei
+     *                           (contract computes token share internally)
+     *
+     * Falls back to simulated mode when contract isn't configured.
      */
     async mintForUser(
-        custodialAddress: string,
+        investorWallet: string,
         projectOnchainId: string,
-        amount: number,
-        investmentId: string,
+        investmentAmountUGX: number,
+        _investmentId: string,
     ): Promise<MintResult> {
-        if (!this.initialized || !this.contractAddress || !this.adminPrivateKey || !this.chain) {
+        if (!this.isInitialized()) {
             this.logger.warn('NFT contract not configured — returning simulated mint result');
             return {
                 tokenId: Math.floor(Math.random() * 1_000_000),
                 txHash: `0x${'0'.repeat(64)}`,
+                tokenAmount: 0,
             };
         }
 
-        const account = privateKeyToAccount(this.adminPrivateKey);
-        const publicClient = createPublicClient({ chain: this.chain, transport: http(this.rpcUrl!) });
-        const walletClient = createWalletClient({ chain: this.chain, transport: http(this.rpcUrl!), account });
-
-        // Derive numeric project onchain ID
-        const isNumeric = /^\d+$/.test(projectOnchainId);
-        const numericProjectId = isNumeric
-            ? BigInt(projectOnchainId)
-            : BigInt('0x' + projectOnchainId.substring(0, 12));
-
-        const hash: Hash = await walletClient.writeContract({
-            address: this.contractAddress as Address,
-            abi: INVESTMENT_NFT_ABI,
-            functionName: 'mintInvestmentTokens',
-            args: [
-                custodialAddress as Address,
-                numericProjectId,
-                BigInt(Math.floor(amount * 1e6)), // amount in micro-units (6 decimals)
-                investmentId,
-            ],
-        });
-
-        await publicClient.waitForTransactionReceipt({ hash });
-
-        // Read the token ID from the blockchain (simplified: use project ID as token type)
-        const tokenId = Number(numericProjectId);
-
-        this.logger.log(`NFT minted: tokenId=${tokenId}, txHash=${hash}, to=${custodialAddress}`);
-
-        return { tokenId, txHash: hash };
-    }
-
-    // ─── Read methods ────────────────────────────────────────────────────────────
-
-    async getNFTData(tokenId: number): Promise<InvestmentNFTData> {
         try {
-            const project = await this.projectsService.findByOnchainId(String(tokenId));
-            const now = new Date();
-            const raised = (project as any)?.raisedAmount ?? 0;
-            const target = (project as any)?.targetAmount ?? 0;
-            const profitLoss = raised - target;
-            const roiPercentage = target > 0 ? (profitLoss / target) * 100 : 0;
+            // Derive numeric on-chain project ID
+            const numericProjectId = /^\d+$/.test(projectOnchainId)
+                ? BigInt(projectOnchainId)
+                : BigInt('0x' + projectOnchainId.replace(/[^0-9a-f]/gi, '').substring(0, 12) || '0');
 
-            return {
-                tokenId,
-                projectId: project ? String((project as any)._id ?? (project as any).id) : String(tokenId),
-                investor: '0x0000000000000000000000000000000000000000',
-                initialAmount: String(target),
-                currentValue: String(raised),
-                investmentDate: now,
-                isActive: true,
-                investmentId: String(tokenId),
-                profitLoss: String(profitLoss),
-                roiPercentage: Number(roiPercentage.toFixed(2)),
-            };
-        } catch (error) {
-            this.logger.error(`Failed to get NFT data for token ${tokenId}`, error);
-            throw error;
-        }
-    }
+            // Scale UGX amount to a comparable wei representation (×1e6 for 6-decimal precision)
+            const amountWei = BigInt(Math.floor(investmentAmountUGX * 1e6));
 
-    async getInvestorNFTs(investorAddress: string): Promise<number[]> {
-        if (!this.initialized || !this.contractAddress || !this.chain) return [];
+            const { hash, receipt } = await this.viemNftClient.mintInvestmentTokens({
+                projectOnchainId: numericProjectId,
+                investorWallet: investorWallet as Address,
+                amountWei,
+            });
 
-        try {
-            const publicClient = createPublicClient({ chain: this.chain, transport: http(this.rpcUrl!) });
-            const roiProjects = await this.projectsService.listRoiProjectsWithOnchainId();
+            // Derive the token amount minted from logs (or fall back to project id as token type)
+            let tokenAmount = 0;
+            try {
+                const mintLog = receipt.logs.find((l) => l.address.toLowerCase() === this.viemNftClient.nftAddress.toLowerCase());
+                if (mintLog && mintLog.data) {
+                    // data contains non-indexed fields: investor (address, 32 bytes), amount (uint256, 32 bytes)
+                    tokenAmount = Number(BigInt('0x' + mintLog.data.slice(66)));
+                }
+            } catch {
+                // Non-fatal — we just won't have the token amount
+            }
 
-            const checks = await Promise.all(
-                roiProjects.map(async (p: any) => {
-                    const tokenId = Number(p.projectOnchainId);
-                    if (!Number.isFinite(tokenId) || tokenId < 0) return null;
-                    const bal = await publicClient.readContract({
-                        address: this.contractAddress as Address,
-                        abi: INVESTMENT_NFT_ABI,
-                        functionName: 'balanceOf',
-                        args: [investorAddress as Address, BigInt(tokenId)],
-                    });
-                    return (bal as bigint) > 0n ? tokenId : null;
-                }),
+            this.logger.log(
+                `NFT minted: projectId=${numericProjectId}, txHash=${hash}, to=${investorWallet}`,
             );
 
-            return checks.filter((x): x is number => typeof x === 'number');
-        } catch (error) {
-            this.logger.error(`Failed to get NFTs for investor ${investorAddress}`, error);
-            return [];
+            return { tokenId: Number(numericProjectId), txHash: hash, tokenAmount };
+        } catch (err: any) {
+            this.logger.error(`NFT mint failed: ${err.message}`, err.stack);
+            throw err;
         }
     }
 
-    async getProjectNFTs(projectId: string): Promise<number[]> {
-        if (!this.initialized || !this.contractAddress || !this.chain) return [];
+    /**
+     * Register a project on-chain so NFTs can be minted for it.
+     * Called when an admin/backend approves a project for investment.
+     */
+    async createProjectOnChain(params: {
+        projectOnchainId: number;
+        creatorWallet: string;
+        targetAmountUGX: number;
+        paymentToken?: string;
+    }): Promise<{ hash: string }> {
+        const ETH_ADDRESS = '0x0000000000000000000000000000000000000000' as Address;
 
+        const { hash } = await this.viemNftClient.createProjectNFT({
+            projectOnchainId: BigInt(params.projectOnchainId),
+            creator: params.creatorWallet as Address,
+            // Since payments are fiat, we store the UGX amount scaled (×1e6)
+            targetAmountWei: BigInt(Math.floor(params.targetAmountUGX * 1e6)),
+            paymentToken: (params.paymentToken as Address) ?? ETH_ADDRESS,
+        });
+
+        return { hash };
+    }
+
+    // ─── Read ────────────────────────────────────────────────────────────────────
+
+    async getBalance(walletAddress: string, projectOnchainId: number): Promise<number> {
+        if (!this.isInitialized()) return 0;
         try {
-            const publicClient = createPublicClient({ chain: this.chain, transport: http(this.rpcUrl!) });
-            const project = await this.projectsService.ensureProjectExists(projectId);
-            const tokenId = Number((project as any).projectOnchainId);
-            if (!Number.isFinite(tokenId) || tokenId < 0) return [];
-
-            const supply = await publicClient.readContract({
-                address: this.contractAddress as Address,
-                abi: INVESTMENT_NFT_ABI,
-                functionName: 'totalSupply',
-                args: [BigInt(tokenId)],
-            });
-            return (supply as bigint) > 0n ? [tokenId] : [];
-        } catch (error) {
-            this.logger.error(`Failed to get NFTs for project ${projectId}`, error);
-            return [];
+            const bal = await this.viemNftClient.getBalance(
+                walletAddress as Address,
+                BigInt(projectOnchainId),
+            );
+            return Number(bal);
+        } catch {
+            return 0;
         }
     }
 }
-

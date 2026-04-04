@@ -17,6 +17,7 @@ import { QueryProjectsDto } from './dto/query-projects.dto';
 import { ProjectDecisionDto } from './dto/decision.dto';
 import { ProjectsRepository } from './repositories/projects.repository';
 import { MilestonesRepository } from './repositories/milestones.repository';
+import { CharityDonationsRepository } from './repositories/charity-donations.repository';
 import type { ProjectDocument } from './schemas/project.schema';
 import { ProjectStatus } from '../../common/enums/project-status.enum';
 import { MilestoneStatus } from '../../common/enums/milestone-status.enum';
@@ -56,9 +57,12 @@ const OWNER_EDITABLE_STATUSES = [
 
 @Injectable()
 export class ProjectsService {
+  private readonly logger = new Logger(ProjectsService.name);
+
   constructor(
     private readonly projectsRepo: ProjectsRepository,
     private readonly milestonesRepo: MilestonesRepository,
+    private readonly charityDonationsRepo: CharityDonationsRepository,
     private readonly usersRepo: UsersRepository,
     private readonly configService: ConfigService,
     private readonly agreementTemplatesService: AgreementTemplatesService,
@@ -147,7 +151,7 @@ export class ProjectsService {
     if (dto.milestones?.length) {
       const milestonesPayload = dto.milestones.map((m) => ({
         title: m.title,
-        description: m.description,
+        description: m.description?.trim() || m.title,
         dueDate: m.dueDate,
         payoutPercentage: m.payoutPercentage ?? 0,
         status: MilestoneStatus.PLANNED,
@@ -319,7 +323,7 @@ export class ProjectsService {
       if (dto.milestones.length > 0) {
         const milestonesPayload = dto.milestones.map((m) => ({
           title: m.title,
-          description: m.description,
+          description: m.description?.trim() || m.title,
           dueDate: m.dueDate,
           payoutPercentage: m.payoutPercentage ?? 0,
           status: MilestoneStatus.PLANNED,
@@ -343,9 +347,9 @@ export class ProjectsService {
       throw new NotFoundException('Project not available');
     }
     const safeLimit = Math.max(1, Math.min(100, Number(limit) || 50));
-    // TODO: Re-implement when charityDonationsRepo is available
-    // const items = await this.charityDonationsRepo.listByProject(projectId, safeLimit);
-    const items: any[] = [];
+
+    // Fetch from CharityDonationsRepository
+    const items = await this.charityDonationsRepo.listByProject(projectId, safeLimit);
     return items.map((d) => ({
       id: String((d as any)._id),
       donorName: d.donorName || 'Anonymous',
@@ -717,17 +721,50 @@ export class ProjectsService {
       $inc: { raisedAmount: amount, backerCount: 1 },
     });
 
-    if (userId) {
-      await this.investmentModel.create({
-        projectId: project._id,
-        investorId: new Types.ObjectId(userId),
-        amount: amount,
-        status: InvestmentStatus.Active,
-        txHash: null,
+    try {
+      await this.charityDonationsRepo.create({
+        projectId: new Types.ObjectId(projectId),
+        amount,
+        donorName: normalizedDonorName,
+        message,
+        userId: userId ? new Types.ObjectId(userId) : undefined,
       });
+    } catch (err) {
+      this.logger.error(`Failed to record charity donation for project ${projectId}: ${err}`);
     }
 
     return this.getProjectWithMilestones(projectId);
+  }
+
+  async getDonationsByUser(userId: string) {
+    this.ensureValidObjectId(userId);
+    const donations = await this.charityDonationsRepo.findByUserId(new Types.ObjectId(userId));
+    const populated: any[] = [];
+    for (const d of donations) {
+      const project = await this.projectsRepo.findById(String(d.projectId));
+      if (project) {
+        populated.push({
+          id: d._id.toString(),
+          projectId: project._id.toString(),
+          investorId: userId,
+          amount: d.amount,
+          currency: 'UGX',
+          status: 'Active',
+          project: {
+            id: project._id.toString(),
+            title: (project as any).title || project.name,
+            name: (project as any).title || project.name,
+            category: project.category,
+            projectType: project.projectType || (project as any).type,
+            type: project.projectType || (project as any).type,
+            creatorId: project.creatorId?.toString(),
+            imageUrl: project.imageUrl,
+          },
+          createdAt: (d as any).createdAt,
+        });
+      }
+    }
+    return populated;
   }
 
   async requestAttachment(projectId: string, dto: RequestAttachmentDto) {
@@ -859,7 +896,11 @@ export class ProjectsService {
 
     // Provide a full URL that the frontend can use as an image src
     const rawBaseUrl = process.env.BACKEND_URL || process.env.API_URL || 'http://localhost:3000';
-    const baseUrl = rawBaseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
+    const baseUrl = rawBaseUrl
+      .trim()
+      .replace(/[,\s]+$/, '')
+      .replace(/\/+$/, '')
+      .replace(/\/api$/, '');
     return {
       fileId: String(stored._id),
       filename: stored.filename,

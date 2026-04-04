@@ -40,4 +40,9 @@ export class InitializeDPOPaymentDto {
     @IsString()
     @IsOptional()
     donorName?: string;
+
+    @ApiProperty({ description: 'Investor self-custodial wallet address for NFT minting (ROI projects)', required: false })
+    @IsString()
+    @IsOptional()
+    walletAddress?: string;
 }

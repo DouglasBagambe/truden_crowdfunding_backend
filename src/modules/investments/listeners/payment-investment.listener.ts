@@ -4,22 +4,23 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Investment, InvestmentDocument } from '../schemas/investment.schema';
 import { InvestmentStatus } from '../interfaces/investment.interface';
-import { InvestmentNFTService } from '../services/investment-nft.service';
-import { CustodialWalletService } from '../../users/services/custodial-wallet.service';
 import { ProjectsService } from '../../projects/projects.service';
 import { PaymentsService } from '../../payments/payments.service';
 import {
     PaymentTransaction,
     PaymentTransactionDocument,
 } from '../../payments/schemas/payment-transaction.schema';
+import { InvestmentNFTService } from '../services/investment-nft.service';
 
 export interface PaymentSuccessfulPayload {
     transactionId: Types.ObjectId | string;
-    userId: Types.ObjectId | string;
+    userId?: Types.ObjectId | string;
     projectId: Types.ObjectId | string;
     amount: number;
     currency: string;
     projectType?: string; // 'CHARITY' | 'ROI'
+    /** Investor's self-custodial wallet address. Provided during checkout. */
+    walletAddress?: string;
 }
 
 @Injectable()
@@ -31,135 +32,160 @@ export class PaymentInvestmentListener {
         private readonly investmentModel: Model<InvestmentDocument>,
         @InjectModel(PaymentTransaction.name)
         private readonly paymentTransactionModel: Model<PaymentTransactionDocument>,
-        private readonly investmentNFTService: InvestmentNFTService,
-        private readonly custodialWalletService: CustodialWalletService,
         private readonly projectsService: ProjectsService,
         private readonly paymentsService: PaymentsService,
+        private readonly investmentNFTService: InvestmentNFTService,
     ) { }
 
     @OnEvent('payment.successful', { async: true })
     async handlePaymentSuccessful(payload: PaymentSuccessfulPayload): Promise<void> {
-        const userId = String(payload.userId);
+        const userId = payload.userId ? String(payload.userId) : undefined;
         const projectId = String(payload.projectId);
         const transactionId = String(payload.transactionId);
 
         this.logger.log(
-            `Payment successful event received: userId=${userId}, projectId=${projectId}, amount=${payload.amount}`,
+            `Payment successful event received: userId=${userId ?? 'anonymous'}, projectId=${projectId}, amount=${payload.amount}`,
         );
 
         try {
-            // 1. Check for existing investment to avoid duplicates
-            const existing = await this.investmentModel.findOne({
-                investorId: new Types.ObjectId(userId),
-                projectId: new Types.ObjectId(projectId),
-                txHash: transactionId,
-            });
+            // ── Step 1: Determine project type from payload or transaction metadata ─
+            const tx = await this.paymentTransactionModel
+                .findById(transactionId)
+                .lean() as PaymentTransactionDocument | null;
 
-            if (existing) {
-                this.logger.warn(`Investment already exists for transaction ${transactionId}`);
-                return;
+            const projectType = (
+                payload.projectType ||
+                (tx?.metadata as any)?.projectType ||
+                ''
+            ).toString().toUpperCase();
+
+            // Wallet address can come from the event payload or from the tx metadata
+            const walletAddress: string | undefined =
+                payload.walletAddress ||
+                (tx?.metadata as any)?.walletAddress ||
+                undefined;
+
+            // ── Step 3: Record the investment / donation ──────────────────────────
+            let investment: InvestmentDocument | null = null;
+
+            if (projectType === 'CHARITY') {
+                // Charity donation path — mirror existing working flow
+                await this.projectsService.incrementCharityDonation(
+                    projectId,
+                    payload.amount,
+                    userId,
+                    (tx?.metadata as any)?.donorName,
+                );
+            } else {
+                if (!userId) {
+                    this.logger.error(`Skipping ROI payment ${transactionId}: missing userId`);
+                    return;
+                }
+
+                const existing = await this.investmentModel.findOne({
+                    investorId: new Types.ObjectId(userId),
+                    projectId: new Types.ObjectId(projectId),
+                    txHash: transactionId,
+                });
+
+                if (existing) {
+                    this.logger.warn(`Investment already exists for transaction ${transactionId}`);
+                    return;
+                }
+
+                // ROI investment path — create investment record + increment raised amount
+                investment = await this.investmentModel.create({
+                    projectId: new Types.ObjectId(projectId),
+                    investorId: new Types.ObjectId(userId),
+                    amount: payload.amount,
+                    currency: (payload.currency ?? 'UGX').toUpperCase(),
+                    txHash: transactionId,
+                    walletAddress: walletAddress?.toLowerCase() ?? null,
+                    status: InvestmentStatus.Active,
+                    nftMinted: false,
+                    listed: false,
+                });
+
+                this.logger.log(`ROI investment created: ${investment._id}`);
+
+                await this.projectsService.incrementFunding(projectId, payload.amount);
             }
 
-            // 2. Create the investment record
-            const investment = await this.investmentModel.create({
-                projectId: new Types.ObjectId(projectId),
-                investorId: new Types.ObjectId(userId),
-                amount: payload.amount,
-                txHash: transactionId,
-                status: InvestmentStatus.Active,
-            });
-
-            this.logger.log(`Investment created: ${investment._id}`);
-
-            // 3. Increment project funding (look up project type from transaction metadata)
-            //    + credit the project creator's Keibo wallet for charity donations
+            // ── Step 4: Credit creator's Keibo fiat wallet ────────────────────────
             try {
-                const tx = await this.paymentTransactionModel.findById(transactionId).lean();
-                const projectType = (payload.projectType
-                    || (tx?.metadata as any)?.projectType
-                    || '').toString().toUpperCase();
+                const project = await this.projectsService.ensureProjectExists(projectId);
+                if (project?.creatorId) {
+                    const creatorId = String(project.creatorId);
+                    const creatorWallet = await this.paymentsService.getOrCreateWallet(creatorId);
+                    const currency = (payload.currency ?? 'UGX').toUpperCase();
 
-                if (projectType === 'CHARITY') {
-                    await this.projectsService.incrementCharityDonation(
-                        projectId,
+                    if (projectType === 'CHARITY') {
+                        (creatorWallet.fiatBalance as any)[currency] =
+                            ((creatorWallet.fiatBalance as any)[currency] || 0) + payload.amount;
+                        creatorWallet.markModified('fiatBalance');
+                    } else {
+                        if (!creatorWallet.roiBalance) creatorWallet.roiBalance = { UGX: 0, USD: 0 };
+                        (creatorWallet.roiBalance as any)[currency] =
+                            ((creatorWallet.roiBalance as any)[currency] || 0) + payload.amount;
+                        creatorWallet.markModified('roiBalance');
+                    }
+
+                    await creatorWallet.save();
+                    this.logger.log(
+                        `Credited creator ${creatorId} wallet ${currency} +${payload.amount}`,
+                    );
+                }
+            } catch (creditErr: any) {
+                this.logger.error(`Failed to credit creator wallet: ${creditErr.message}`);
+            }
+
+            // ── Step 5: Mint NFT to investor's self-custodial wallet ──────────────
+            if (investment && walletAddress && projectType !== 'CHARITY') {
+                try {
+                    const project = await this.projectsService.ensureProjectExists(projectId);
+                    const projectOnchainId = String((project as any).projectOnchainId || projectId.replace(/[^0-9]/g, '').slice(0, 9) || '0');
+
+                    if (!projectOnchainId || projectOnchainId === '0') {
+                        this.logger.warn(
+                            `Project ${projectId} has no on-chain ID — skipping NFT mint. ` +
+                            `Set project.projectOnchainId when creating the project on-chain.`,
+                        );
+                        return;
+                    }
+
+                    const mintResult = await this.investmentNFTService.mintForUser(
+                        walletAddress,
+                        projectOnchainId,
                         payload.amount,
-                        userId, // track the donor
-                        (tx?.metadata as any)?.donorName, // donor name
+                        String(investment._id),
                     );
 
-                    // ── Credit creator's Keibo wallet with the donated funds ──
-                    // This makes the money available for the creator to withdraw.
-                    try {
-                        const project = await this.projectsService.ensureProjectExists(projectId);
-                        if (project?.creatorId) {
-                            const creatorId = String(project.creatorId);
-                            const creatorWallet = await this.paymentsService.getOrCreateWallet(creatorId);
-                            const currency = (payload.currency ?? 'UGX').toUpperCase();
-                            (creatorWallet.fiatBalance as any)[currency] =
-                                ((creatorWallet.fiatBalance as any)[currency] || 0) + payload.amount;
-                            await creatorWallet.save();
-                            this.logger.log(
-                                `Credited creator ${creatorId} wallet ${currency} +${payload.amount} from charity donation`,
-                            );
-                        }
-                    } catch (creditErr: any) {
-                        this.logger.error(`Failed to credit creator wallet: ${creditErr.message}`);
-                        // Non-critical — donation is still recorded; admin can manually credit
-                    }
-                } else {
-                    await this.projectsService.incrementFunding(projectId, payload.amount);
-                }
-            } catch (err: any) {
-                this.logger.warn(`Failed to increment project funding: ${err.message}`);
-            }
-
-            // 4. Get or create custodial wallet for user
-            let custodialAddress: string | null = null;
-            try {
-                const wallet = await this.custodialWalletService.getOrCreateWallet(userId);
-                custodialAddress = wallet.address;
-            } catch (err: any) {
-                this.logger.warn(`Failed to get custodial wallet for user ${userId}: ${err.message}`);
-            }
-
-            // 5. Mint NFT to custodial address
-            if (custodialAddress) {
-                try {
-                    // Fetch project to get onchain ID
-                    const project = await this.projectsService.ensureProjectExists(projectId);
-                    const projectOnchainId = (project as any).projectOnchainId ?? projectId;
-
-                    const { tokenId, txHash: nftTxHash } =
-                        await this.investmentNFTService.mintForUser(
-                            custodialAddress,
-                            String(projectOnchainId),
-                            payload.amount,
-                            String(investment._id),
-                        );
-
-                    // 6. Update investment with NFT info
-                    investment.nftTokenId = tokenId;
-                    investment.nftTxHash = nftTxHash;
-                    investment.nftId = String(tokenId);
-                    await investment.save();
-
-                    // 7. Update payment transaction
-                    await this.paymentTransactionModel.findByIdAndUpdate(transactionId, {
+                    // Persist NFT metadata back to the investment record
+                    await this.investmentModel.findByIdAndUpdate(investment._id, {
+                        nftProjectId: mintResult.tokenId,
+                        nftTokenAmount: mintResult.tokenAmount,
+                        nftTxHash: mintResult.txHash,
                         nftMinted: true,
-                        nftTokenId: String(tokenId),
-                        blockchainTxHash: nftTxHash,
-                        investmentId: investment._id,
-                    }).catch(() => {
-                        // PaymentTransaction ID is optional here
                     });
 
                     this.logger.log(
-                        `NFT minted for investment ${investment._id}: tokenId=${tokenId}, txHash=${nftTxHash}`,
+                        `NFT minted for investment ${investment._id}: tokenId=${mintResult.tokenId}, tx=${mintResult.txHash}`,
                     );
-                } catch (err: any) {
-                    this.logger.error(`NFT minting failed for investment ${investment._id}: ${err.message}`);
-                    // Don't fail the investment — NFT minting is non-critical
+                } catch (nftErr: any) {
+                    // Non-fatal — investment is recorded; admin can re-trigger mint manually
+                    this.logger.error(
+                        `NFT mint failed for investment ${investment._id}: ${nftErr.message}`,
+                        nftErr.stack,
+                    );
+                    await this.investmentModel.findByIdAndUpdate(investment._id, {
+                        notes: `NFT mint failed: ${nftErr.message}`,
+                    });
                 }
+            } else if (investment && !walletAddress) {
+                this.logger.warn(
+                    `Investment ${investment._id} has no wallet address — NFT not minted. ` +
+                    `Investor must connect wallet in dashboard to trigger manual mint.`,
+                );
             }
         } catch (err: any) {
             this.logger.error(

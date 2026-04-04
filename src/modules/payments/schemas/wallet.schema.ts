@@ -63,9 +63,13 @@ export class Wallet {
     })
     userId!: Types.ObjectId;
 
-    // Fiat balance (from Flutterwave deposits)
+    // Fiat balance (from Charity donations)
     @Prop({ type: FiatBalance, default: {} })
     fiatBalance!: FiatBalance;
+
+    // ROI investment balance (from ROI projects)
+    @Prop({ type: FiatBalance, default: {} })
+    roiBalance!: FiatBalance;
 
     // Crypto balance (from wallet deposits)
     @Prop({ type: CryptoBalance, default: {} })

@@ -12,6 +12,9 @@ import {
     Query,
     Logger,
     HttpException,
+    Redirect,
+    ForbiddenException,
+    UnauthorizedException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
@@ -24,14 +27,30 @@ import {
     WalletInvestmentDto,
 } from './dto/wallet.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { PaymentMethod } from './schemas/payment-transaction.schema';
+import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
+import { PaymentMethod, PaymentStatus } from './schemas/payment-transaction.schema';
 import { EmailVerifiedGuard } from '../../common/guards/email-verified.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { UserRole } from '../../common/enums/role.enum';
+import { KYCStatus } from '../../common/enums/role.enum';
+import { UsersService } from '../users/users.service';
+import { Public } from '../../common/decorators/public.decorator';
 
 @ApiTags('Payments')
 @Controller('payments')
 export class PaymentsController {
     private readonly logger = new Logger(PaymentsController.name);
-    constructor(private readonly paymentsService: PaymentsService) { }
+    constructor(
+        private readonly paymentsService: PaymentsService,
+        private readonly usersService: UsersService,
+    ) { }
+
+    private getFrontendUrl(): string {
+        return (process.env.FRONTEND_URL || 'https://keibo.netlify.app')
+            .trim()
+            .replace(/[,\s]+$/, '')
+            .replace(/\/+$/, '');
+    }
 
     @Post('initialize')
     @UseGuards(JwtAuthGuard)
@@ -42,7 +61,7 @@ export class PaymentsController {
         @Body() dto: InitializePaymentDto,
         @Request() req: any,
     ) {
-        return this.paymentsService.initializePayment(dto, req.user.userId);
+        return this.paymentsService.initializePayment(dto, req.user.userId ?? req.user.sub);
     }
 
     @Post('verify/:txRef')
@@ -66,8 +85,8 @@ export class PaymentsController {
     }
 
     @Post('dpo/initialize')
-    @UseGuards(JwtAuthGuard, EmailVerifiedGuard)
-    @ApiBearerAuth('JWT-auth')
+    @Public()
+    @UseGuards(OptionalJwtAuthGuard)
     @ApiOperation({ summary: 'Create DPO payment token — returns redirect URL to DPO hosted payment page' })
     @ApiResponse({ status: 201, description: 'Returns token + redirectUrl. Frontend should window.location.href to redirectUrl.' })
     async initializeDPOPayment(
@@ -75,11 +94,36 @@ export class PaymentsController {
         @Request() req: any,
     ) {
         try {
+            const userId = req.user?.userId ?? req.user?.sub;
+            const isCharity = (dto.projectType ?? '').toUpperCase() === 'CHARITY';
+
+            if (!isCharity && !userId) {
+                throw new UnauthorizedException('Please sign in to invest in ROI projects.');
+            }
+
+            if (!isCharity && req.user?.emailVerified === false) {
+                throw new ForbiddenException(
+                    'Email not verified. Please verify your email address to perform this action.',
+                );
+            }
+
+            if (!isCharity && userId) {
+                const user = await this.usersService.getUserById(userId);
+                if (user?.kycStatus !== KYCStatus.VERIFIED) {
+                    throw new ForbiddenException(
+                        'KYC not verified. Please complete and verify KYC before investing.',
+                    );
+                }
+            }
+
             return await this.paymentsService.initializeDPOPayment(
                 { ...dto, paymentMethod: dto.paymentMethod ?? PaymentMethod.Card },
-                req.user.userId ?? req.user.sub,
+                userId,
             );
         } catch (err: any) {
+            if (err instanceof HttpException) {
+                throw err;
+            }
             this.logger.error('DPO initialize error:', err?.message, err?.stack);
             throw new HttpException(
                 err?.message || 'Failed to initialize DPO payment',
@@ -89,11 +133,20 @@ export class PaymentsController {
     }
 
     @Get('dpo/verify/:token')
-    @UseGuards(JwtAuthGuard)
+    @Public()
+    @UseGuards(OptionalJwtAuthGuard)
     @ApiBearerAuth('JWT-auth')
     @ApiOperation({ summary: 'Verify DPO payment status by token' })
     async verifyDPOPayment(@Param('token') token: string) {
         return this.paymentsService.verifyDPOPayment(token);
+    }
+
+    @Post('payout-callback')
+    @HttpCode(HttpStatus.OK)
+    @Public()
+    @ApiOperation({ summary: 'Flutterwave payout callback handler' })
+    async handlePayoutCallback(@Body() payload: any) {
+        return this.paymentsService.handlePayoutCallback(payload);
     }
 
     @Post('dpo/webhook')
@@ -107,14 +160,34 @@ export class PaymentsController {
     }
 
     @Get('dpo/webhook')
-    @HttpCode(HttpStatus.OK)
-    @ApiOperation({ summary: 'DPO BackURL redirect handler (GET — used when user cancels)' })
+    @Redirect()
+    @ApiOperation({ summary: 'DPO BackURL / ReturnURL redirect handler (GET)' })
     async handleDPOWebhookGet(@Query() query: Record<string, string>) {
-        // When user cancels, DPO GET-redirects to BackURL with ?TransactionToken=XXX
-        await this.paymentsService.handleDPOWebhook(query).catch(() => null);
-        // Redirect user back to frontend cancel page
-        const frontendUrl = 'https://keibo.netlify.app';
-        return { redirect: `${frontendUrl}/payment/result?status=cancelled` };
+        const frontendUrl = this.getFrontendUrl();
+
+        // DPO sends the token as 'TransactionToken' in query string on BackURL calls
+        const token = query.TransactionToken || query.token || query.ID;
+        const projectId = query.CompanyRef?.split('-')?.[1] || query.projectId || '';
+
+        try {
+            if (token) {
+                // Try to verify the payment — DPO may call BackURL for both success and cancel
+                const result = await this.paymentsService.verifyDPOPayment(token);
+
+                if (result.status === PaymentStatus.Successful) {
+                    // Payment confirmed — send user to success page with token for frontend verify
+                    return { url: `${frontendUrl}/payment/result?status=success&ID=${token}&projectId=${projectId}` };
+                } else if (result.status === PaymentStatus.Pending) {
+                    // Mobile money pending — tell user to wait
+                    return { url: `${frontendUrl}/payment/result?status=pending&ID=${token}&projectId=${projectId}` };
+                }
+                // Any other status (failed, cancelled) falls through to cancelled redirect
+            }
+        } catch (err) {
+            this.logger.error('Error in DPO GET Webhook handler:', err);
+        }
+
+        return { url: `${frontendUrl}/payment/result?status=cancelled&projectId=${projectId}` };
     }
 
     @Get('transaction/:id')
@@ -132,7 +205,7 @@ export class PaymentsController {
     @ApiOperation({ summary: 'Get user payment history' })
     @ApiResponse({ status: 200, description: 'List of user transactions' })
     async getUserTransactions(@Request() req: any) {
-        return this.paymentsService.getUserTransactions(req.user.userId);
+        return this.paymentsService.getUserTransactions(req.user.userId ?? req.user.sub);
     }
 }
 
@@ -147,9 +220,11 @@ export class WalletController {
     @ApiOperation({ summary: 'Get wallet balance' })
     @ApiResponse({ status: 200, description: 'Wallet balance' })
     async getBalance(@Request() req: any) {
-        const wallet = await this.paymentsService.getOrCreateWallet(req.user.userId);
+        const userId = req.user.userId ?? req.user.sub;
+        const wallet = await this.paymentsService.getOrCreateWallet(userId);
         return {
             fiatBalance: wallet.fiatBalance,
+            roiBalance: wallet.roiBalance,
             cryptoBalance: wallet.cryptoBalance,
             totalBalanceUSD: wallet.totalBalanceUSD,
         };
@@ -161,7 +236,7 @@ export class WalletController {
     async deposit(@Body() dto: DepositToWalletDto, @Request() req: any) {
         return this.paymentsService.depositToWallet(
             dto,
-            req.user.userId,
+            req.user.userId ?? req.user.sub,
             req.user.email,
         );
     }
@@ -170,7 +245,7 @@ export class WalletController {
     @ApiOperation({ summary: 'Invest using wallet balance' })
     @ApiResponse({ status: 201, description: 'Investment processed' })
     async invest(@Body() dto: WalletInvestmentDto, @Request() req: any) {
-        return this.paymentsService.processWalletInvestment(dto, req.user.userId);
+        return this.paymentsService.processWalletInvestment(dto, req.user.userId ?? req.user.sub);
     }
 
     @Post('withdraw')
@@ -178,7 +253,31 @@ export class WalletController {
     @ApiOperation({ summary: 'Withdraw from wallet' })
     @ApiResponse({ status: 201, description: 'Withdrawal initiated' })
     async withdraw(@Body() dto: WithdrawFromWalletDto, @Request() req: any) {
-        return this.paymentsService.withdrawFromWallet(dto, req.user.userId);
+        return this.paymentsService.withdrawFromWallet(dto, req.user.userId ?? req.user.sub);
+    }
+
+    @Post('admin/withdrawals/:id/approve')
+    @Roles(UserRole.ADMIN)
+    @ApiOperation({ summary: 'Admin approve an ROI withdrawal' })
+    @ApiResponse({ status: 200, description: 'Withdrawal approved and processed' })
+    async approveRoiWithdrawal(@Param('id') transactionId: string) {
+        return this.paymentsService.approveRoiWithdrawal(transactionId);
+    }
+
+    @Get('admin/withdrawals/pending')
+    @Roles(UserRole.ADMIN)
+    @ApiOperation({ summary: 'Admin get pending ROI withdrawals' })
+    @ApiResponse({ status: 200, description: 'List of pending withdrawals' })
+    async getPendingWithdrawals() {
+        return this.paymentsService.getPendingWithdrawals();
+    }
+
+    @Post('admin/withdrawals/:id/reject')
+    @Roles(UserRole.ADMIN)
+    @ApiOperation({ summary: 'Admin reject an ROI withdrawal' })
+    @ApiResponse({ status: 200, description: 'Withdrawal rejected and refunded' })
+    async rejectRoiWithdrawal(@Param('id') transactionId: string) {
+        return this.paymentsService.rejectRoiWithdrawal(transactionId);
     }
 
     @Post('withdrawal-method')
@@ -188,20 +287,20 @@ export class WalletController {
         @Body() dto: AddWithdrawalMethodDto,
         @Request() req: any,
     ) {
-        return this.paymentsService.addWithdrawalMethod(dto, req.user.userId);
+        return this.paymentsService.addWithdrawalMethod(dto, req.user.userId ?? req.user.sub);
     }
 
     @Get('transactions')
     @ApiOperation({ summary: 'Get wallet transactions' })
     @ApiResponse({ status: 200, description: 'List of wallet transactions' })
     async getTransactions(@Request() req: any) {
-        return this.paymentsService.getUserTransactions(req.user.userId);
+        return this.paymentsService.getUserTransactions(req.user.userId ?? req.user.sub);
     }
 
     @Get()
     @ApiOperation({ summary: 'Get full wallet details' })
     @ApiResponse({ status: 200, description: 'Wallet details' })
     async getWallet(@Request() req: any) {
-        return this.paymentsService.getOrCreateWallet(req.user.userId);
+        return this.paymentsService.getOrCreateWallet(req.user.userId ?? req.user.sub);
     }
 }

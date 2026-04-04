@@ -1,0 +1,64 @@
+image: atlassian/default-image:4
+
+definitions:
+  steps:
+    - step: &build_and_update
+        runs-on:
+          - self.hosted
+          - linux.arm64
+        name: Build image and update ArgoCD manifest
+        services:
+          - docker
+        caches:
+          - docker
+        script:
+          - export IMAGE_TAG="$(echo "${BITBUCKET_COMMIT}" | cut -c1-7)"
+          - export IMAGE_REGISTRY="${DOCKER_REGISTRY}"
+          - export IMAGE_REPO="${DOCKER_REPO}"
+          - export IMAGE_REF="${IMAGE_REGISTRY}/${IMAGE_REPO}:${IMAGE_TAG}"
+          - echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin "${IMAGE_REGISTRY}"
+          - docker pull "${IMAGE_REGISTRY}/${IMAGE_REPO}:latest" || true
+          - docker build --cache-from "${IMAGE_REGISTRY}/${IMAGE_REPO}:latest" -t "${IMAGE_REF}" .
+          - docker push "${IMAGE_REF}"
+          - |
+            if [ -n "${PUSH_LATEST:-}" ]; then
+              docker tag "${IMAGE_REF}" "${IMAGE_REGISTRY}/${IMAGE_REPO}:latest"
+              docker push "${IMAGE_REGISTRY}/${IMAGE_REPO}:latest"
+            fi
+          - |
+            DEPLOY_REPO_URL="${DEPLOY_REPO_URL:-https://x-token-auth:${DEPLOY_REPO_TOKEN}@bitbucket.org/trudentechcrowdfunding/trucrowd-deployment.git}"
+            DEPLOY_BRANCH="${DEPLOY_BRANCH:-${BITBUCKET_BRANCH}}"
+            git clone "${DEPLOY_REPO_URL}" deploy-repo
+            cd deploy-repo
+            git fetch origin
+            if git show-ref --verify --quiet "refs/remotes/origin/${DEPLOY_BRANCH}"; then
+              git checkout -B "${DEPLOY_BRANCH}" "origin/${DEPLOY_BRANCH}"
+            else
+              git checkout -B "${DEPLOY_BRANCH}"
+            fi
+            if [ -n "${DEPLOY_MANIFEST_PATH:-}" ]; then
+              TARGET="${DEPLOY_MANIFEST_PATH}"
+            else
+              TARGET="$(find backend -maxdepth 3 -name 'deployment.yaml' | head -n 1)"
+            fi
+            if [ -z "${TARGET:-}" ]; then
+              echo "No deployment.yaml found under backend/"
+              exit 1
+            fi
+            sed -i "s#^\(\\s*image:\\s*\).*#\\1${IMAGE_REF}#" "${TARGET}"
+            git add "${TARGET}"
+            git diff --cached --quiet && echo "No manifest changes to commit." && exit 0
+            git config user.name "${GIT_USER_NAME:-bitbucket-pipelines}"
+            git config user.email "${GIT_USER_EMAIL:-ci@local}"
+            git commit -m "chore(argocd): deploy ${IMAGE_TAG} [skip ci]"
+            git pull --rebase origin "${DEPLOY_BRANCH}"
+            git push origin HEAD:"${DEPLOY_BRANCH}"
+
+pipelines:
+  branches:
+    dev:
+      - step: *build_and_update
+    prod:
+      - step: *build_and_update
+    charity/prod:
+      - step: *build_and_update

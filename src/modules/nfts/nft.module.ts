@@ -14,6 +14,6 @@ import { ProjectsModule } from '../projects/projects.module';
   ],
   controllers: [NftController],
   providers: [NftService, ViemNftClient, RolesGuard],
-  exports: [NftService],
+  exports: [NftService, ViemNftClient], // ViemNftClient exported for InvestmentsModule
 })
-export class NftModule {}
+export class NftModule { }

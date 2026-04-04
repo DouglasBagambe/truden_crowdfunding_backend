@@ -9,8 +9,8 @@ export enum InvestmentStatus {
 
 export interface InvestmentViewInvestor {
   id: string;
-  walletAddress?: string;
   kycStatus?: KYCStatus;
+  walletAddress?: string | null;
 }
 
 export interface InvestmentViewProject {
@@ -22,8 +22,12 @@ export interface InvestmentViewProject {
 }
 
 export interface InvestmentViewNft {
-  id?: string | null;
-  metadata?: Record<string, unknown> | null;
+  projectId?: number | null;
+  tokenAmount?: number | null;
+  txHash?: string | null;
+  metadataUri?: string | null;
+  minted: boolean;
+  listed: boolean;
 }
 
 export interface InvestmentView {
@@ -31,12 +35,16 @@ export interface InvestmentView {
   projectId: string;
   investorId: string;
   amount: number;
+  /** ISO-4217 currency code, e.g. 'UGX' */
+  currency?: string;
+  /** Payment gateway transaction reference */
   txHash?: string | null;
-  nftId?: string | null;
+  /** Self-custodial wallet address for NFT delivery */
+  walletAddress?: string | null;
+  nft?: InvestmentViewNft;
   status: InvestmentStatus;
   createdAt: Date;
   updatedAt: Date;
   project?: InvestmentViewProject;
   investor?: InvestmentViewInvestor;
-  nft?: InvestmentViewNft;
 }

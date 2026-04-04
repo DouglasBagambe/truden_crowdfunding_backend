@@ -7,10 +7,9 @@ import { InvestmentNFTService } from './services/investment-nft.service';
 import { PaymentInvestmentListener } from './listeners/payment-investment.listener';
 import { Investment, InvestmentSchema } from './schemas/investment.schema';
 import { AuthModule } from '../auth/auth.module';
-import { EscrowModule } from '../escrow/escrow.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { PaymentsModule } from '../payments/payments.module';
-import { UsersModule } from '../users/users.module';
+import { NftModule } from '../nfts/nft.module';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import {
   PaymentTransaction,
@@ -25,15 +24,17 @@ import {
     ]),
     EventEmitterModule.forRoot(),
     AuthModule,
-    EscrowModule,
     ProjectsModule,
     PaymentsModule,
-    UsersModule,
+    NftModule, // provides ViemNftClient
   ],
   controllers: [InvestmentsController],
-  providers: [InvestmentsService, InvestmentNFTService, PaymentInvestmentListener, RolesGuard],
-  // Note: ProjectsRepository and PaymentsService come via ProjectsModule and PaymentsModule exports
+  providers: [
+    InvestmentsService,
+    InvestmentNFTService,
+    PaymentInvestmentListener,
+    RolesGuard,
+  ],
   exports: [InvestmentsService, InvestmentNFTService],
 })
 export class InvestmentsModule { }
-

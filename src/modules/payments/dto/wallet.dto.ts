@@ -24,7 +24,7 @@ export class DepositToWalletDto {
 export class WithdrawFromWalletDto {
     @ApiProperty({ description: 'Amount to withdraw', example: 50000 })
     @IsNumber()
-    @Min(10000) // Minimum 10000 UGX
+    @Min(500) // Minimum 500 UGX for Charity
     amount!: number;
 
     @ApiProperty({ description: 'Currency code', example: 'UGX', default: 'UGX' })
@@ -34,6 +34,16 @@ export class WithdrawFromWalletDto {
     @ApiProperty({ description: 'Withdrawal method ID (index in array)' })
     @IsNumber()
     withdrawalMethodIndex!: number;
+
+    @ApiProperty({ description: 'Type of balance to withdraw from: CHARITY or ROI' })
+    @IsString()
+    @IsOptional()
+    balanceType?: 'CHARITY' | 'ROI' = 'CHARITY';
+
+    @ApiProperty({ description: 'ID of the specific project being withdrawn for' })
+    @IsString()
+    @IsOptional()
+    projectId?: string;
 
     @ApiProperty({ description: 'Optional note for the withdrawal', required: false })
     @IsString()

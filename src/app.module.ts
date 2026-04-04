@@ -16,6 +16,7 @@ import { PaymentsModule } from './modules/payments/payments.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
+import { MarketplaceModule } from './modules/marketplace/marketplace.module';
 import appConfig from './config/app.config';
 
 @Module({
@@ -52,6 +53,7 @@ import appConfig from './config/app.config';
     KycModule,
     StatisticsModule,
     PaymentsModule,
+    MarketplaceModule,
   ],
   providers: [
     {

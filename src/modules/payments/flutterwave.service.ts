@@ -26,6 +26,13 @@ export class FlutterwaveService {
         }
     }
 
+    private getBackendUrl(): string {
+        return (this.configService.get<string>('BACKEND_URL') || 'https://trufund.onrender.com')
+            .trim()
+            .replace(/[,\s]+$/, '')
+            .replace(/\/+$/, '');
+    }
+
     /**
      * Initialize a payment with Flutterwave
      */
@@ -182,21 +189,39 @@ export class FlutterwaveService {
         accountBank: string;
         narration: string;
         reference: string;
+        beneficiaryName?: string;
+        email?: string;
+        mobileNumber?: string;
     }) {
         if (!this.secretKey) {
             throw new BadRequestException('Payment service not configured');
         }
 
         try {
+            // Flutterwave requires 'MPS' as the destination bank for Mobile Money Wallets in Uganda
+            const isMomoUG = params.currency === 'UGX' && ['MTN', 'AIRTEL'].includes(params.accountBank.toUpperCase());
+            const finalAccountBank = isMomoUG ? 'MPS' : params.accountBank;
+
             const payload = {
-                account_bank: params.accountBank,
+                account_bank: finalAccountBank,
                 account_number: params.accountNumber,
                 amount: params.amount,
                 currency: params.currency,
                 narration: params.narration,
                 reference: params.reference,
-                callback_url: this.configService.get<string>('BACKEND_URL') + '/api/payments/payout-callback',
+                callback_url: `${this.getBackendUrl()}/api/payments/payout-callback`,
                 debit_currency: params.currency,
+                ...(params.beneficiaryName && { beneficiary_name: params.beneficiaryName }),
+                ...(isMomoUG && {
+                    meta: [
+                        {
+                            mobile_number: params.mobileNumber || params.accountNumber,
+                            email: params.email || 'noreply@keiboroi.com',
+                            beneficiary_name: params.beneficiaryName || 'User',
+                            beneficiary_country: 'UG',
+                        }
+                    ]
+                }),
             };
 
             const response = await firstValueFrom(
@@ -215,8 +240,9 @@ export class FlutterwaveService {
             this.logger.log(`Payout initiated: ${params.reference}`);
             return response.data;
         } catch (error: any) {
-            this.logger.error(`Failed to process payout: ${error.message}`, error.stack);
-            throw new BadRequestException(`Payout failed: ${error.message}`);
+            const providerError = error.response?.data?.message || error.response?.data?.error || error.message;
+            this.logger.error(`Failed to process payout: ${providerError}`, error.stack);
+            throw new BadRequestException(`Payout failed: ${providerError}`);
         }
     }
 

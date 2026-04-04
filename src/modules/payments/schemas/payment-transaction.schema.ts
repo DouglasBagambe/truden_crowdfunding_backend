@@ -32,7 +32,6 @@ export enum MobileMoneyProvider {
 export class PaymentTransaction {
     @Prop({
         type: MongooseSchema.Types.ObjectId,
-        required: true,
         index: true,
         ref: 'User',
     })

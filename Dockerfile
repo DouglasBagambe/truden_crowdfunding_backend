@@ -1,36 +1,33 @@
-# ── Stage 1: Build ────────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
-
+FROM node:22-alpine AS base
 WORKDIR /app
+ENV NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false
 
-# Copy manifests first for better layer caching
+# Install deps separately for caching
+FROM base AS deps
+RUN apk add --no-cache python3 make g++ git
 COPY package*.json ./
+RUN npm ci --unsafe-perm
 
-# Install ALL deps (including devDeps needed for build)
-RUN npm ci
-
-# Copy source
+# Build (skip tests)
+FROM base AS build
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-
-# Build without running tests (Render handles that separately if needed)
 RUN npm run build:skip-tests
 
-# ── Stage 2: Production image ──────────────────────────────────────────────────
-FROM node:20-alpine AS production
+# Production deps only (prune from full install to avoid a second npm ci)
+FROM deps AS prod-deps
+RUN npm prune --omit=dev && npm cache clean --force
 
+# Runtime
+FROM node:22-alpine AS runner
 WORKDIR /app
+ENV NODE_ENV=production
 
-# Copy manifests
-COPY package*.json ./
+COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/package*.json ./
+COPY --from=build --chown=node:node /app/dist ./dist
 
-# Install ONLY production deps
-RUN npm ci --omit=dev
-
-# Copy compiled output from builder
-COPY --from=builder /app/dist ./dist
-
-# Expose the port NestJS listens on
+USER node
 EXPOSE 3000
-
-# Start — NestJS compiles into dist/src/main.js
-CMD ["node", "dist/src/main"]
+CMD ["node", "dist/src/main.js"]
