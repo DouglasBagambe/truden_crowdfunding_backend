@@ -59,6 +59,10 @@ const createService = () => {
     create: jest.fn(),
   };
 
+  const viemNftClient = {
+    createProjectNFT: jest.fn(),
+  };
+
   const service = new ProjectsService(
     projectsRepo as any,
     milestonesRepo as any,
@@ -68,6 +72,7 @@ const createService = () => {
     agreementTemplatesService as any,
     attachmentRequirementsService as any,
     attachmentFilesRepo as any,
+    viemNftClient as any,
     investmentModel as any,
   );
 

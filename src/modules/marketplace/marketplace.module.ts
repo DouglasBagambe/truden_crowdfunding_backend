@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { ConfigModule } from '@nestjs/config';
 import { MarketplaceController } from './marketplace.controller';
 import { MarketplaceService } from './marketplace.service';
 import {
@@ -12,6 +13,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 
 @Module({
     imports: [
+        ConfigModule,
         MongooseModule.forFeature([
             { name: MarketplaceListing.name, schema: MarketplaceListingSchema },
             { name: Investment.name, schema: InvestmentSchema },

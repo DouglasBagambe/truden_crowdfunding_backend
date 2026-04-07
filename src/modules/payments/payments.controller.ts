@@ -1,4 +1,5 @@
 import {
+    BadRequestException,
     Controller,
     Post,
     Get,
@@ -61,7 +62,11 @@ export class PaymentsController {
         @Body() dto: InitializePaymentDto,
         @Request() req: any,
     ) {
-        return this.paymentsService.initializePayment(dto, req.user.userId ?? req.user.sub);
+        void dto;
+        void req;
+        throw new BadRequestException(
+            'Legacy Flutterwave checkout is disabled. Use the DPO checkout flow instead.',
+        );
     }
 
     @Post('verify/:txRef')
@@ -97,19 +102,21 @@ export class PaymentsController {
             const userId = req.user?.userId ?? req.user?.sub;
             const { projectType } = await this.paymentsService.resolveCheckoutProject(dto.projectId);
             const isCharity = projectType === 'CHARITY';
+            const user = !isCharity && userId
+                ? await this.usersService.getUserById(userId)
+                : null;
 
             if (!isCharity && !userId) {
                 throw new UnauthorizedException('Please sign in to invest in ROI projects.');
             }
 
-            if (!isCharity && req.user?.emailVerified === false) {
+            if (!isCharity && !user?.emailVerifiedAt) {
                 throw new ForbiddenException(
                     'Email not verified. Please verify your email address to perform this action.',
                 );
             }
 
             if (!isCharity && userId) {
-                const user = await this.usersService.getUserById(userId);
                 if (user?.kycStatus !== KYCStatus.VERIFIED) {
                     throw new ForbiddenException(
                         'KYC not verified. Please complete and verify KYC before investing.',
@@ -146,8 +153,11 @@ export class PaymentsController {
     @HttpCode(HttpStatus.OK)
     @Public()
     @ApiOperation({ summary: 'Flutterwave payout callback handler' })
-    async handlePayoutCallback(@Body() payload: any) {
-        return this.paymentsService.handlePayoutCallback(payload);
+    async handlePayoutCallback(
+        @Body() payload: any,
+        @Query('token') callbackToken?: string,
+    ) {
+        return this.paymentsService.handlePayoutCallback(payload, callbackToken);
     }
 
     @Post('dpo/webhook')

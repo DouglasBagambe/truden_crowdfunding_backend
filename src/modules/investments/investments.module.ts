@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { CommonModule } from '../../common/common.module';
 import { InvestmentsController } from './controllers/investments.controller';
 import { InvestmentsService } from './services/investments.service';
 import { InvestmentNFTService } from './services/investment-nft.service';
@@ -10,6 +11,7 @@ import { AuthModule } from '../auth/auth.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { NftModule } from '../nfts/nft.module';
+import { UsersModule } from '../users/users.module';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import {
   PaymentTransaction,
@@ -18,6 +20,7 @@ import {
 
 @Module({
   imports: [
+    CommonModule,
     MongooseModule.forFeature([
       { name: Investment.name, schema: InvestmentSchema },
       { name: PaymentTransaction.name, schema: PaymentTransactionSchema },
@@ -27,6 +30,7 @@ import {
     ProjectsModule,
     PaymentsModule,
     NftModule, // provides ViemNftClient
+    UsersModule,
   ],
   controllers: [InvestmentsController],
   providers: [

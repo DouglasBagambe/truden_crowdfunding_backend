@@ -6,6 +6,7 @@ import {
   Logger,
   HttpException,
   HttpStatus,
+  NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -348,6 +349,25 @@ export class AuthService {
       user: { ...this.sanitizeUser(user), permissions },
       ...tokens,
     };
+  }
+
+  async issueSiweNonce(userId: string, walletAddress: string) {
+    const normalizedWallet = walletAddress.trim().toLowerCase();
+    if (!/^0x[a-f0-9]{40}$/.test(normalizedWallet)) {
+      throw new BadRequestException('Wallet address must be a valid EVM address');
+    }
+
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const user = await this.userModel
+      .findByIdAndUpdate(userId, { $set: { nonce } }, { new: true })
+      .select('_id')
+      .exec();
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return { nonce };
   }
 
   async verifyEmail(dto: { code?: string; email?: string }) {

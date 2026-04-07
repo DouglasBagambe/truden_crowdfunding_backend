@@ -120,6 +120,8 @@ WalletSchema.pre('save', function (next) {
     wallet.totalBalanceUSD =
         (wallet.fiatBalance?.UGX || 0) * UGX_TO_USD +
         (wallet.fiatBalance?.USD || 0) +
+        (wallet.roiBalance?.UGX || 0) * UGX_TO_USD +
+        (wallet.roiBalance?.USD || 0) +
         (wallet.cryptoBalance?.ETH || 0) * ETH_TO_USD +
         (wallet.cryptoBalance?.USDC || 0) * USDC_TO_USD;
 

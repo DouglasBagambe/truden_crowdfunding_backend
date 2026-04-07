@@ -4,6 +4,8 @@ import {
     NotFoundException,
     BadRequestException,
     ForbiddenException,
+    OnModuleDestroy,
+    OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -27,10 +29,14 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DpoService } from './dpo.service';
 import { ConfigService } from '@nestjs/config';
 import { ProjectsService } from '../projects/projects.service';
+import { hasBackendRoiAccess } from '../../common/utils/roi-access.util';
+import { UsersRepository } from '../users/repositories/users.repository';
+import { AppEmailService } from '../../common/services/app-email.service';
 
 @Injectable()
-export class PaymentsService {
+export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     private readonly logger = new Logger(PaymentsService.name);
+    private payoutReconciliationTimer?: NodeJS.Timeout;
 
     constructor(
         @InjectModel(PaymentTransaction.name)
@@ -42,7 +48,47 @@ export class PaymentsService {
         private eventEmitter: EventEmitter2,
         private configService: ConfigService,
         private projectsService: ProjectsService,
+        private usersRepository: UsersRepository,
+        private appEmailService: AppEmailService,
     ) { }
+
+    private asRecord(value: unknown): Record<string, unknown> | undefined {
+        return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+    }
+
+    private getUserDisplayName(user: any, fallback: string = 'there'): string {
+        const profile = user?.profile || {};
+        const displayName = typeof profile.displayName === 'string' ? profile.displayName.trim() : '';
+        const firstName = typeof profile.firstName === 'string' ? profile.firstName.trim() : '';
+        const lastName = typeof profile.lastName === 'string' ? profile.lastName.trim() : '';
+        const fullName = `${firstName} ${lastName}`.trim();
+        return displayName || fullName || user?.email || fallback;
+    }
+
+    private formatAmount(currency: string, amount: number): string {
+        return `${currency.toUpperCase()} ${Number(amount || 0).toLocaleString()}`;
+    }
+
+    private async sendWithdrawalEmail(
+        userId: string,
+        details: {
+            subject: string;
+            body: string;
+        },
+    ) {
+        const user = await this.usersRepository.findById(userId);
+        if (!user?.email) {
+            return;
+        }
+
+        const name = this.getUserDisplayName(user);
+        await this.appEmailService.send({
+            to: user.email,
+            subject: details.subject,
+            text: `Hi ${name}, ${details.body}`,
+            html: `<p>Hi ${name},</p><p>${details.body}</p>`,
+        });
+    }
 
     private normalizeProjectType(value: unknown): 'CHARITY' | 'ROI' | '' {
         if (typeof value !== 'string') {
@@ -68,6 +114,163 @@ export class PaymentsService {
         }
 
         return { project, projectType };
+    }
+
+    onModuleInit() {
+        this.payoutReconciliationTimer = setInterval(() => {
+            void this.reconcileProcessingPayouts();
+        }, 60_000);
+    }
+
+    onModuleDestroy() {
+        if (this.payoutReconciliationTimer) {
+            clearInterval(this.payoutReconciliationTimer);
+            this.payoutReconciliationTimer = undefined;
+        }
+    }
+
+    private getPayoutCallbackToken(): string {
+        return (
+            this.configService.get<string>('FLUTTERWAVE_PAYOUT_CALLBACK_TOKEN') ||
+            this.configService.get<string>('FLUTTERWAVE_WEBHOOK_SECRET') ||
+            ''
+        ).trim();
+    }
+
+    private getProviderTransferId(payload: any): string | undefined {
+        const rawId =
+            payload?.data?.id ??
+            payload?.data?.data?.id ??
+            payload?.data?.transfer_id ??
+            payload?.transfer_id ??
+            payload?.id;
+
+        if (rawId === undefined || rawId === null) {
+            return undefined;
+        }
+
+        return String(rawId);
+    }
+
+    private async markTransactionSuccessful(
+        transactionId: string,
+        webhookData?: Record<string, unknown>,
+    ): Promise<boolean> {
+        const updateResult = await this.paymentTransactionModel.updateOne(
+            {
+                _id: new Types.ObjectId(transactionId),
+                status: { $ne: PaymentStatus.Successful },
+            },
+            {
+                $set: {
+                    status: PaymentStatus.Successful,
+                    completedAt: new Date(),
+                    ...(webhookData ? { webhookData } : {}),
+                },
+                $unset: {
+                    failureReason: 1,
+                },
+            },
+        );
+
+        return updateResult.modifiedCount > 0;
+    }
+
+    private async markTransactionFailedIfUnsettled(
+        transactionId: string,
+        reason: string,
+        webhookData?: Record<string, unknown>,
+    ) {
+        await this.paymentTransactionModel.updateOne(
+            {
+                _id: new Types.ObjectId(transactionId),
+                status: { $nin: [PaymentStatus.Successful, PaymentStatus.Failed] },
+            },
+            {
+                $set: {
+                    status: PaymentStatus.Failed,
+                    failureReason: reason,
+                    ...(webhookData ? { webhookData } : {}),
+                },
+            },
+        );
+    }
+
+    private async confirmPayoutState(
+        transaction: PaymentTransactionDocument,
+        payload?: Record<string, unknown>,
+    ) {
+        const providerTransferId = String(
+            transaction.metadata?.payoutTransferId || this.getProviderTransferId(payload) || '',
+        ).trim();
+
+        if (!providerTransferId) {
+            const payloadData = this.asRecord(payload);
+            const nestedData = this.asRecord(payloadData?.data);
+            return {
+                normalizedStatus: String(nestedData?.status || payloadData?.status || '').toLowerCase(),
+                providerData: payload,
+            };
+        }
+
+        const providerResponse = await this.flutterwaveService.getTransfer(providerTransferId);
+        const providerData = providerResponse?.data || providerResponse;
+        const providerReference = String(
+            providerData?.reference || providerData?.tx_ref || providerData?.txRef || '',
+        ).trim();
+
+        if (providerReference && providerReference !== transaction.flutterwaveReference) {
+            throw new ForbiddenException('Payout callback reference mismatch');
+        }
+
+        return {
+            normalizedStatus: String(providerData?.status || '').toLowerCase(),
+            providerData,
+        };
+    }
+
+    private async reconcileProcessingPayouts() {
+        try {
+            const candidates = await this.paymentTransactionModel
+                .find({
+                    provider: PaymentProvider.Flutterwave,
+                    status: PaymentStatus.Processing,
+                    'metadata.type': { $in: ['WITHDRAWAL_CHARITY', 'WITHDRAWAL_ROI'] },
+                    'metadata.payoutTransferId': { $exists: true, $ne: null },
+                })
+                .sort({ createdAt: 1 })
+                .limit(20);
+
+            for (const transaction of candidates) {
+                try {
+                    const { normalizedStatus, providerData } = await this.confirmPayoutState(transaction);
+            if (['successful', 'success', 'completed'].includes(normalizedStatus)) {
+                const changed = await this.markTransactionSuccessful(String(transaction._id), providerData);
+                if (changed) {
+                    await this.sendWithdrawalEmail(String(transaction.userId), {
+                        subject: 'Withdrawal completed',
+                        body: `Your withdrawal of ${this.formatAmount(transaction.currency, Math.abs(transaction.amount))} has been completed successfully.`,
+                    });
+                }
+                continue;
+            }
+
+                    if (['failed', 'error', 'cancelled', 'reversed'].includes(normalizedStatus)) {
+                        await this.refundFailedWithdrawal(
+                            transaction,
+                            String(providerData?.complete_message || providerData?.message || 'Payout failed'),
+                            providerData,
+                        );
+                    }
+                } catch (error: any) {
+                    this.logger.warn(
+                        `Failed payout reconciliation for ${transaction.flutterwaveReference}: ${error.message}`,
+                    );
+                }
+            }
+        } catch (error: any) {
+            this.logger.warn(`Payout reconciliation loop failed: ${error.message}`);
+        }
     }
 
     /**
@@ -138,29 +341,38 @@ export class PaymentsService {
 
         // Update transaction status
         if (flwResponse.data?.status === 'successful') {
-            transaction.status = PaymentStatus.Successful;
-            transaction.completedAt = new Date();
             transaction.flutterwaveTransactionId = flwResponse.data.id;
             transaction.webhookData = flwResponse.data;
+            await transaction.save();
 
-            // Emit event for investment processing
-            this.eventEmitter.emit('payment.successful', {
-                transactionId: transaction._id,
-                userId: transaction.userId,
-                projectId: transaction.projectId,
-                amount: transaction.amount,
-                currency: transaction.currency,
-            });
+            const changed = await this.markTransactionSuccessful(
+                String(transaction._id),
+                flwResponse.data,
+            );
+
+            if (changed) {
+                this.eventEmitter.emit('payment.successful', {
+                    transactionId: transaction._id,
+                    userId: transaction.userId,
+                    projectId: transaction.projectId,
+                    amount: transaction.amount,
+                    currency: transaction.currency,
+                });
+            }
         } else if (flwResponse.data?.status === 'failed') {
             transaction.status = PaymentStatus.Failed;
             transaction.failureReason = flwResponse.data.processor_response || 'Payment failed';
+            await transaction.save();
         }
 
-        await transaction.save();
-
         return {
-            status: transaction.status,
-            transaction: transaction.toObject(),
+            status:
+                flwResponse.data?.status === 'successful'
+                    ? PaymentStatus.Successful
+                    : transaction.status,
+            transaction: (
+                await this.paymentTransactionModel.findById(transaction._id).lean()
+            ) || transaction.toObject(),
         };
     }
 
@@ -188,26 +400,26 @@ export class PaymentsService {
         }
 
         // Update transaction
-        if (status === 'successful' && transaction.status !== PaymentStatus.Successful) {
-            transaction.status = PaymentStatus.Successful;
-            transaction.completedAt = new Date();
-            transaction.webhookData = payload;
-            await transaction.save();
+        if (status === 'successful') {
+            const changed = await this.markTransactionSuccessful(String(transaction._id), payload);
 
-            // Emit event for investment processing
-            this.eventEmitter.emit('payment.successful', {
-                transactionId: transaction._id,
-                userId: transaction.userId,
-                projectId: transaction.projectId,
-                amount: transaction.amount,
-                currency: transaction.currency,
-            });
+            if (changed) {
+                this.eventEmitter.emit('payment.successful', {
+                    transactionId: transaction._id,
+                    userId: transaction.userId,
+                    projectId: transaction.projectId,
+                    amount: transaction.amount,
+                    currency: transaction.currency,
+                });
 
-            this.logger.log(`Payment successful via webhook: ${txRef}`);
+                this.logger.log(`Payment successful via webhook: ${txRef}`);
+            }
         } else if (status === 'failed') {
-            transaction.status = PaymentStatus.Failed;
-            transaction.failureReason = payload.data?.processor_response || 'Payment failed';
-            await transaction.save();
+            await this.markTransactionFailedIfUnsettled(
+                String(transaction._id),
+                payload.data?.processor_response || 'Payment failed',
+                payload,
+            );
 
             this.logger.log(`Payment failed via webhook: ${txRef}`);
         }
@@ -215,10 +427,17 @@ export class PaymentsService {
         return { received: true };
     }
 
-    async handlePayoutCallback(payload: any) {
+    async handlePayoutCallback(payload: any, callbackToken?: string) {
+        const expectedToken = this.getPayoutCallbackToken();
+        if (!expectedToken) {
+            throw new ForbiddenException('Payout callback token is not configured');
+        }
+        if (callbackToken !== expectedToken) {
+            throw new ForbiddenException('Invalid payout callback token');
+        }
+
         const data = payload?.data || payload || {};
         const reference = data.reference || data.tx_ref || data.txRef;
-        const normalizedStatus = String(data.status || payload?.status || '').toLowerCase();
 
         if (!reference) {
             this.logger.warn('Payout callback received without reference');
@@ -234,27 +453,46 @@ export class PaymentsService {
             return { received: true };
         }
 
-        transaction.webhookData = payload;
+        const { normalizedStatus, providerData } = await this.confirmPayoutState(transaction, payload);
 
-        if (
-            ['successful', 'success', 'completed'].includes(normalizedStatus) &&
-            transaction.status !== PaymentStatus.Successful
-        ) {
-            transaction.status = PaymentStatus.Successful;
-            transaction.completedAt = new Date();
-            transaction.failureReason = undefined;
-            await transaction.save();
+        transaction.webhookData = providerData || payload;
+        if (providerData && !transaction.metadata?.payoutTransferId) {
+            transaction.metadata = {
+                ...(transaction.metadata || {}),
+                payoutTransferId: this.getProviderTransferId(providerData),
+            };
+            transaction.markModified('metadata');
+        }
+        await transaction.save();
+
+        if (['successful', 'success', 'completed'].includes(normalizedStatus)) {
+            const changed = await this.markTransactionSuccessful(String(transaction._id), providerData || payload);
+            if (changed) {
+                await this.sendWithdrawalEmail(String(transaction.userId), {
+                    subject: 'Withdrawal completed',
+                    body: `Your withdrawal of ${this.formatAmount(transaction.currency, Math.abs(transaction.amount))} has been completed successfully.`,
+                });
+            }
             this.logger.log(`Payout marked successful: ${reference}`);
             return { received: true };
         }
 
         if (['failed', 'error', 'cancelled', 'reversed'].includes(normalizedStatus)) {
-            await this.refundFailedWithdrawal(transaction, data.message || data.complete_message || 'Payout failed');
+            await this.refundFailedWithdrawal(
+                transaction,
+                String(
+                    (providerData as any)?.complete_message ||
+                    (providerData as any)?.message ||
+                    data.message ||
+                    data.complete_message ||
+                    'Payout failed',
+                ),
+                providerData || payload,
+            );
             this.logger.warn(`Payout failed and refunded: ${reference}`);
             return { received: true };
         }
 
-        await transaction.save();
         return { received: true };
     }
 
@@ -311,6 +549,10 @@ export class PaymentsService {
         // Check balance
         const currency = dto.currency.toUpperCase();
         const isRoi = dto.balanceType === 'ROI';
+
+        if (isRoi && !hasBackendRoiAccess(userId, this.configService)) {
+            throw new ForbiddenException('ROI withdrawals are restricted for this account');
+        }
 
         const balance = isRoi
             ? ((wallet.roiBalance as any)?.[currency] || 0)
@@ -377,6 +619,11 @@ export class PaymentsService {
 
             this.logger.log(`ROI Withdrawal initiated for user ${userId}: ${transaction._id}. Awaiting admin approval.`);
 
+            await this.sendWithdrawalEmail(userId, {
+                subject: 'ROI withdrawal submitted',
+                body: `Your ROI withdrawal request for ${this.formatAmount(currency, dto.amount)} has been received. The amount is reserved and is now awaiting administrator approval.`,
+            });
+
             return {
                 transactionId: transaction._id,
                 status: PaymentStatus.Pending,
@@ -423,6 +670,8 @@ export class PaymentsService {
         }
 
         // Create transaction record
+        const payoutTransferId =
+            payoutResult?.data?.id || payoutResult?.data?.data?.id || null;
         const transaction = await this.paymentTransactionModel.create({
             userId: new Types.ObjectId(userId),
             projectId: new Types.ObjectId(dto.projectId || '000000000000000000000000'),
@@ -435,6 +684,7 @@ export class PaymentsService {
             metadata: {
                 type: 'WITHDRAWAL_CHARITY',
                 payoutResult,
+                payoutTransferId,
                 platformFee,
                 payoutAmount,
                 feeRate: PLATFORM_FEE_RATE,
@@ -444,6 +694,11 @@ export class PaymentsService {
 
         this.logger.log(`Charity Withdrawal processed for user ${userId}`);
 
+        await this.sendWithdrawalEmail(userId, {
+            subject: 'Withdrawal submitted',
+            body: `Your withdrawal of ${this.formatAmount(currency, dto.amount)} has been submitted to Flutterwave. Final delivery depends on provider confirmation.`,
+        });
+
         return {
             transactionId: transaction._id,
             status: PaymentStatus.Processing,
@@ -451,7 +706,7 @@ export class PaymentsService {
             platformFee,
             youReceive: payoutAmount,
             providerReference: payoutRef,
-            providerTransferId: payoutResult?.data?.id || payoutResult?.data?.data?.id,
+            providerTransferId: payoutTransferId,
             providerStatus: payoutResult?.status || payoutResult?.data?.status || 'processing',
             message: 'Withdrawal request submitted to Flutterwave. Final delivery depends on network and provider confirmation.',
             newBalance: (wallet.fiatBalance as any)[currency],
@@ -494,9 +749,16 @@ export class PaymentsService {
         transaction.status = PaymentStatus.Processing;
         transaction.flutterwaveReference = payoutRef;
         transaction.metadata!.payoutResult = payoutResult;
+        transaction.metadata!.payoutTransferId =
+            payoutResult?.data?.id || payoutResult?.data?.data?.id || null;
         transaction.metadata!.pendingApproval = false;
         transaction.markModified('metadata');
         await transaction.save();
+
+        await this.sendWithdrawalEmail(String(transaction.userId), {
+            subject: 'ROI withdrawal approved',
+            body: `Your ROI withdrawal of ${this.formatAmount(transaction.currency, Math.abs(transaction.amount))} has been approved and submitted to Flutterwave for processing.`,
+        });
 
         return { success: true, message: 'Payout approved and processing' };
     }
@@ -519,6 +781,11 @@ export class PaymentsService {
         transaction.markModified('metadata');
         await transaction.save();
 
+        await this.sendWithdrawalEmail(String(transaction.userId), {
+            subject: 'ROI withdrawal rejected',
+            body: `Your ROI withdrawal of ${this.formatAmount(transaction.currency, Math.abs(transaction.amount))} was rejected and the full amount has been returned to your wallet.`,
+        });
+
         return { success: true, message: 'Payout rejected and refunded' };
     }
 
@@ -533,6 +800,7 @@ export class PaymentsService {
     private async refundFailedWithdrawal(
         transaction: PaymentTransactionDocument,
         reason: string,
+        providerData?: Record<string, unknown>,
     ) {
         if (transaction.status === PaymentStatus.Failed || transaction.metadata?.refundApplied) {
             transaction.status = PaymentStatus.Failed;
@@ -540,6 +808,7 @@ export class PaymentsService {
             transaction.metadata = {
                 ...(transaction.metadata || {}),
                 refundApplied: true,
+                ...(providerData ? { payoutResult: providerData } : {}),
             };
             transaction.markModified('metadata');
             await transaction.save();
@@ -593,9 +862,15 @@ export class PaymentsService {
             refundApplied: true,
             refundReason: reason,
             refundedAt: new Date(),
+            ...(providerData ? { payoutResult: providerData } : {}),
         };
         transaction.markModified('metadata');
         await transaction.save();
+
+        await this.sendWithdrawalEmail(String(transaction.userId), {
+            subject: 'Withdrawal refunded after provider failure',
+            body: `Your withdrawal of ${this.formatAmount(transaction.currency, absoluteAmount)} could not be completed. The amount has been returned to your wallet. Reason: ${reason}.`,
+        });
     }
 
     /**
@@ -625,7 +900,11 @@ export class PaymentsService {
 
         this.logger.log(`Withdrawal method added for user ${userId}`);
 
-        return wallet.withdrawalMethods[wallet.withdrawalMethods.length - 1];
+        const index = wallet.withdrawalMethods.length - 1;
+        return {
+            index,
+            method: wallet.withdrawalMethods[index],
+        };
     }
 
     /**
@@ -692,10 +971,20 @@ export class PaymentsService {
         const { project, projectType } = await this.resolveCheckoutProject(dto.projectId);
         const isCharity = projectType === 'CHARITY';
 
+        if (!isCharity && userId && !hasBackendRoiAccess(userId, this.configService)) {
+            throw new ForbiddenException('ROI access is restricted for this account');
+        }
+
         if (isCharity) {
             await this.projectsService.ensureProjectCanReceiveDonation(dto.projectId);
         } else {
             await this.projectsService.ensureProjectIsOpenForInvestment(dto.projectId);
+            const projectOnchainId = String((project as any).projectOnchainId || '').trim();
+            if (!projectOnchainId || projectOnchainId === '0') {
+                throw new BadRequestException(
+                    'ROI checkout is unavailable until this project has been provisioned on-chain.',
+                );
+            }
         }
 
         const normalizedWalletAddress = dto.walletAddress?.trim().toLowerCase() || '';
@@ -803,19 +1092,19 @@ export class PaymentsService {
         const verify = await this.dpoService.verifyToken(token);
 
         if (verify.status === '000' && transaction.status !== PaymentStatus.Successful) {
-            transaction.status = PaymentStatus.Successful;
-            transaction.completedAt = new Date();
-            await transaction.save();
+            const changed = await this.markTransactionSuccessful(String(transaction._id), verify as unknown as Record<string, unknown>);
 
-            this.eventEmitter.emit('payment.successful', {
-                transactionId: transaction._id,
-                userId: transaction.userId,
-                projectId: transaction.projectId,
-                amount: transaction.amount,
-                currency: transaction.currency,
-                projectType: (transaction.metadata as any)?.projectType,
-                walletAddress: (transaction.metadata as any)?.walletAddress || undefined,
-            });
+            if (changed) {
+                this.eventEmitter.emit('payment.successful', {
+                    transactionId: transaction._id,
+                    userId: transaction.userId,
+                    projectId: transaction.projectId,
+                    amount: transaction.amount,
+                    currency: transaction.currency,
+                    projectType: (transaction.metadata as any)?.projectType,
+                    walletAddress: (transaction.metadata as any)?.walletAddress || undefined,
+                });
+            }
         } else if (
             verify.status === '801' ||
             verify.status === '804' ||
@@ -824,12 +1113,15 @@ export class PaymentsService {
         ) {
             // Pending states in DPO — leave transaction as Pending, webhook will finalize
         } else if (verify.status !== '000') {
-            transaction.status = PaymentStatus.Failed;
-            transaction.failureReason = verify.message;
-            await transaction.save();
+            await this.markTransactionFailedIfUnsettled(
+                String(transaction._id),
+                verify.message,
+                verify as unknown as Record<string, unknown>,
+            );
         }
 
-        return { status: transaction.status, verify };
+        const refreshed = await this.paymentTransactionModel.findById(transaction._id).lean();
+        return { status: refreshed?.status || transaction.status, verify };
     }
 
     /**
@@ -848,23 +1140,22 @@ export class PaymentsService {
         // Verify with DPO before trusting the webhook payload
         const verify = await this.dpoService.verifyToken(token);
 
-        if (verify.status === '000' && transaction.status !== PaymentStatus.Successful) {
-            transaction.status = PaymentStatus.Successful;
-            transaction.completedAt = new Date();
-            transaction.webhookData = payload;
-            await transaction.save();
+        if (verify.status === '000') {
+            const changed = await this.markTransactionSuccessful(String(transaction._id), payload);
 
-            this.eventEmitter.emit('payment.successful', {
-                transactionId: transaction._id,
-                userId: transaction.userId,
-                projectId: transaction.projectId,
-                amount: transaction.amount,
-                currency: transaction.currency,
-                projectType: (transaction.metadata as any)?.projectType,
-                walletAddress: (transaction.metadata as any)?.walletAddress || undefined,
-            });
+            if (changed) {
+                this.eventEmitter.emit('payment.successful', {
+                    transactionId: transaction._id,
+                    userId: transaction.userId,
+                    projectId: transaction.projectId,
+                    amount: transaction.amount,
+                    currency: transaction.currency,
+                    projectType: (transaction.metadata as any)?.projectType,
+                    walletAddress: (transaction.metadata as any)?.walletAddress || undefined,
+                });
 
-            this.logger.log(`DPO payment confirmed via webhook: ${token}`);
+                this.logger.log(`DPO payment confirmed via webhook: ${token}`);
+            }
         } else {
             this.logger.log(`DPO webhook: token=${token} status=${verify.status} (${verify.message}) — current tx status=${transaction.status}`);
         }

@@ -23,6 +23,7 @@ import { CreateCharityDonationDto } from '../dto/create-charity-donation.dto';
 import { ProjectsService } from '../projects.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { EmailVerifiedGuard } from '../../../common/guards/email-verified.guard';
+import { OptionalJwtAuthGuard } from '../../../common/guards/optional-jwt-auth.guard';
 type MulterFile = Express.Multer.File;
 
 @ApiTags('Projects')
@@ -47,9 +48,10 @@ export class ProjectsController {
   }
 
   @Public()
+  @UseGuards(OptionalJwtAuthGuard)
   @Get()
-  listProjects(@Query() query: QueryProjectsDto) {
-    return this.projectsService.listPublicProjects(query);
+  listProjects(@Query() query: QueryProjectsDto, @CurrentUser('sub') userId?: string) {
+    return this.projectsService.listPublicProjects(query, userId);
   }
 
   /** Generic media upload – any authenticated user can upload */
@@ -95,9 +97,10 @@ export class ProjectsController {
   }
 
   @Public()
+  @UseGuards(OptionalJwtAuthGuard)
   @Get(':id')
-  getProject(@Param('id') id: string) {
-    return this.projectsService.getProjectPublic(id);
+  getProject(@Param('id') id: string, @CurrentUser('sub') userId?: string) {
+    return this.projectsService.getProjectPublic(id, userId);
   }
 
   @Public()

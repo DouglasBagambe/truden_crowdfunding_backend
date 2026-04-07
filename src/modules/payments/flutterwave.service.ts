@@ -33,6 +33,24 @@ export class FlutterwaveService {
             .replace(/\/+$/, '');
     }
 
+    private getPayoutCallbackToken(): string {
+        return (
+            this.configService.get<string>('FLUTTERWAVE_PAYOUT_CALLBACK_TOKEN') ||
+            this.configService.get<string>('FLUTTERWAVE_WEBHOOK_SECRET') ||
+            ''
+        ).trim();
+    }
+
+    private getPayoutCallbackUrl(): string {
+        const base = `${this.getBackendUrl()}/api/payments/payout-callback`;
+        const token = this.getPayoutCallbackToken();
+        if (!token) {
+            return base;
+        }
+
+        return `${base}?token=${encodeURIComponent(token)}`;
+    }
+
     /**
      * Initialize a payment with Flutterwave
      */
@@ -209,7 +227,7 @@ export class FlutterwaveService {
                 currency: params.currency,
                 narration: params.narration,
                 reference: params.reference,
-                callback_url: `${this.getBackendUrl()}/api/payments/payout-callback`,
+                callback_url: this.getPayoutCallbackUrl(),
                 debit_currency: params.currency,
                 ...(params.beneficiaryName && { beneficiary_name: params.beneficiaryName }),
                 ...(isMomoUG && {
@@ -243,6 +261,29 @@ export class FlutterwaveService {
             const providerError = error.response?.data?.message || error.response?.data?.error || error.message;
             this.logger.error(`Failed to process payout: ${providerError}`, error.stack);
             throw new BadRequestException(`Payout failed: ${providerError}`);
+        }
+    }
+
+    async getTransfer(transferId: string | number) {
+        if (!this.secretKey) {
+            throw new BadRequestException('Payment service not configured');
+        }
+
+        try {
+            const response = await firstValueFrom(
+                this.httpService.get(`${this.baseUrl}/transfers/${transferId}`, {
+                    headers: {
+                        Authorization: `Bearer ${this.secretKey}`,
+                    },
+                }),
+            );
+
+            return response.data;
+        } catch (error: any) {
+            const providerError =
+                error.response?.data?.message || error.response?.data?.error || error.message;
+            this.logger.error(`Failed to fetch transfer ${transferId}: ${providerError}`, error.stack);
+            throw new BadRequestException(`Transfer lookup failed: ${providerError}`);
         }
     }
 

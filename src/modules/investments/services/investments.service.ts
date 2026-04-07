@@ -187,12 +187,24 @@ export class InvestmentsService {
    * a successful DPO/Flutterwave payment.
    */
   async createInvestment(dto: CreateInvestmentDto, currentUser: JwtPayload): Promise<InvestmentView> {
+    const testMode =
+      String(this.configService.get('INVESTMENTS_TEST_MODE') ?? '').toLowerCase() === 'true';
+    const allowDirectCreate =
+      testMode &&
+      ['development', 'test'].includes(
+        String(this.configService.get('NODE_ENV') ?? '').toLowerCase(),
+      );
+
+    if (!allowDirectCreate) {
+      throw new BadRequestException(
+        'Direct investment creation is disabled. Use the DPO checkout flow.',
+      );
+    }
+
     this.ensureInvestorRole(currentUser);
 
     const kycBypass =
       String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() === 'true';
-    const testMode =
-      String(this.configService.get('INVESTMENTS_TEST_MODE') ?? '').toLowerCase() === 'true';
 
     const investorId = currentUser.sub;
     if (!investorId) throw new BadRequestException('Missing investor id in token');
@@ -335,6 +347,15 @@ export class InvestmentsService {
   }
 
   async repairDatabase() {
+    const allowRepair =
+      String(this.configService.get('ALLOW_DB_REPAIR') ?? '').toLowerCase() === 'true';
+    const isProduction =
+      String(this.configService.get('NODE_ENV') ?? '').toLowerCase() === 'production';
+
+    if (!allowRepair || isProduction) {
+      throw new ForbiddenException('Database repair endpoint is disabled in this environment');
+    }
+
     const db = this.investmentModel.db;
     let fixedDonations = 0;
     let fixedWallets = 0;
@@ -411,4 +432,3 @@ export class InvestmentsService {
     return { success: true, fixedDonations, fixedWallets, message: "Database accurately synchronized separated balances!" };
   }
 }
-

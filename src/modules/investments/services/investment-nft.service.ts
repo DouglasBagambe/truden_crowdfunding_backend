@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { type Address } from 'viem';
 import { ViemNftClient } from '../../nfts/helpers/viem-nft-client';
@@ -36,7 +36,6 @@ export class InvestmentNFTService {
      *   _amount     (uint256) — the fiat investment amount scaled to wei
      *                           (contract computes token share internally)
      *
-     * Falls back to simulated mode when contract isn't configured.
      */
     async mintForUser(
         investorWallet: string,
@@ -45,12 +44,7 @@ export class InvestmentNFTService {
         _investmentId: string,
     ): Promise<MintResult> {
         if (!this.isInitialized()) {
-            this.logger.warn('NFT contract not configured — returning simulated mint result');
-            return {
-                tokenId: Math.floor(Math.random() * 1_000_000),
-                txHash: `0x${'0'.repeat(64)}`,
-                tokenAmount: 0,
-            };
+            throw new BadRequestException('NFT contract is not configured');
         }
 
         try {

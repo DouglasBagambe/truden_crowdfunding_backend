@@ -23,6 +23,7 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { EnableMfaDto } from './dto/enable-mfa.dto';
 import { DisableMfaDto } from './dto/disable-mfa.dto';
+import { SiweNonceDto } from './dto/siwe.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -113,6 +114,16 @@ export class AuthController {
   @Get('profile')
   async getProfile(@CurrentUser('sub') userId: string) {
     return this.authService.getProfile(userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('siwe/nonce')
+  @HttpCode(HttpStatus.OK)
+  async issueSiweNonce(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: SiweNonceDto,
+  ) {
+    return this.authService.issueSiweNonce(userId, dto.address);
   }
 
   @Public()

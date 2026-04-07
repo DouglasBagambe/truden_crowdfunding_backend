@@ -19,6 +19,10 @@ export class UsersRepository {
     return this.userModel.findById(id).select('-passwordHash').exec();
   }
 
+  findByIdWithNonce(id: string): Promise<UserDocument | null> {
+    return this.userModel.findById(id).select('+nonce -passwordHash').exec();
+  }
+
   findByWallet(wallet: string): Promise<UserDocument | null> {
     return this.userModel
       .findOne({
@@ -99,6 +103,12 @@ export class UsersRepository {
         { $pull: { linkedWallets: wallet.toLowerCase() } },
         { new: true },
       )
+      .exec();
+  }
+
+  clearNonce(userId: string): Promise<UserDocument | null> {
+    return this.userModel
+      .findByIdAndUpdate(userId, { $set: { nonce: null } }, { new: true })
       .exec();
   }
 

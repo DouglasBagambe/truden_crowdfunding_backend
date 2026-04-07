@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ConfigModule } from '@nestjs/config';
 import { HttpModule } from '@nestjs/axios';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { CommonModule } from '../../common/common.module';
 import { UsersModule } from '../users/users.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { PaymentsService } from './payments.service';
@@ -17,6 +18,7 @@ import { Wallet, WalletSchema } from './schemas/wallet.schema';
 
 @Module({
     imports: [
+        CommonModule,
         ConfigModule,
         HttpModule,
         EventEmitterModule.forRoot(),

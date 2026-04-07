@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -87,7 +88,11 @@ export class UsersController {
 
   @Patch('me/kyc')
   submitKyc(@CurrentUser('sub') userId: string, @Body() dto: SubmitKycDto) {
-    return this.usersService.submitKyc(userId, dto);
+    void userId;
+    void dto;
+    throw new BadRequestException(
+      'Legacy KYC submission is disabled. Use the /kyc profile and submit endpoints.',
+    );
   }
 
   @Post('me/kyc/session')
@@ -95,7 +100,11 @@ export class UsersController {
     @CurrentUser('sub') userId: string,
     @Body() dto: CreateKycSessionDto,
   ) {
-    return this.usersService.createSmileKycSession(userId, dto);
+    void userId;
+    void dto;
+    throw new BadRequestException(
+      'Legacy Smile KYC is disabled. Use the Didit-backed /kyc submit flow.',
+    );
   }
 
   @Patch('me/creator-verification')

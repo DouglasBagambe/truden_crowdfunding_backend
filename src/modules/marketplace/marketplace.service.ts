@@ -4,9 +4,11 @@ import {
     Injectable,
     Logger,
     NotFoundException,
+    ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { ConfigService } from '@nestjs/config';
 import {
     MarketplaceListing,
     MarketplaceListingDocument,
@@ -31,7 +33,19 @@ export class MarketplaceService {
         @InjectModel(Investment.name)
         private readonly investmentModel: Model<InvestmentDocument>,
         private readonly projectsService: ProjectsService,
+        private readonly configService: ConfigService,
     ) { }
+
+    private ensureMarketplaceEnabled() {
+        const enabled =
+            String(this.configService.get<string>('ENABLE_NFT_MARKETPLACE') ?? '').toLowerCase() === 'true';
+
+        if (!enabled) {
+            throw new ServiceUnavailableException(
+                'NFT marketplace trading is temporarily unavailable while settlement verification is being hardened.',
+            );
+        }
+    }
 
     // ── Listings ──────────────────────────────────────────────────────────────
 
@@ -44,6 +58,7 @@ export class MarketplaceService {
         skip?: number;
         limit?: number;
     }): Promise<{ items: MarketplaceListingDocument[]; total: number }> {
+        this.ensureMarketplaceEnabled();
         const filter: Record<string, unknown> = { status: ListingStatus.Active };
         if (params?.projectOnchainId) filter.projectOnchainId = params.projectOnchainId;
         if (params?.sellerId && Types.ObjectId.isValid(params.sellerId)) {
@@ -61,6 +76,7 @@ export class MarketplaceService {
     }
 
     async getListingById(id: string): Promise<MarketplaceListingDocument> {
+        this.ensureMarketplaceEnabled();
         if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid listing id');
         const listing = await this.listingModel.findById(id).exec();
         if (!listing) throw new NotFoundException('Listing not found');
@@ -76,6 +92,7 @@ export class MarketplaceService {
         dto: CreateListingDto,
         currentUser: JwtPayload,
     ): Promise<MarketplaceListingDocument> {
+        this.ensureMarketplaceEnabled();
         if (!currentUser.sub) throw new BadRequestException('Missing user id');
 
         // Ensure user id is valid
@@ -144,6 +161,7 @@ export class MarketplaceService {
      * the DB record cancelled.
      */
     async cancelListing(listingId: string, currentUser: JwtPayload): Promise<MarketplaceListingDocument> {
+        this.ensureMarketplaceEnabled();
         const listing = await this.listingModel.findById(listingId).exec();
         if (!listing) throw new NotFoundException('Listing not found');
 
@@ -181,6 +199,7 @@ export class MarketplaceService {
         dto: RecordPurchaseDto,
         currentUser: JwtPayload,
     ): Promise<{ listing: MarketplaceListingDocument }> {
+        this.ensureMarketplaceEnabled();
         const listing = await this.listingModel.findById(listingId).exec();
         if (!listing) throw new NotFoundException('Listing not found');
         if (listing.status !== ListingStatus.Active) {
@@ -233,6 +252,7 @@ export class MarketplaceService {
 
     /** Get all listings for a specific seller */
     async getMyListings(currentUser: JwtPayload): Promise<MarketplaceListingDocument[]> {
+        this.ensureMarketplaceEnabled();
         if (!currentUser.sub) return [];
         return this.listingModel
             .find({ sellerId: new Types.ObjectId(currentUser.sub) })

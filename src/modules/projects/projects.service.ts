@@ -39,6 +39,9 @@ import { RequestAttachmentDto } from './dto/request-attachment.dto';
 import { AttachmentFilesRepository } from './repositories/attachment-files.repository';
 import { UploadAttachmentDto } from './dto/upload-attachment.dto';
 import { StreamableFile } from '@nestjs/common';
+import { hasBackendRoiAccess } from '../../common/utils/roi-access.util';
+import { ViemNftClient } from '../nfts/helpers/viem-nft-client';
+import type { Address } from 'viem';
 type MulterFile = Express.Multer.File;
 
 const PUBLIC_STATUSES = [
@@ -68,6 +71,7 @@ export class ProjectsService {
     private readonly agreementTemplatesService: AgreementTemplatesService,
     private readonly attachmentRequirementsService: AttachmentRequirementsService,
     private readonly attachmentFilesRepo: AttachmentFilesRepository,
+    private readonly viemNftClient: ViemNftClient,
     @InjectModel(Investment.name)
     private readonly investmentModel: Model<InvestmentDocument>,
   ) { }
@@ -398,7 +402,7 @@ export class ProjectsService {
     return this.projectsRepo.findByCreator(creatorId);
   }
 
-  async listPublicProjects(query: QueryProjectsDto) {
+  async listPublicProjects(query: QueryProjectsDto, userId?: string) {
     const statuses: ProjectStatus[] = query.statuses?.length
       ? [...query.statuses]
       : PUBLIC_STATUSES;
@@ -426,6 +430,9 @@ export class ProjectsService {
     if (query.search) {
       filter.$text = { $search: query.search };
     }
+    if (!hasBackendRoiAccess(userId, this.configService)) {
+      filter.projectType = ProjectType.CHARITY;
+    }
 
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
@@ -436,27 +443,29 @@ export class ProjectsService {
       this.projectsRepo.count(filter),
     ]);
     const projectsWithProgress = projects.map((proj) =>
-      this.withProgress(proj),
+      this.stripCreatorEmail(this.withProgress(proj)),
     );
     return { projects: projectsWithProgress, total, page, pageSize };
   }
 
-  async getProjectPublic(id: string) {
+  async getProjectPublic(id: string, userId?: string) {
     this.ensureValidObjectId(id);
     const project = await this.projectsRepo.findById(id);
     if (!project) throw new NotFoundException('Project not found');
-    // Allow public access to approved/funding projects AND draft/pending (so creators can view after creation)
-    const viewableStatuses = [
-      ...PUBLIC_STATUSES,
-      ProjectStatus.DRAFT,
-      ProjectStatus.PENDING_REVIEW,
-      ProjectStatus.CHANGES_REQUESTED,
-    ];
-    const isViewable = viewableStatuses.some((status) => status === project.status);
+    const projectType = this.normalizeProjectType(this.readProjectType(project));
+    const canSeeRoi = hasBackendRoiAccess(userId, this.configService);
+    if (projectType === ProjectType.ROI && !canSeeRoi) {
+      throw new NotFoundException('Project not found');
+    }
+    const isViewable = PUBLIC_STATUSES.some((status) => status === project.status);
     if (!isViewable) {
       throw new NotFoundException('Project not available');
     }
-    return this.getProjectWithMilestones(id);
+    const result = await this.getProjectWithMilestones(id);
+    return {
+      ...result,
+      project: this.stripCreatorEmail(result.project),
+    };
   }
 
   async getMilestonesPublic(projectId: string) {
@@ -531,11 +540,27 @@ export class ProjectsService {
 
 
 
-    const updated = await this.projectsRepo.setStatus(
-      projectId,
-      dto.finalStatus,
-      dto.reason,
-    );
+    let finalStatus = dto.finalStatus;
+    const extraSet: Record<string, unknown> = {};
+
+    if (
+      dto.finalStatus === ProjectStatus.APPROVED &&
+      this.readProjectType(project) === ProjectType.ROI
+    ) {
+      const { projectOnchainId } = await this.ensureRoiProjectReadyForFunding(
+        project,
+      );
+      finalStatus = ProjectStatus.FUNDING;
+      extraSet.projectOnchainId = projectOnchainId;
+    }
+
+    const updated = await this.projectsRepo.updateById(projectId, {
+      $set: {
+        status: finalStatus,
+        ...(dto.reason !== undefined ? { decisionReason: dto.reason } : {}),
+        ...extraSet,
+      },
+    });
     if (!updated) throw new NotFoundException('Project not found');
 
     // Send email notification to creator on Rejection or Approval
@@ -546,7 +571,8 @@ export class ProjectsService {
           creator.email,
           (creator as any).firstName || (creator as any).lastName || creator.email,
           project.name,
-          dto.finalStatus,
+          finalStatus,
+          this.readProjectType(project),
           dto.reason,
         );
       }
@@ -563,6 +589,7 @@ export class ProjectsService {
     creatorName: string,
     projectName: string,
     decision: ProjectStatus,
+    projectType?: ProjectType,
     reason?: string,
   ) {
     const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
@@ -571,19 +598,23 @@ export class ProjectsService {
     sgMail.setApiKey(apiKey);
 
     const isApproved = decision === ProjectStatus.APPROVED;
+    const isFunding = decision === ProjectStatus.FUNDING;
     const isRejected = decision === ProjectStatus.REJECTED;
     const isChangesRequested = decision === ProjectStatus.CHANGES_REQUESTED;
 
-    const subject = isApproved
+    const subject = isApproved || isFunding
       ? `Your campaign "${projectName}" has been approved!`
       : isRejected
         ? `Update on your campaign "${projectName}"`
         : `Changes requested for "${projectName}"`;
 
-    const statusColour = isApproved ? '#10b981' : isRejected ? '#ef4444' : '#f59e0b';
-    const statusLabel = isApproved ? 'Approved' : isRejected ? 'Rejected' : 'Changes Requested';
-    const bodyMessage = isApproved
-      ? `Great news! Your campaign <strong>${projectName}</strong> has been reviewed and <strong>approved</strong>. It is now visible to the public and ready to receive donations.`
+    const isPositive = isApproved || isFunding;
+    const statusColour = isPositive ? '#10b981' : isRejected ? '#ef4444' : '#f59e0b';
+    const statusLabel = isPositive ? 'Approved' : isRejected ? 'Rejected' : 'Changes Requested';
+    const bodyMessage = isPositive
+      ? projectType === ProjectType.ROI
+        ? `Great news! Your ROI campaign <strong>${projectName}</strong> has been reviewed, approved, and is now <strong>open for investment</strong>.`
+        : `Great news! Your campaign <strong>${projectName}</strong> has been reviewed and <strong>approved</strong>. It is now visible to the public and ready to receive donations.`
       : isRejected
         ? `After careful review, your campaign <strong>${projectName}</strong> could not be approved at this time.`
         : `Our review team has reviewed your campaign <strong>${projectName}</strong> and requires some changes before it can be approved.`;
@@ -699,6 +730,41 @@ export class ProjectsService {
     }
 
     return project;
+  }
+
+  private async ensureRoiProjectReadyForFunding(project: ProjectDocument) {
+    const creatorId = String(project.creatorId);
+    const creator = await this.usersRepo.findById(creatorId);
+    if (!creator) {
+      throw new BadRequestException('Project creator not found');
+    }
+
+    const creatorWallet =
+      creator.primaryWallet ||
+      creator.linkedWallets?.find(
+        (wallet) => typeof wallet === 'string' && wallet.trim().length > 0,
+      );
+
+    if (!creatorWallet) {
+      throw new BadRequestException(
+        'ROI project approval requires the creator to have a linked wallet address',
+      );
+    }
+
+    const existingOnchainId = String(project.projectOnchainId || '').trim();
+    const projectOnchainId =
+      existingOnchainId || BigInt(`0x${String((project as any)._id)}`).toString();
+
+    if (!existingOnchainId) {
+      await this.viemNftClient.createProjectNFT({
+        projectOnchainId: BigInt(projectOnchainId),
+        creator: creatorWallet as Address,
+        targetAmountWei: BigInt(Math.floor(Number(project.targetAmount || 0) * 1e6)),
+        paymentToken: '0x0000000000000000000000000000000000000000' as Address,
+      });
+    }
+
+    return { projectOnchainId };
   }
 
   async incrementFunding(projectId: string, amount: number) {
@@ -1278,6 +1344,15 @@ export class ProjectsService {
     };
   }
 
+  private stripCreatorEmail<T extends { creator?: { email?: string } | null }>(
+    payload: T,
+  ): T {
+    if (payload.creator && typeof payload.creator === 'object' && 'email' in payload.creator) {
+      delete payload.creator.email;
+    }
+    return payload;
+  }
+
   private ensureVerificationLogExists(
     logs: CreateVerificationLogDto[] | undefined,
   ) {
@@ -1292,7 +1367,7 @@ export class ProjectsService {
     this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
-    if (project.creatorId !== ownerId) {
+    if (String(project.creatorId) !== ownerId) {
       throw new ForbiddenException('You can only view your own project');
     }
     return this.getProjectWithMilestones(projectId);

@@ -33,6 +33,7 @@ import { AuditService } from '../audit/audit.service';
 import { encryptObject, decryptObject, getEncryptionKey } from '../../common/utils/encryption.util';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
+import { SiweMessage } from 'siwe';
 
 @Injectable()
 export class UsersService {
@@ -156,7 +157,7 @@ export class UsersService {
   async linkWallet(userId: string, dto: LinkWalletDto) {
     const wallet = dto.wallet.toLowerCase();
     const currentUser: UserDocument | null =
-      await this.usersRepository.findById(userId);
+      await this.usersRepository.findByIdWithNonce(userId);
     if (!currentUser) {
       throw new NotFoundException('User not found');
     }
@@ -167,12 +168,27 @@ export class UsersService {
       );
     }
 
+    await this.assertValidWalletLinkSignature(currentUser, dto, wallet);
     await this.ensureWalletAvailable(wallet, userId);
-    const user: UserDocument | null =
+    let user: UserDocument | null =
       await this.usersRepository.addLinkedWallet(userId, wallet);
     if (!user) {
       throw new NotFoundException('User not found');
     }
+
+    if (!currentUser.primaryWallet) {
+      user = await this.usersRepository.updateById(userId, {
+        $set: { primaryWallet: wallet, nonce: null },
+        $pull: { linkedWallets: wallet },
+      });
+    } else {
+      user = await this.usersRepository.clearNonce(userId);
+    }
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
     this.emitEvent(UserEvent.LinkedWallet, {
       userId: String(user.id),
       primaryWallet: user.primaryWallet,
@@ -529,6 +545,89 @@ export class UsersService {
     if (existing && existing.id !== ownerId) {
       throw new ConflictException('Wallet already linked to another user');
     }
+  }
+
+  private async assertValidWalletLinkSignature(
+    currentUser: UserDocument,
+    dto: LinkWalletDto,
+    wallet: string,
+  ) {
+    if (!dto.message || !dto.signature) {
+      throw new BadRequestException('Wallet signature is required');
+    }
+
+    if (!currentUser.nonce) {
+      throw new BadRequestException('Wallet link nonce missing. Request a fresh nonce and sign again.');
+    }
+
+    let message: SiweMessage;
+    try {
+      message = new SiweMessage(dto.message);
+    } catch {
+      throw new BadRequestException('Invalid SIWE message');
+    }
+
+    if (message.address.toLowerCase() !== wallet) {
+      throw new BadRequestException('Signed wallet address does not match the requested wallet');
+    }
+
+    if (message.nonce !== currentUser.nonce) {
+      throw new BadRequestException('Wallet signature nonce mismatch');
+    }
+
+    const { allowedHosts, allowedOrigins } = this.getAllowedWalletLinkOrigins();
+    if (!allowedHosts.has(message.domain)) {
+      throw new BadRequestException('Wallet signature domain is not allowed');
+    }
+
+    let uriOrigin = '';
+    try {
+      uriOrigin = new URL(message.uri).origin;
+    } catch {
+      throw new BadRequestException('Wallet signature URI is invalid');
+    }
+
+    if (!allowedOrigins.has(uriOrigin)) {
+      throw new BadRequestException('Wallet signature origin is not allowed');
+    }
+
+    try {
+      await message.verify({
+        signature: dto.signature,
+        nonce: currentUser.nonce,
+      });
+    } catch {
+      throw new BadRequestException('Invalid wallet signature');
+    }
+  }
+
+  private getAllowedWalletLinkOrigins() {
+    const allowedHosts = new Set<string>();
+    const allowedOrigins = new Set<string>();
+    const candidates = [
+      this.configService.get<string>('FRONTEND_URL'),
+      this.configService.get<string>('NEXT_PUBLIC_APP_URL'),
+      process.env.FRONTEND_URL,
+      process.env.NEXT_PUBLIC_APP_URL,
+      'http://localhost:3001',
+      'http://localhost:3000',
+    ];
+
+    for (const candidate of candidates) {
+      if (!candidate) {
+        continue;
+      }
+
+      try {
+        const url = new URL(candidate);
+        allowedHosts.add(url.host);
+        allowedOrigins.add(url.origin);
+      } catch {
+        // Ignore malformed URL values.
+      }
+    }
+
+    return { allowedHosts, allowedOrigins };
   }
 
   private async ensureEmailAvailable(email: string, ownerId?: string) {

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -16,9 +17,11 @@ import { UpdateInvestmentStatusDto } from '../dto/update-investment-status.dto';
 import { FilterInvestmentsDto } from '../dto/filter-investments.dto';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { Roles } from '../../../common/decorators/roles.decorator';
-import { Public } from '../../../common/decorators/public.decorator';
 import { RolesGuard } from '../../../common/guards/roles.guard';
 import { UserRole } from '../../../common/enums/role.enum';
+import { Permission } from '../../../common/enums/permission.enum';
+import { Permissions } from '../../../common/decorators/permissions.decorator';
+import { RoleMetadataOr } from '../../../common/decorators/role-or.decorator';
 import type { JwtPayload } from '../../../common/interfaces/user.interface';
 
 // NOTE: NFT endpoints (/nfts/:address, /nft/:tokenId, /project/:id/nfts) are
@@ -37,7 +40,9 @@ export class InvestmentsController {
     @CurrentUser() currentUser: JwtPayload,
     @Body() dto: CreateInvestmentDto,
   ) {
-    return this.investmentsService.createInvestment(dto, currentUser);
+    throw new BadRequestException(
+      'Direct investment creation is disabled. Use the DPO checkout flow.',
+    );
   }
 
   @Get('user/:userId')
@@ -65,7 +70,8 @@ export class InvestmentsController {
   }
 
   @Get('repair-prod-db')
-  @Public()
+  @RoleMetadataOr(UserRole.ADMIN)
+  @Permissions(Permission.MANAGE_PROJECTS)
   async repairProdDb() {
     return this.investmentsService.repairDatabase();
   }

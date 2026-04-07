@@ -38,6 +38,7 @@ import {
   AgreementTemplateSchema,
 } from './schemas/agreement-template.schema';
 import { CharityDonationsRepository } from './repositories/charity-donations.repository';
+import { ViemNftClient } from '../nfts/helpers/viem-nft-client';
 
 import { Investment, InvestmentSchema } from '../investments/schemas/investment.schema';
 import { InvestmentStatus } from '../investments/interfaces/investment.interface';
@@ -84,6 +85,7 @@ import { InvestmentStatus } from '../investments/interfaces/investment.interface
     AttachmentRequirementsRepository,
     AttachmentRequirementsService,
     AttachmentFilesRepository,
+    ViemNftClient,
   ],
   exports: [
     ProjectsService,

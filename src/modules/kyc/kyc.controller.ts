@@ -121,22 +121,26 @@ export class KycController {
   ) {
     const webhookSecret = this.configService.get<string>('DIDIT_WEBHOOK_SECRET');
 
-    if (webhookSecret && provider === 'didit') {
+    if (provider === 'didit' && !webhookSecret) {
+      throw new ForbiddenException('Didit webhook secret is not configured');
+    }
+
+    if (provider === 'didit' && webhookSecret) {
       // Try X-Signature-V2 first (recommended — signs unescaped Unicode JSON)
       const sig = sigV2 || sigV1 || sigSimple;
-      if (sig) {
-        const rawBody: string =
-          (req as any).rawBody ||
-          JSON.stringify(body);
-        const expected = createHmac('sha256', webhookSecret)
-          .update(rawBody)
-          .digest('hex');
-        if (sig !== expected) {
-          throw new ForbiddenException('Invalid webhook signature');
-        }
+      if (!sig) {
+        throw new ForbiddenException('Missing webhook signature');
       }
-      // If no signature header at all, log a warning but still process
-      // (some Didit plans don't send signatures yet)
+
+      const rawBody: string =
+        (req as any).rawBody ||
+        JSON.stringify(body);
+      const expected = createHmac('sha256', webhookSecret)
+        .update(rawBody)
+        .digest('hex');
+      if (sig !== expected) {
+        throw new ForbiddenException('Invalid webhook signature');
+      }
     }
 
     // Build a unified DTO from Didit's flat payload
