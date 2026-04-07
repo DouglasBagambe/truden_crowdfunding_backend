@@ -32,14 +32,30 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: JwtPayload): Promise<JwtPayload> {
     try {
-      await this.authService.getProfile(payload.sub);
+      const profile = (await this.authService.getProfile(payload.sub)) as {
+        email?: string;
+        primaryWallet?: string;
+        walletAddress?: string;
+        roles?: JwtPayload['roles'];
+        permissions?: JwtPayload['permissions'];
+      };
       return {
         sub: payload.sub,
-        email: payload.email,
-        primaryWallet: payload.primaryWallet,
-        walletAddress: payload.walletAddress ?? payload.primaryWallet,
-        roles: payload.roles,
-        permissions: payload.permissions,
+        email: profile.email ?? payload.email,
+        primaryWallet: profile.primaryWallet ?? payload.primaryWallet,
+        walletAddress:
+          profile.walletAddress ??
+          profile.primaryWallet ??
+          payload.walletAddress ??
+          payload.primaryWallet,
+        roles:
+          Array.isArray(profile.roles) && profile.roles.length > 0
+            ? profile.roles
+            : payload.roles,
+        permissions:
+          Array.isArray(profile.permissions) && profile.permissions.length > 0
+            ? profile.permissions
+            : payload.permissions,
       };
     } catch {
       throw new UnauthorizedException('User not found or inactive');
