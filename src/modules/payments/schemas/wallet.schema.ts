@@ -106,7 +106,6 @@ export type WalletDocument = Wallet & Document;
 export const WalletSchema = SchemaFactory.createForClass(Wallet);
 
 // Indexes
-WalletSchema.index({ userId: 1 });
 WalletSchema.index({ totalBalanceUSD: -1 });
 
 // Pre-save hook to calculate total balance in USD

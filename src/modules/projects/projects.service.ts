@@ -658,6 +658,11 @@ export class ProjectsService {
       throw new NotFoundException('Project not found');
     }
 
+    const projectType = this.normalizeProjectType(this.readProjectType(project));
+    if (projectType !== ProjectType.ROI) {
+      throw new BadRequestException('Investments are only supported for ROI projects');
+    }
+
     const investmentsTestMode =
       String(this.configService.get('INVESTMENTS_TEST_MODE') ?? '').toLowerCase() ===
       'true';
@@ -673,6 +678,26 @@ export class ProjectsService {
     if (target <= 0) {
       throw new BadRequestException('Project has invalid funding target');
     }
+    return project;
+  }
+
+  async ensureProjectCanReceiveDonation(projectId: string) {
+    this.ensureValidObjectId(projectId);
+    const project = await this.projectsRepo.findById(projectId);
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+
+    const projectType = this.normalizeProjectType(this.readProjectType(project));
+    if (projectType !== ProjectType.CHARITY) {
+      throw new BadRequestException('Donations are only supported for charity projects');
+    }
+
+    const isPublic = PUBLIC_STATUSES.some((status) => status === project.status);
+    if (!isPublic) {
+      throw new BadRequestException('Project is not available for donations');
+    }
+
     return project;
   }
 
@@ -699,21 +724,7 @@ export class ProjectsService {
       throw new BadRequestException('Invalid amount');
     }
 
-    this.ensureValidObjectId(projectId);
-    const project = await this.projectsRepo.findById(projectId);
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
-
-    const projectType = this.normalizeProjectType(project.projectType);
-    if (projectType !== ProjectType.CHARITY) {
-      throw new BadRequestException('Donations are only supported for charity projects');
-    }
-
-    const isPublic = PUBLIC_STATUSES.some((status) => status === project.status);
-    if (!isPublic) {
-      throw new BadRequestException('Project is not available for donations');
-    }
+    await this.ensureProjectCanReceiveDonation(projectId);
 
     const normalizedDonorName = (donorName ?? '').trim() || 'Anonymous';
 

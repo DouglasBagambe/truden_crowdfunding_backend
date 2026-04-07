@@ -26,6 +26,7 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DpoService } from './dpo.service';
 import { ConfigService } from '@nestjs/config';
+import { ProjectsService } from '../projects/projects.service';
 
 @Injectable()
 export class PaymentsService {
@@ -40,7 +41,34 @@ export class PaymentsService {
         private dpoService: DpoService,
         private eventEmitter: EventEmitter2,
         private configService: ConfigService,
+        private projectsService: ProjectsService,
     ) { }
+
+    private normalizeProjectType(value: unknown): 'CHARITY' | 'ROI' | '' {
+        if (typeof value !== 'string') {
+            return '';
+        }
+
+        const normalized = value.trim().toUpperCase();
+        if (normalized === 'CHARITY' || normalized === 'ROI') {
+            return normalized;
+        }
+
+        return '';
+    }
+
+    async resolveCheckoutProject(projectId: string) {
+        const project = await this.projectsService.ensureProjectExists(projectId);
+        const projectType = this.normalizeProjectType(
+            (project as any).projectType ?? (project as any).type,
+        );
+
+        if (!projectType) {
+            throw new BadRequestException('Project type is invalid for checkout');
+        }
+
+        return { project, projectType };
+    }
 
     /**
      * Initialize a payment for investment
@@ -253,70 +281,23 @@ export class PaymentsService {
      * Deposit to wallet via Flutterwave
      */
     async depositToWallet(dto: DepositToWalletDto, userId: string, email: string) {
-        const wallet = await this.getOrCreateWallet(userId);
-
-        // Initialize payment
-        const paymentDto: InitializePaymentDto = {
-            amount: dto.amount,
-            currency: dto.currency || 'UGX',
-            email,
-            paymentMethod: PaymentMethod.Card, // Default to card for deposits
-            projectId: 'wallet-deposit', // Special project ID for wallet deposits
-            redirectUrl: dto.redirectUrl,
-        };
-
-        const result = await this.initializePayment(paymentDto, userId);
-
-        return result;
+        void dto;
+        void userId;
+        void email;
+        throw new BadRequestException(
+            'Wallet deposits are not currently enabled. Use project checkout instead.',
+        );
     }
 
     /**
      * Process wallet investment (deduct from wallet balance)
      */
     async processWalletInvestment(dto: WalletInvestmentDto, userId: string) {
-        const wallet = await this.getOrCreateWallet(userId);
-
-        // Check balance
-        const currency = dto.currency.toUpperCase();
-        const balance = (wallet.fiatBalance as any)[currency] || 0;
-
-        if (balance < dto.amount) {
-            throw new BadRequestException(`Insufficient ${currency} balance`);
-        }
-
-        // Deduct from wallet
-        (wallet.fiatBalance as any)[currency] -= dto.amount;
-        wallet.markModified('fiatBalance');
-        await wallet.save();
-
-        // Create transaction record
-        const transaction = await this.paymentTransactionModel.create({
-            userId: new Types.ObjectId(userId),
-            projectId: new Types.ObjectId(dto.projectId),
-            amount: dto.amount,
-            currency: dto.currency,
-            paymentMethod: PaymentMethod.Wallet,
-            provider: PaymentProvider.Flutterwave,
-            status: PaymentStatus.Successful,
-            completedAt: new Date(),
-        });
-
-        // Emit event for investment processing
-        this.eventEmitter.emit('payment.successful', {
-            transactionId: transaction._id,
-            userId: transaction.userId,
-            projectId: transaction.projectId,
-            amount: transaction.amount,
-            currency: transaction.currency,
-        });
-
-        this.logger.log(`Wallet investment processed for user ${userId}: ${transaction._id}`);
-
-        return {
-            transactionId: transaction._id,
-            status: PaymentStatus.Successful,
-            newBalance: (wallet.fiatBalance as any)[currency],
-        };
+        void dto;
+        void userId;
+        throw new BadRequestException(
+            'Wallet-funded ROI investments are disabled. Use the DPO checkout flow instead.',
+        );
     }
 
     /**
@@ -708,11 +689,25 @@ export class PaymentsService {
             .trim()
             .replace(/[,\s]+$/, '')
             .replace(/\/+$/, '');
+        const { project, projectType } = await this.resolveCheckoutProject(dto.projectId);
+        const isCharity = projectType === 'CHARITY';
+
+        if (isCharity) {
+            await this.projectsService.ensureProjectCanReceiveDonation(dto.projectId);
+        } else {
+            await this.projectsService.ensureProjectIsOpenForInvestment(dto.projectId);
+        }
+
+        const normalizedWalletAddress = dto.walletAddress?.trim().toLowerCase() || '';
+        if (!isCharity && !normalizedWalletAddress) {
+            throw new BadRequestException('Wallet address is required for ROI investments.');
+        }
 
         const currency = dto.currency ?? 'UGX';
-        const isCharity = (dto.projectType ?? '').toUpperCase() === 'CHARITY';
         const description = dto.description
-            ?? (isCharity ? 'Donation to charity project - Keibo' : 'Investment in ROI project - Keibo');
+            ?? (isCharity
+                ? `Donation to ${(project as any).name || 'charity project'} - Keibo`
+                : `Investment in ${(project as any).name || 'ROI project'} - Keibo`);
         const isLocalDonationBypass =
             isCharity &&
             this.configService.get<string>('NODE_ENV') === 'development' &&
@@ -750,11 +745,12 @@ export class PaymentsService {
             status: isLocalDonationBypass ? PaymentStatus.Successful : PaymentStatus.Pending,
             ...(isLocalDonationBypass ? { completedAt: new Date() } : {}),
             metadata: {
-                projectType: dto.projectType,
+                projectType,
                 description,
                 donorName: dto.donorName,
                 projectId: dto.projectId,
-                walletAddress: dto.walletAddress?.toLowerCase() || null,
+                walletAddress: normalizedWalletAddress || null,
+                projectName: (project as any).name || null,
                 localBypass: isLocalDonationBypass,
             },
         });

@@ -95,7 +95,8 @@ export class PaymentsController {
     ) {
         try {
             const userId = req.user?.userId ?? req.user?.sub;
-            const isCharity = (dto.projectType ?? '').toUpperCase() === 'CHARITY';
+            const { projectType } = await this.paymentsService.resolveCheckoutProject(dto.projectId);
+            const isCharity = projectType === 'CHARITY';
 
             if (!isCharity && !userId) {
                 throw new UnauthorizedException('Please sign in to invest in ROI projects.');

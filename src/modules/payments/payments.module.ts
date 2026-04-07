@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { HttpModule } from '@nestjs/axios';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { UsersModule } from '../users/users.module';
+import { ProjectsModule } from '../projects/projects.module';
 import { PaymentsService } from './payments.service';
 import { FlutterwaveService } from './flutterwave.service';
 import { DpoService } from './dpo.service';
@@ -20,6 +21,7 @@ import { Wallet, WalletSchema } from './schemas/wallet.schema';
         HttpModule,
         EventEmitterModule.forRoot(),
         UsersModule,
+        ProjectsModule,
         MongooseModule.forFeature([
             { name: PaymentTransaction.name, schema: PaymentTransactionSchema },
             { name: Wallet.name, schema: WalletSchema },
