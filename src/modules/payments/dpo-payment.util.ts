@@ -26,7 +26,7 @@ export interface DpoResultDisposition {
 
 const DEFAULT_DPO_FEE_BPS = 250;
 const DEFAULT_DPO_VAT_BPS = 1800;
-const DEFAULT_KEIBO_FEE_BPS = 200;
+const DEFAULT_KEIBO_FEE_BPS = 0;
 
 const DPO_PENDING_CODES = new Set(['001', '002', '003', '005', '007', '900']);
 const DPO_FAILED_CODES = new Set(['901', '904']);

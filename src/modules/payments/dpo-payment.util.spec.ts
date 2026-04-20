@@ -12,13 +12,13 @@ describe('dpo-payment.util', () => {
       config: {
         dpoFeeBps: 250,
         dpoVatBps: 1800,
-        keiboFeeBps: 200,
+        keiboFeeBps: 0,
       },
     });
 
     expect(quote.grossAmount).toBeGreaterThan(2000);
     expect(quote.projectNetAmount).toBeGreaterThanOrEqual(2000);
-    expect(quote.keiboFee).toBeGreaterThan(0);
+    expect(Math.abs(quote.keiboFee)).toBe(0);
   });
 
   it('keeps mobile-money pending provider statuses in pending state', () => {
