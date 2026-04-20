@@ -201,4 +201,31 @@ describe('AuthService email verification (codes)', () => {
       emailVerificationAttempts: 0,
     } as Record<string, unknown>);
   });
+
+  it('does not bypass verification delivery on hosted development deployments', async () => {
+    const user = mockUser();
+    userModel.findOne.mockReturnValue(makeSelectableQuery(user));
+    userModel.findByIdAndUpdate.mockImplementation(
+      (_id: string, update: Record<string, unknown>) => {
+        updates.push(update);
+        return makeQuery(user as UserDocument);
+      },
+    );
+    configService.get.mockImplementation((key?: string) => {
+      if (key === 'NODE_ENV') return 'development' as never;
+      if (key === 'BACKEND_URL') return 'https://keibo.onrender.com' as never;
+      if (key === 'FRONTEND_URL') return 'https://kiibo.netlify.app' as never;
+      if (key === 'SENDGRID_API_KEY') return 'test-key' as never;
+      if (key === 'EMAIL_FROM') return 'noreply@keibo.test' as never;
+      return undefined as never;
+    });
+
+    await service.resendVerificationEmail(email);
+
+    expect(sgMail.send).toHaveBeenCalled();
+    expect(updates[0]).toMatchObject({
+      emailVerificationCodeHash: expect.any(String),
+      emailVerificationCodeExpiresAt: expect.any(Date),
+    });
+  });
 });

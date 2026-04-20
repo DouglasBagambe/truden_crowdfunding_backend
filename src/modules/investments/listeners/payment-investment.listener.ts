@@ -167,6 +167,7 @@ export class PaymentInvestmentListener {
             let investmentEmailNote = '';
             let investmentNftMinted = false;
             let creatorWalletCredited = false;
+            const inboundKeiboFee = Number((tx?.metadata as any)?.dpoQuote?.keiboFee || 0);
 
             if (projectType === 'CHARITY') {
                 // Charity donation path — mirror existing working flow
@@ -238,6 +239,19 @@ export class PaymentInvestmentListener {
                 }
             } catch (creditErr: any) {
                 this.logger.error(`Failed to credit creator wallet: ${creditErr.message}`);
+            }
+
+            if (inboundKeiboFee > 0) {
+                try {
+                    await this.paymentsService.creditTreasuryInboundFee(
+                        amountCurrency,
+                        inboundKeiboFee,
+                    );
+                } catch (treasuryErr: any) {
+                    this.logger.error(
+                        `Failed to credit treasury inbound fee: ${treasuryErr.message}`,
+                    );
+                }
             }
 
             if (projectType === 'CHARITY') {

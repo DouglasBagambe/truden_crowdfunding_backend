@@ -96,6 +96,19 @@ export class AuthController {
     return this.authService.resendVerificationEmail(dto.email, this.getClientIp(req));
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Post('resend-email/current')
+  @HttpCode(HttpStatus.OK)
+  async resendCurrentEmail(
+    @CurrentUser('sub') userId: string,
+    @Req() req: ExpressRequest,
+  ) {
+    return this.authService.resendVerificationEmailForUser(
+      userId,
+      this.getClientIp(req),
+    );
+  }
+
   @Public()
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)

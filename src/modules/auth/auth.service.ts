@@ -57,11 +57,26 @@ export class AuthService {
     private readonly auditService: AuditService,
   ) { }
 
+  private isLocalEmailVerificationBypassEnabled(): boolean {
+    if ((this.configService.get<string>('AUTH_EMAIL_BYPASS') || '').trim().toLowerCase() === 'true') {
+      return true;
+    }
+
+    const nodeEnv = (this.configService.get<string>('NODE_ENV') || '').trim().toLowerCase();
+    const backendUrl = (this.configService.get<string>('BACKEND_URL') || '').trim().toLowerCase();
+    const frontendUrl = (this.configService.get<string>('FRONTEND_URL') || '').trim().toLowerCase();
+    const isDevOrTest = nodeEnv === 'development' || nodeEnv === 'test';
+    const isLocalTarget = backendUrl.includes('localhost') || frontendUrl.includes('localhost');
+
+    return isDevOrTest && isLocalTarget;
+  }
+
   async register(registerDto: RegisterDto, ipAddress?: string) {
     const { email, password, firstName, lastName, role } = registerDto;
     this.enforceRateLimit('register', email, 3, 10 * 60 * 1000);
     this.enforceRateLimitForIp('register', ipAddress, 20, 10 * 60 * 1000);
-    const isDevOrTest = ['development', 'test'].includes(this.configService.get<string>('NODE_ENV') || '');
+    const shouldBypassEmailVerification =
+      this.isLocalEmailVerificationBypassEnabled();
 
     const existingUser = await this.userModel
       .findOne({ email: email.toLowerCase() })
@@ -79,7 +94,7 @@ export class AuthService {
       signupIp: ipAddress,
       lastLoginIp: ipAddress,
       lastLoginAt: new Date(),
-      emailVerifiedAt: isDevOrTest ? new Date() : null,
+      emailVerifiedAt: shouldBypassEmailVerification ? new Date() : null,
       emailVerificationSentAt: undefined,
       emailVerificationSendCount: 0,
       emailVerificationRateLimitResetAt: undefined,
@@ -95,7 +110,7 @@ export class AuthService {
     });
 
     const tokens = await this.generateTokens(user);
-    if (!isDevOrTest) {
+    if (!shouldBypassEmailVerification) {
       await this.issueVerificationCode(user, {
         sendCount: 1,
         rateLimitReset: Date.now() + this.emailVerificationWindowMs,
@@ -115,8 +130,6 @@ export class AuthService {
 
   async login(loginDto: LoginDto, ipAddress?: string) {
     const { email, password } = loginDto;
-    const nodeEnv = this.configService.get<string>('NODE_ENV');
-
     this.enforceRateLimit('login', email, 5, 60 * 1000);
     this.enforceRateLimitForIp('login', ipAddress, 30, 10 * 60 * 1000);
 
@@ -163,10 +176,15 @@ export class AuthService {
       }
     }
 
-    const isDevOrTest = ['development', 'test'].includes(nodeEnv || '');
+    const shouldBypassEmailVerification =
+      this.isLocalEmailVerificationBypassEnabled();
 
-    if (!user.emailVerifiedAt && !isDevOrTest) {
-      throw new UnauthorizedException('Email not verified');
+    if (!user.emailVerifiedAt && !shouldBypassEmailVerification) {
+      throw new UnauthorizedException({
+        message: 'Email not verified',
+        code: 'EMAIL_NOT_VERIFIED',
+        email: user.email,
+      });
     }
 
     if (!user.isActive || user.isBlocked) {
@@ -459,8 +477,7 @@ export class AuthService {
 
   async resendVerificationEmail(email: string, ipAddress?: string) {
     const normalizedEmail = email.trim().toLowerCase();
-    const isDevOrTest = ['development', 'test'].includes(this.configService.get<string>('NODE_ENV') || '');
-    if (isDevOrTest) {
+    if (this.isLocalEmailVerificationBypassEnabled()) {
       return { message: 'Verification email sent' };
     }
     this.enforceRateLimit('resendEmail', normalizedEmail, 3, this.emailVerificationWindowMs);
@@ -491,11 +508,56 @@ export class AuthService {
       sendCount: count + 1,
       rateLimitReset: nextReset,
       resetAttempts: true,
+      strictDelivery: true,
     });
 
     return {
       message: 'Verification email sent',
     };
+  }
+
+  async resendVerificationEmailForUser(userId: string, ipAddress?: string) {
+    if (this.isLocalEmailVerificationBypassEnabled()) {
+      return { message: 'Verification email sent' };
+    }
+
+    this.enforceRateLimit(
+      'resendEmailCurrent',
+      userId,
+      3,
+      this.emailVerificationWindowMs,
+    );
+    this.enforceRateLimitForIp(
+      'resendEmailCurrent',
+      ipAddress,
+      10,
+      this.emailVerificationWindowMs,
+    );
+
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    if (user.emailVerifiedAt) {
+      return { message: 'Email already verified' };
+    }
+
+    const { count, nextReset } = this.assertSendWithinWindow(
+      user,
+      'emailVerificationSendCount',
+      'emailVerificationRateLimitResetAt',
+      this.emailVerificationMaxSends,
+      this.emailVerificationWindowMs,
+    );
+
+    await this.issueVerificationCode(user, {
+      sendCount: count + 1,
+      rateLimitReset: nextReset,
+      resetAttempts: true,
+      strictDelivery: true,
+    });
+
+    return { message: 'Verification email sent' };
   }
 
   async forgotPassword(email: string, ipAddress?: string) {
@@ -880,8 +942,12 @@ export class AuthService {
     );
   }
 
-  private async sendVerificationEmail(email: string | undefined, code: string) {
-    if (!email) return;
+  private async sendVerificationEmail(
+    email: string | undefined,
+    code: string,
+    strictDelivery = false,
+  ): Promise<boolean> {
+    if (!email) return false;
     const nodeEnv =
       this.configService.get<string>('NODE_ENV') || process.env.NODE_ENV;
     const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
@@ -894,7 +960,12 @@ export class AuthService {
         this.logger.warn(
           'Skipping verification email: SENDGRID_API_KEY or EMAIL_FROM missing',
         );
-        return;
+        if (strictDelivery) {
+          throw new BadRequestException(
+            'Verification email delivery is unavailable right now.',
+          );
+        }
+        return false;
       }
     } else {
       sgMail.setApiKey(apiKey);
@@ -954,10 +1025,17 @@ export class AuthService {
         html,
       });
       this.logger.debug(`Sent verification email to ${email}`);
+      return true;
     } catch (err: unknown) {
       this.logger.warn(
         `Failed to send verification email to ${email}: ${this.formatSendgridError(err)}`,
       );
+      if (strictDelivery) {
+        throw new BadRequestException(
+          'Failed to send verification email. Please try again.',
+        );
+      }
+      return false;
     }
   }
 
@@ -1205,10 +1283,10 @@ export class AuthService {
       rateLimitReset?: number;
       resetAttempts?: boolean;
       incrementSendCount?: boolean;
+      strictDelivery?: boolean;
     } = {},
   ) {
     const { code, expiresAt, hash } = this.generateEmailVerificationCode();
-    await this.sendVerificationEmail(user.email, code);
     const update: Record<string, unknown> = {
       emailVerificationSentAt: new Date(),
       emailVerificationCodeHash: hash,
@@ -1232,6 +1310,7 @@ export class AuthService {
       update.emailVerificationRateLimitResetAt = new Date(opts.rateLimitReset);
     }
     await this.userModel.findByIdAndUpdate(user._id, update).exec();
+    await this.sendVerificationEmail(user.email, code, opts.strictDelivery);
     return code;
   }
 

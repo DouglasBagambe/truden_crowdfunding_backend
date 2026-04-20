@@ -13,8 +13,11 @@ export interface DpoVerifyResult {
     status: string;
     message: string;
     transactionRef?: string;
+    companyRef?: string;
     amount?: string;
     currency?: string;
+    netAmount?: string;
+    vatAmount?: string;
 }
 
 export interface DpoBuildXmlOptions {
@@ -93,6 +96,7 @@ export class DpoService {
         backUrl: string,
         redirectUrl: string,
         description = 'Investment via Keibo',
+        companyRef?: string,
     ): Promise<DpoCreateTokenResult> {
         if (!this.isConfigured) {
             throw new BadRequestException('DPO payment gateway is not configured');
@@ -109,7 +113,7 @@ export class DpoService {
             Transaction: {
                 PaymentAmount: amount.toFixed(2),
                 PaymentCurrency: currency,
-                CompanyRef: `KEIBO-${projectId}-${Date.now()}`,
+                CompanyRef: companyRef || `KEIBO-${projectId}-${Date.now()}`,
                 RedirectURL: redirectUrl,
                 BackURL: backUrl,
                 CompanyRefUnique: 0,
@@ -229,8 +233,11 @@ export class DpoService {
             status: result.Result,
             message: result.ResultExplanation ?? '',
             transactionRef: result.CompanyRef,
+            companyRef: result.CompanyRef,
             amount: result.TransactionAmount,
             currency: result.TransactionCurrency,
+            netAmount: result.TransactionNetAmount,
+            vatAmount: result.VATAmount,
         };
     }
 }

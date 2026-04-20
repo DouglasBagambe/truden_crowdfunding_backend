@@ -32,6 +32,13 @@ import { ProjectsService } from '../projects/projects.service';
 import { hasBackendRoiAccess } from '../../common/utils/roi-access.util';
 import { UsersRepository } from '../users/repositories/users.repository';
 import { AppEmailService } from '../../common/services/app-email.service';
+import {
+    amountsMatch,
+    calculateDpoIncomingQuote,
+    parseProviderAmount,
+    resolveIncomingFeeConfig,
+    normalizeDpoResult,
+} from './dpo-payment.util';
 
 @Injectable()
 export class PaymentsService implements OnModuleInit, OnModuleDestroy {
@@ -114,6 +121,179 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         }
 
         return { project, projectType };
+    }
+
+    private getDpoIncomingFeeConfig() {
+        return resolveIncomingFeeConfig({
+            dpoFeeBps: this.configService.get<string>('DPO_FEE_RATE_BPS'),
+            dpoVatBps: this.configService.get<string>('DPO_FEE_VAT_RATE_BPS'),
+            keiboFeeBps: this.configService.get<string>('KEIBO_INBOUND_FEE_RATE_BPS'),
+        });
+    }
+
+    private buildDpoIncomingQuote(requestedAmount: number, currency: string) {
+        try {
+            return calculateDpoIncomingQuote({
+                requestedAmount,
+                currency,
+                config: this.getDpoIncomingFeeConfig(),
+            });
+        } catch (error: unknown) {
+            throw new BadRequestException(
+                (error as Error)?.message || 'Unable to calculate the DPO payment quote.',
+            );
+        }
+    }
+
+    async getDPOPaymentQuote(dto: {
+        projectId: string;
+        amount: number;
+        currency?: string;
+    }) {
+        const { project, projectType } = await this.resolveCheckoutProject(dto.projectId);
+        const currency = (dto.currency || 'UGX').toUpperCase();
+        if (projectType === 'CHARITY') {
+            await this.projectsService.ensureProjectCanReceiveDonation(dto.projectId);
+        } else {
+            await this.projectsService.ensureProjectIsOpenForInvestment(dto.projectId);
+            const projectOnchainId = String((project as any).projectOnchainId || '').trim();
+            if (!projectOnchainId || projectOnchainId === '0') {
+                throw new BadRequestException(
+                    'ROI checkout is unavailable until this project has been provisioned on-chain.',
+                );
+            }
+        }
+        const quote = this.buildDpoIncomingQuote(dto.amount, currency);
+
+        return {
+            projectId: dto.projectId,
+            projectType,
+            projectName: String((project as any).name || 'project'),
+            currency,
+            requestedAmount: quote.requestedAmount,
+            grossAmount: quote.grossAmount,
+            dpoFee: quote.dpoFee,
+            dpoVat: quote.dpoVat,
+            keiboFee: quote.keiboFee,
+            providerNetAmount: quote.providerNetAmount,
+            projectNetAmount: quote.projectNetAmount,
+            roundingAdjustment: quote.roundingAdjustment,
+        };
+    }
+
+    async creditTreasuryInboundFee(currency: string, amount: number) {
+        const treasuryUserId = this.configService.get<string>('KEIBO_TREASURY_USER_ID');
+        const normalizedAmount = Number(amount || 0);
+        if (!treasuryUserId || normalizedAmount <= 0) {
+            return false;
+        }
+
+        const treasuryWallet = await this.getOrCreateWallet(treasuryUserId);
+        (treasuryWallet.fiatBalance as any)[currency] =
+            ((treasuryWallet.fiatBalance as any)[currency] || 0) + normalizedAmount;
+        treasuryWallet.markModified('fiatBalance');
+        await treasuryWallet.save();
+        return true;
+    }
+
+    private verifyDpoSettlementData(
+        transaction: PaymentTransactionDocument,
+        verify: Awaited<ReturnType<DpoService['verifyToken']>>,
+    ): { ok: boolean; reason?: string } {
+        const metadata = this.asRecord(transaction.metadata) || {};
+        const quote = this.asRecord(metadata.dpoQuote) || {};
+        const expectedCompanyRef = String(metadata.companyRef || '').trim();
+        const expectedCurrency = transaction.currency.toUpperCase();
+        const expectedGrossAmount =
+            Number(quote.grossAmount || transaction.amount || 0);
+        const expectedProviderNetAmount = Number(
+            quote.providerNetAmount || quote.projectNetAmount || 0,
+        );
+
+        if (expectedCompanyRef && verify.companyRef && verify.companyRef !== expectedCompanyRef) {
+            return { ok: false, reason: 'DPO company reference mismatch' };
+        }
+
+        if (verify.currency && verify.currency.toUpperCase() !== expectedCurrency) {
+            return { ok: false, reason: 'DPO currency mismatch' };
+        }
+
+        if (!amountsMatch({
+            expected: expectedGrossAmount,
+            actual: parseProviderAmount(verify.amount),
+            currency: expectedCurrency,
+        })) {
+            return { ok: false, reason: 'DPO charged amount mismatch' };
+        }
+
+        const actualProviderNetAmount = parseProviderAmount(verify.netAmount);
+        if (
+            expectedProviderNetAmount > 0 &&
+            actualProviderNetAmount !== null &&
+            !amountsMatch({
+                expected: expectedProviderNetAmount,
+                actual: actualProviderNetAmount,
+                currency: expectedCurrency,
+            })
+        ) {
+            return { ok: false, reason: 'DPO net settlement mismatch' };
+        }
+
+        return { ok: true };
+    }
+
+    private async synchronizeDpoTransaction(
+        transaction: PaymentTransactionDocument,
+        verify: Awaited<ReturnType<DpoService['verifyToken']>>,
+        sourcePayload?: Record<string, unknown>,
+    ) {
+        const mergedWebhookData = {
+            ...(sourcePayload || {}),
+            verify,
+        };
+        const disposition = normalizeDpoResult(verify.status);
+
+        if (disposition.paymentStatus === PaymentStatus.Successful) {
+            const settlementCheck = this.verifyDpoSettlementData(transaction, verify);
+            if (!settlementCheck.ok) {
+                await this.markTransactionFailedIfUnsettled(
+                    String(transaction._id),
+                    settlementCheck.reason || 'DPO settlement verification failed',
+                    mergedWebhookData,
+                );
+                return PaymentStatus.Failed;
+            }
+
+            const changed = await this.markTransactionSuccessful(
+                String(transaction._id),
+                mergedWebhookData,
+            );
+
+            if (changed) {
+                this.eventEmitter.emit('payment.successful', {
+                    transactionId: transaction._id,
+                    userId: transaction.userId,
+                    projectId: transaction.projectId,
+                    amount: transaction.amount,
+                    currency: transaction.currency,
+                    projectType: (transaction.metadata as any)?.projectType,
+                    walletAddress: (transaction.metadata as any)?.walletAddress || undefined,
+                });
+            }
+
+            return PaymentStatus.Successful;
+        }
+
+        if (disposition.paymentStatus === PaymentStatus.Pending) {
+            return PaymentStatus.Pending;
+        }
+
+        await this.markTransactionFailedIfUnsettled(
+            String(transaction._id),
+            verify.message || 'Payment could not be confirmed with DPO',
+            mergedWebhookData,
+        );
+        return disposition.paymentStatus;
     }
 
     onModuleInit() {
@@ -992,11 +1172,12 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             throw new BadRequestException('Wallet address is required for ROI investments.');
         }
 
-        const currency = dto.currency ?? 'UGX';
+        const currency = (dto.currency ?? 'UGX').toUpperCase();
         const description = dto.description
             ?? (isCharity
                 ? `Donation to ${(project as any).name || 'charity project'} - Keibo`
                 : `Investment in ${(project as any).name || 'ROI project'} - Keibo`);
+        const quote = this.buildDpoIncomingQuote(dto.amount, currency);
         const isLocalDonationBypass =
             isCharity &&
             this.configService.get<string>('NODE_ENV') === 'development' &&
@@ -1010,21 +1191,23 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         const backUrl = `${backendUrl}/api/payments/dpo/webhook`;
 
         const txRef = `DPO-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const companyRef = `KEIBO-${dto.projectId}-${Date.now()}`;
         const token = isLocalDonationBypass
             ? `LOCAL-DPO-${Date.now()}`
             : (await this.dpoService.createToken(
                 dto.projectId,
-                dto.amount,
+                quote.grossAmount,
                 currency,
                 backUrl,
                 redirectUrl,
                 description,
+                companyRef,
             )).token;
 
         const transaction = await this.paymentTransactionModel.create({
             ...(userId ? { userId: new Types.ObjectId(userId) } : {}),
             projectId: new Types.ObjectId(dto.projectId),
-            amount: dto.amount,
+            amount: quote.requestedAmount,
             currency,
             paymentMethod: dto.paymentMethod,
             provider: PaymentProvider.DPO,
@@ -1041,6 +1224,8 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
                 walletAddress: normalizedWalletAddress || null,
                 projectName: (project as any).name || null,
                 localBypass: isLocalDonationBypass,
+                companyRef,
+                dpoQuote: quote,
             },
         });
 
@@ -1059,6 +1244,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
                 token,
                 redirectUrl: `${frontendUrl}/payment/result?status=success&projectId=${dto.projectId}`,
                 status: PaymentStatus.Successful,
+                quote,
             };
         }
 
@@ -1069,6 +1255,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             token,
             redirectUrl: `https://secure.3gdirectpay.com/payv3.php?ID=${token}`,
             status: PaymentStatus.Pending,
+            quote,
         };
     }
 
@@ -1090,35 +1277,11 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         }
 
         const verify = await this.dpoService.verifyToken(token);
-
-        if (verify.status === '000' && transaction.status !== PaymentStatus.Successful) {
-            const changed = await this.markTransactionSuccessful(String(transaction._id), verify as unknown as Record<string, unknown>);
-
-            if (changed) {
-                this.eventEmitter.emit('payment.successful', {
-                    transactionId: transaction._id,
-                    userId: transaction.userId,
-                    projectId: transaction.projectId,
-                    amount: transaction.amount,
-                    currency: transaction.currency,
-                    projectType: (transaction.metadata as any)?.projectType,
-                    walletAddress: (transaction.metadata as any)?.walletAddress || undefined,
-                });
-            }
-        } else if (
-            verify.status === '801' ||
-            verify.status === '804' ||
-            verify.status === '900' ||
-            verify.status === '001' // 001 = pending mobile money confirmation
-        ) {
-            // Pending states in DPO — leave transaction as Pending, webhook will finalize
-        } else if (verify.status !== '000') {
-            await this.markTransactionFailedIfUnsettled(
-                String(transaction._id),
-                verify.message,
-                verify as unknown as Record<string, unknown>,
-            );
-        }
+        await this.synchronizeDpoTransaction(
+            transaction,
+            verify,
+            { source: 'verify' },
+        );
 
         const refreshed = await this.paymentTransactionModel.findById(transaction._id).lean();
         return { status: refreshed?.status || transaction.status, verify };
@@ -1140,25 +1303,15 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         // Verify with DPO before trusting the webhook payload
         const verify = await this.dpoService.verifyToken(token);
 
-        if (verify.status === '000') {
-            const changed = await this.markTransactionSuccessful(String(transaction._id), payload);
+        const resolvedStatus = await this.synchronizeDpoTransaction(
+            transaction,
+            verify,
+            payload,
+        );
 
-            if (changed) {
-                this.eventEmitter.emit('payment.successful', {
-                    transactionId: transaction._id,
-                    userId: transaction.userId,
-                    projectId: transaction.projectId,
-                    amount: transaction.amount,
-                    currency: transaction.currency,
-                    projectType: (transaction.metadata as any)?.projectType,
-                    walletAddress: (transaction.metadata as any)?.walletAddress || undefined,
-                });
-
-                this.logger.log(`DPO payment confirmed via webhook: ${token}`);
-            }
-        } else {
-            this.logger.log(`DPO webhook: token=${token} status=${verify.status} (${verify.message}) — current tx status=${transaction.status}`);
-        }
+        this.logger.log(
+            `DPO webhook processed: token=${token} providerStatus=${verify.status} appStatus=${resolvedStatus}`,
+        );
 
         return { received: true };
     }

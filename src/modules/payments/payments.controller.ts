@@ -21,6 +21,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiBody } from '@nes
 import { PaymentsService } from './payments.service';
 import { InitializePaymentDto } from './dto/initialize-payment.dto';
 import { InitializeDPOPaymentDto } from './dto/initialize-dpo-payment.dto';
+import { DpoPaymentQuoteDto } from './dto/dpo-payment-quote.dto';
 import {
     DepositToWalletDto,
     WithdrawFromWalletDto,
@@ -140,6 +141,14 @@ export class PaymentsController {
         }
     }
 
+    @Post('dpo/quote')
+    @Public()
+    @UseGuards(OptionalJwtAuthGuard)
+    @ApiOperation({ summary: 'Calculate DPO checkout quote from a desired net project amount' })
+    async getDPOPaymentQuote(@Body() dto: DpoPaymentQuoteDto) {
+        return this.paymentsService.getDPOPaymentQuote(dto);
+    }
+
     @Get('dpo/verify/:token')
     @Public()
     @UseGuards(OptionalJwtAuthGuard)
@@ -162,6 +171,7 @@ export class PaymentsController {
 
     @Post('dpo/webhook')
     @HttpCode(HttpStatus.OK)
+    @Public()
     @ApiOperation({ summary: 'DPO server-to-server IPN (POST)' })
     async handleDPOWebhook(
         @Body() payload: Record<string, string>,
@@ -172,6 +182,7 @@ export class PaymentsController {
 
     @Get('dpo/webhook')
     @Redirect()
+    @Public()
     @ApiOperation({ summary: 'DPO BackURL / ReturnURL redirect handler (GET)' })
     async handleDPOWebhookGet(@Query() query: Record<string, string>) {
         const frontendUrl = this.getFrontendUrl();
@@ -191,6 +202,10 @@ export class PaymentsController {
                 } else if (result.status === PaymentStatus.Pending) {
                     // Mobile money pending — tell user to wait
                     return { url: `${frontendUrl}/payment/result?status=pending&ID=${token}&projectId=${projectId}` };
+                } else if (result.status === PaymentStatus.Failed) {
+                    return { url: `${frontendUrl}/payment/result?status=failed&ID=${token}&projectId=${projectId}` };
+                } else if (result.status === PaymentStatus.Cancelled) {
+                    return { url: `${frontendUrl}/payment/result?status=cancelled&ID=${token}&projectId=${projectId}` };
                 }
                 // Any other status (failed, cancelled) falls through to cancelled redirect
             }
