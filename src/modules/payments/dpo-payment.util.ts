@@ -156,8 +156,8 @@ export function normalizeDpoResult(resultCode: string | undefined): DpoResultDis
 
   if (DPO_PROVIDER_ERROR_CODES.has(normalizedCode)) {
     return {
-      paymentStatus: PaymentStatus.Failed,
-      terminal: true,
+      paymentStatus: PaymentStatus.Pending,
+      terminal: false,
       isProviderError: true,
     };
   }

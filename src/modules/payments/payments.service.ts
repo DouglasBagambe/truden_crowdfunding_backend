@@ -1304,6 +1304,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         }
 
         const verify = await this.dpoService.verifyToken(token);
+        this.logger.log(
+            `DPO verify polled: token=${token} providerStatus=${verify.status} companyRef=${verify.companyRef || 'n/a'} amount=${verify.amount || 'n/a'} net=${verify.netAmount || 'n/a'}`,
+        );
         await this.synchronizeDpoTransaction(
             transaction,
             verify,

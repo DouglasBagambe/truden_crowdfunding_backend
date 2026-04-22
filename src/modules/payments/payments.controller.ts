@@ -199,18 +199,19 @@ export class PaymentsController {
                 if (result.status === PaymentStatus.Successful) {
                     // Payment confirmed — send user to success page with token for frontend verify
                     return { url: `${frontendUrl}/payment/result?status=success&ID=${token}&projectId=${projectId}` };
-                } else if (result.status === PaymentStatus.Pending) {
-                    // Mobile money pending — tell user to wait
-                    return { url: `${frontendUrl}/payment/result?status=pending&ID=${token}&projectId=${projectId}` };
-                } else if (result.status === PaymentStatus.Failed) {
-                    return { url: `${frontendUrl}/payment/result?status=failed&ID=${token}&projectId=${projectId}` };
                 } else if (result.status === PaymentStatus.Cancelled) {
                     return { url: `${frontendUrl}/payment/result?status=cancelled&ID=${token}&projectId=${projectId}` };
+                } else if (result.status === PaymentStatus.Failed) {
+                    return { url: `${frontendUrl}/payment/result?status=failed&ID=${token}&projectId=${projectId}` };
                 }
-                // Any other status (failed, cancelled) falls through to cancelled redirect
+                // Pending/processing/provider uncertainty should stay pending, never hard-fail here.
+                return { url: `${frontendUrl}/payment/result?status=pending&ID=${token}&projectId=${projectId}` };
             }
         } catch (err) {
             this.logger.error('Error in DPO GET Webhook handler:', err);
+            if (token) {
+                return { url: `${frontendUrl}/payment/result?status=pending&ID=${token}&projectId=${projectId}` };
+            }
         }
 
         return { url: `${frontendUrl}/payment/result?status=cancelled&projectId=${projectId}` };
