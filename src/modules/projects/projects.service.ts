@@ -614,11 +614,14 @@ export class ProjectsService {
 
     // Send email notification to creator on Rejection or Approval
     try {
-      const creator = await this.usersRepo.findById(project.creatorId.toString());
+      const creatorId = this.extractObjectIdString(project.creatorId, 'project.creatorId');
+      const creator = await this.usersRepo.findById(creatorId);
       if (creator?.email) {
         await this.sendProjectDecisionEmail(
           creator.email,
-          (creator as any).firstName || (creator as any).lastName || creator.email,
+          (creator as any).profile?.displayName ||
+          `${(creator as any).profile?.firstName || ''} ${(creator as any).profile?.lastName || ''}`.trim() ||
+          creator.email,
           project.name,
           finalStatus,
           this.readProjectType(project),
