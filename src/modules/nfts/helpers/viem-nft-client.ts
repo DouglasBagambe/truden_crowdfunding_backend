@@ -204,6 +204,8 @@ export class ViemNftClient {
   private readonly publicClient;
   private readonly walletClient;
   readonly nftAddress: Address;
+  readonly chainId: number;
+  readonly rpcUrl: string;
 
   constructor(private readonly configService: ConfigService) {
     const blockchain = this.configService.get<{
@@ -240,6 +242,8 @@ export class ViemNftClient {
     const rawKey = blockchain.adminPrivateKey.trim();
     const normalizedKey = (rawKey.startsWith('0x') ? rawKey : `0x${rawKey}`) as Hex;
     const account = privateKeyToAccount(normalizedKey);
+    this.chainId = blockchain.chainId;
+    this.rpcUrl = blockchain.rpcUrl;
 
     this.publicClient = createPublicClient({
       chain,
@@ -253,6 +257,14 @@ export class ViemNftClient {
     });
 
     this.nftAddress = blockchain.contracts.nft as Address;
+  }
+
+  getDiagnostics() {
+    return {
+      chainId: this.chainId,
+      rpcUrl: this.rpcUrl,
+      nftAddress: this.nftAddress,
+    };
   }
 
   /** Create project NFT type on-chain (called when a project is approved) */

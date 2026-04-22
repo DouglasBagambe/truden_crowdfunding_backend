@@ -824,6 +824,9 @@ export class ProjectsService {
     const creatorId = String(project.creatorId);
     const creator = await this.usersRepo.findById(creatorId);
     if (!creator) {
+      this.logger.error(
+        `ROI provisioning failed for project ${projectId}: creator ${creatorId} not found`,
+      );
       throw new BadRequestException('Project creator not found');
     }
 
@@ -834,6 +837,9 @@ export class ProjectsService {
       );
 
     if (!creatorWallet) {
+      this.logger.error(
+        `ROI provisioning blocked for project ${projectId}: creator ${creatorId} has no linked wallet`,
+      );
       throw new BadRequestException(
         'ROI project provisioning requires the creator to have a linked wallet address. ' +
         'Ask the creator to link a wallet before approving.',
@@ -843,14 +849,33 @@ export class ProjectsService {
     // ── Derive deterministic on-chain ID ────────────────────────────────────
     // Same derivation as the original ensureRoiProjectReadyForFunding so IDs are stable.
     const projectOnchainId = BigInt(`0x${String((project as any)._id)}`).toString();
+    const nftDiagnostics = this.viemNftClient.getDiagnostics();
+    const targetAmountWei = BigInt(Math.floor(Number(project.targetAmount || 0) * 1e6));
+
+    this.logger.log(
+      `ROI provisioning start: project=${projectId}, creator=${creatorId}, wallet=${creatorWallet}, onchainId=${projectOnchainId}, chainId=${nftDiagnostics.chainId}, rpcUrl=${nftDiagnostics.rpcUrl}, nftAddress=${nftDiagnostics.nftAddress}, targetAmount=${project.targetAmount}, targetAmountWei=${targetAmountWei.toString()}`,
+    );
 
     // ── Call contract ───────────────────────────────────────────────────────
-    await this.viemNftClient.createProjectNFT({
-      projectOnchainId: BigInt(projectOnchainId),
-      creator: creatorWallet as Address,
-      targetAmountWei: BigInt(Math.floor(Number(project.targetAmount || 0) * 1e6)),
-      paymentToken: '0x0000000000000000000000000000000000000000' as Address,
-    });
+    try {
+      const { hash, receipt } = await this.viemNftClient.createProjectNFT({
+        projectOnchainId: BigInt(projectOnchainId),
+        creator: creatorWallet as Address,
+        targetAmountWei,
+        paymentToken: '0x0000000000000000000000000000000000000000' as Address,
+      });
+
+      this.logger.log(
+        `ROI provisioning contract write succeeded: project=${projectId}, txHash=${hash}, receiptStatus=${receipt.status}, block=${receipt.blockNumber?.toString?.() ?? 'unknown'}`,
+      );
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.logger.error(
+        `ROI provisioning contract write failed: project=${projectId}, creator=${creatorId}, wallet=${creatorWallet}, onchainId=${projectOnchainId}, chainId=${nftDiagnostics.chainId}, nftAddress=${nftDiagnostics.nftAddress}, error=${err.message}`,
+        err.stack,
+      );
+      throw error;
+    }
 
     // ── Persist success ─────────────────────────────────────────────────────
     const now = new Date();
