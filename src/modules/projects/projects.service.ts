@@ -85,6 +85,31 @@ export class ProjectsService {
     return this.projectsRepo.listRoiProjectsWithOnchainId();
   }
 
+  private extractObjectIdString(
+    value: unknown,
+    fieldName: string,
+  ): string {
+    if (typeof value === 'string') {
+      return value;
+    }
+
+    if (value instanceof Types.ObjectId) {
+      return value.toString();
+    }
+
+    if (value && typeof value === 'object') {
+      const nestedId = (value as { _id?: unknown })._id;
+      if (typeof nestedId === 'string') {
+        return nestedId;
+      }
+      if (nestedId instanceof Types.ObjectId) {
+        return nestedId.toString();
+      }
+    }
+
+    throw new BadRequestException(`${fieldName} is missing a valid ObjectId`);
+  }
+
   async createProject(creatorId: string, dto: CreateProjectDto) {
     const projectType: ProjectType | undefined =
       (dto.type ?? (dto as any).projectType ?? (dto.category ? ProjectType.CHARITY : (dto.industry ? ProjectType.ROI : undefined)));
@@ -821,7 +846,7 @@ export class ProjectsService {
     }
 
     // ── Validate creator and wallet ─────────────────────────────────────────
-    const creatorId = String(project.creatorId);
+    const creatorId = this.extractObjectIdString(project.creatorId, 'project.creatorId');
     const creator = await this.usersRepo.findById(creatorId);
     if (!creator) {
       this.logger.error(
