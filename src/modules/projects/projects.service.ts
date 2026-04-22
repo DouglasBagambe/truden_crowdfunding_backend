@@ -830,11 +830,18 @@ export class ProjectsService {
       throw new BadRequestException('Project creator not found');
     }
 
+    const linkedWallet = creator.linkedWallets?.find(
+      (w): w is string => typeof w === 'string' && w.trim().length > 0,
+    );
+    const legacyWallet =
+      typeof (creator as any).walletAddress === 'string' &&
+      (creator as any).walletAddress.trim().length > 0
+        ? String((creator as any).walletAddress).trim().toLowerCase()
+        : undefined;
     const creatorWallet: string | undefined =
       creator.primaryWallet ||
-      creator.linkedWallets?.find(
-        (w): w is string => typeof w === 'string' && w.trim().length > 0,
-      );
+      linkedWallet ||
+      legacyWallet;
 
     if (!creatorWallet) {
       this.logger.error(
@@ -843,6 +850,16 @@ export class ProjectsService {
       throw new BadRequestException(
         'ROI project provisioning requires the creator to have a linked wallet address. ' +
         'Ask the creator to link a wallet before approving.',
+      );
+    }
+
+    if (!creator.primaryWallet && legacyWallet) {
+      await this.usersRepo.updateById(creatorId, {
+        $set: { primaryWallet: legacyWallet },
+        $addToSet: { linkedWallets: legacyWallet },
+      });
+      this.logger.log(
+        `ROI provisioning recovered legacy wallet for creator ${creatorId}: ${legacyWallet}`,
       );
     }
 
