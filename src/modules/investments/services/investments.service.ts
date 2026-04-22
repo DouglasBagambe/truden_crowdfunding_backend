@@ -2,12 +2,14 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
 import { Investment, InvestmentDocument } from '../schemas/investment.schema';
+import { MintStatus } from '../schemas/investment.schema';
 import { CreateInvestmentDto } from '../dto/create-investment.dto';
 import { UpdateInvestmentStatusDto } from '../dto/update-investment-status.dto';
 import { FilterInvestmentsDto } from '../dto/filter-investments.dto';
@@ -19,6 +21,7 @@ import { AuthService } from '../../auth/auth.service';
 import { ProjectsService } from '../../projects/projects.service';
 import { KYCStatus, UserRole } from '../../../common/enums/role.enum';
 import type { JwtPayload } from '../../../common/interfaces/user.interface';
+import { InvestmentNFTService } from './investment-nft.service';
 
 // ─── NOTE ──────────────────────────────────────────────────────────────────────
 // Blockchain / custodial-wallet / NFT code has been moved to the
@@ -39,12 +42,15 @@ interface AuthUserView {
 
 @Injectable()
 export class InvestmentsService {
+  private readonly logger = new Logger(InvestmentsService.name);
+
   constructor(
     @InjectModel(Investment.name)
     private readonly investmentModel: Model<InvestmentDocument>,
     private readonly authService: AuthService,
     private readonly projectsService: ProjectsService,
     private readonly configService: ConfigService,
+    private readonly investmentNFTService: InvestmentNFTService,
   ) { }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -344,6 +350,144 @@ export class InvestmentsService {
         walletAddress: (investment as any).walletAddress ?? null,
       },
     };
+  }
+
+  /**
+   * Admin: retry NFT minting for a single investment whose mintStatus is FAILED or PENDING.
+   * Fetches the investment, validates the project is provisioned, attempts mint, persists result.
+   */
+  async retryFailedNftMint(
+    investmentId: string,
+  ): Promise<{
+    investmentId: string;
+    result: 'MINTED' | 'SKIPPED' | 'FAILED';
+    reason?: string;
+    nftTxHash?: string;
+  }> {
+    if (!Types.ObjectId.isValid(investmentId)) {
+      throw new BadRequestException('Invalid investmentId');
+    }
+
+    const investment = await this.investmentModel.findById(investmentId).exec();
+    if (!investment) throw new NotFoundException('Investment not found');
+
+    // Only retry FAILED or PENDING mints — skip already MINTED or BYPASSED
+    const currentMintStatus = (investment as any).mintStatus as MintStatus;
+    if (currentMintStatus === MintStatus.MINTED) {
+      return { investmentId, result: 'SKIPPED', reason: 'NFT already minted' };
+    }
+    if (currentMintStatus === MintStatus.BYPASSED) {
+      return { investmentId, result: 'SKIPPED', reason: 'Investment in bypass mode — remove bypass flag to enable minting' };
+    }
+
+    const walletAddress = (investment as any).walletAddress as string | null;
+    if (!walletAddress) {
+      return {
+        investmentId,
+        result: 'FAILED',
+        reason: 'No wallet address on investment — investor must connect wallet first',
+      };
+    }
+
+    const projectId = String(investment.projectId);
+    const project = await this.projectsService.ensureProjectExists(projectId);
+    const projectOnchainId = String((project as any).projectOnchainId || '').trim();
+
+    if (!projectOnchainId || projectOnchainId === '0') {
+      await this.investmentModel.findByIdAndUpdate(investmentId, {
+        mintStatus: MintStatus.FAILED,
+        mintError: 'Project not provisioned on-chain — run provision-onchain repair first',
+      });
+      return {
+        investmentId,
+        result: 'FAILED',
+        reason: 'Project has no on-chain ID. Run POST /admin/projects/:id/provision-onchain first.',
+      };
+    }
+
+    try {
+      const mintResult = await this.investmentNFTService.mintForUser(
+        walletAddress,
+        projectOnchainId,
+        Number(investment.amount),
+        investmentId,
+      );
+
+      await this.investmentModel.findByIdAndUpdate(investmentId, {
+        nftProjectId: mintResult.tokenId,
+        nftTokenAmount: mintResult.tokenAmount,
+        nftTxHash: mintResult.txHash,
+        nftMinted: true,
+        mintStatus: MintStatus.MINTED,
+        mintError: null,
+      });
+
+      this.logger.log(
+        `NFT mint retry succeeded for investment ${investmentId}: txHash=${mintResult.txHash}`,
+      );
+
+      return { investmentId, result: 'MINTED', nftTxHash: mintResult.txHash };
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await this.investmentModel.findByIdAndUpdate(investmentId, {
+        mintStatus: MintStatus.FAILED,
+        mintError: errMsg,
+      });
+      this.logger.error(`NFT mint retry failed for investment ${investmentId}: ${errMsg}`);
+      return { investmentId, result: 'FAILED', reason: errMsg };
+    }
+  }
+
+  /**
+   * Admin: scan all investments with mintStatus=FAILED or mintStatus=PENDING that have
+   * a walletAddress, and retry NFT minting for each one.
+   * Idempotent — already-MINTED investments are skipped automatically.
+   */
+  async retryAllFailedNftMints(): Promise<{
+    total: number;
+    minted: number;
+    skipped: number;
+    failed: number;
+    results: Array<{
+      investmentId: string;
+      result: 'MINTED' | 'SKIPPED' | 'FAILED';
+      reason?: string;
+      nftTxHash?: string;
+    }>;
+  }> {
+    const candidates = await this.investmentModel
+      .find({
+        mintStatus: { $in: [MintStatus.FAILED, MintStatus.PENDING] },
+        walletAddress: { $ne: null, $exists: true },
+        nftMinted: false,
+      })
+      .limit(500)
+      .exec();
+
+    let minted = 0;
+    let skipped = 0;
+    let failed = 0;
+    const results: Array<{
+      investmentId: string;
+      result: 'MINTED' | 'SKIPPED' | 'FAILED';
+      reason?: string;
+      nftTxHash?: string;
+    }> = [];
+
+    for (const inv of candidates) {
+      const id = String(inv._id);
+      const r = await this.retryFailedNftMint(id);
+      results.push(r);
+      if (r.result === 'MINTED') minted++;
+      else if (r.result === 'SKIPPED') skipped++;
+      else failed++;
+    }
+
+    this.logger.log(
+      `NFT mint batch retry: total=${candidates.length} minted=${minted} skipped=${skipped} failed=${failed}`,
+    );
+
+    return { total: candidates.length, minted, skipped, failed, results };
   }
 
   async repairDatabase() {

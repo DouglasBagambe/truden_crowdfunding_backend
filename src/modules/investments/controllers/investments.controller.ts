@@ -76,6 +76,18 @@ export class InvestmentsController {
     return this.investmentsService.repairDatabase();
   }
 
+  /**
+   * Batch retry: scan all investments with mintStatus=FAILED or PENDING
+   * (that have a walletAddress) and attempt NFT minting for each.
+   * Idempotent — already-MINTED are skipped. ADMIN-only.
+   */
+  @Post('admin/retry-nft-mints')
+  @RoleMetadataOr(UserRole.ADMIN)
+  @Permissions(Permission.APPROVE_PROJECTS)
+  async retryAllFailedNftMints() {
+    return this.investmentsService.retryAllFailedNftMints();
+  }
+
   @Get()
   @Roles(UserRole.ADMIN)
   async listInvestments(
@@ -93,6 +105,17 @@ export class InvestmentsController {
     @CurrentUser() currentUser: JwtPayload,
   ) {
     return this.investmentsService.updateStatus(id, dto, currentUser);
+  }
+
+  /**
+   * Single-investment NFT mint retry. ADMIN-only. Idempotent.
+   * Use when: investor connects wallet after payment, or after provisioning repair.
+   */
+  @Post(':id/retry-nft-mint')
+  @RoleMetadataOr(UserRole.ADMIN)
+  @Permissions(Permission.APPROVE_PROJECTS)
+  async retryNftMint(@Param('id') id: string) {
+    return this.investmentsService.retryFailedNftMint(id);
   }
 
   @Get(':id')

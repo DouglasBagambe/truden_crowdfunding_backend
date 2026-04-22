@@ -2,6 +2,14 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Schema as MongooseSchema, Types } from 'mongoose';
 import { InvestmentStatus } from '../interfaces/investment.interface';
 
+/** Lifecycle state of the NFT mint for a single investment. */
+export enum MintStatus {
+  PENDING = 'PENDING',
+  MINTED = 'MINTED',
+  FAILED = 'FAILED',
+  BYPASSED = 'BYPASSED', // Test-only: minting explicitly skipped via env flag
+}
+
 @Schema({ timestamps: true })
 export class Investment {
   @Prop({
@@ -70,6 +78,23 @@ export class Investment {
   /** Whether the NFT has been minted on-chain */
   @Prop({ type: Boolean, default: false })
   nftMinted!: boolean;
+
+  /** Machine-readable NFT mint lifecycle state */
+  @Prop({
+    type: String,
+    enum: Object.values(MintStatus),
+    default: MintStatus.PENDING,
+    index: true,
+  })
+  mintStatus!: MintStatus;
+
+  /** Human-readable reason when mintStatus=FAILED or mintStatus=BYPASSED */
+  @Prop({ type: String, default: null })
+  mintError?: string | null;
+
+  /** Whether the investment was created while provisioning bypass was active */
+  @Prop({ type: Boolean, default: false })
+  mintBypassedProvisioningCheck!: boolean;
 
   /** Whether the investor has listed this position on the marketplace */
   @Prop({ type: Boolean, default: false })

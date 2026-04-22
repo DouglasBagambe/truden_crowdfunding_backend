@@ -41,6 +41,7 @@ import { UploadAttachmentDto } from './dto/upload-attachment.dto';
 import { StreamableFile } from '@nestjs/common';
 import { hasBackendRoiAccess } from '../../common/utils/roi-access.util';
 import { ViemNftClient } from '../nfts/helpers/viem-nft-client';
+import { OnchainProvisioningStatus } from './schemas/project.schema';
 import type { Address } from 'viem';
 type MulterFile = Express.Multer.File;
 
@@ -538,8 +539,6 @@ export class ProjectsService {
       );
     }
 
-
-
     let finalStatus = dto.finalStatus;
     const extraSet: Record<string, unknown> = {};
 
@@ -547,11 +546,36 @@ export class ProjectsService {
       dto.finalStatus === ProjectStatus.APPROVED &&
       this.readProjectType(project) === ProjectType.ROI
     ) {
-      const { projectOnchainId } = await this.ensureRoiProjectReadyForFunding(
-        project,
-      );
-      finalStatus = ProjectStatus.FUNDING;
-      extraSet.projectOnchainId = projectOnchainId;
+      // Mark provisioning as PENDING immediately so admin can see it in-flight
+      await this.projectsRepo.updateById(projectId, {
+        $set: { onchainProvisioningStatus: OnchainProvisioningStatus.PENDING },
+      });
+
+      try {
+        const { projectOnchainId } = await this.ensureProjectProvisionedOnChain(projectId);
+        finalStatus = ProjectStatus.FUNDING;
+        extraSet.projectOnchainId = projectOnchainId;
+      } catch (provisionErr: unknown) {
+        const errMsg =
+          provisionErr instanceof Error
+            ? provisionErr.message
+            : String(provisionErr);
+        this.logger.error(
+          `ROI on-chain provisioning failed for project ${projectId}: ${errMsg}`,
+        );
+        // Persist failure state — project stays APPROVED (visible to admin) but not FUNDING
+        await this.projectsRepo.updateById(projectId, {
+          $set: {
+            onchainProvisioningStatus: OnchainProvisioningStatus.FAILED,
+            onchainProvisioningError: errMsg,
+          },
+        });
+        // Re-throw so the HTTP response reflects the failure to the admin
+        throw new BadRequestException(
+          `Project approved but on-chain provisioning failed: ${errMsg}. ` +
+          'Run the backfill repair to retry provisioning.',
+        );
+      }
     }
 
     const updated = await this.projectsRepo.updateById(projectId, {
@@ -695,26 +719,50 @@ export class ProjectsService {
     }
 
     const investmentsTestMode =
-      String(this.configService.get('INVESTMENTS_TEST_MODE') ?? '').toLowerCase() ===
-      'true';
+      String(this.configService.get('INVESTMENTS_TEST_MODE') ?? '').toLowerCase() === 'true';
     const kycBypass =
       String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() === 'true';
 
     if (!investmentsTestMode && !kycBypass) {
-      const openInvestmentStatuses = [
+      const openInvestmentStatuses: ProjectStatus[] = [
         ProjectStatus.FUNDING,
-        // Legacy ROI approvals may still be stored as APPROVED instead of FUNDING.
+        // Legacy ROI approvals stored as APPROVED before provisioning was added.
         ProjectStatus.APPROVED,
       ];
-
       if (!openInvestmentStatuses.includes(project.status)) {
         throw new BadRequestException('Project is not accepting investments');
       }
     }
+
     const target = project.targetAmount || 0;
     if (target <= 0) {
       throw new BadRequestException('Project has invalid funding target');
     }
+
+    // ── On-chain provisioning gate ─────────────────────────────────────────────
+    // Default: strict (ROI_REQUIRE_ONCHAIN_PROVISIONING=true)
+    const requireProvisioning =
+      String(this.configService.get('ROI_REQUIRE_ONCHAIN_PROVISIONING') ?? 'true').toLowerCase() !== 'false';
+
+    const projectOnchainId = String((project as any).projectOnchainId || '').trim();
+    const isProvisioned = projectOnchainId.length > 0 && projectOnchainId !== '0';
+
+    if (requireProvisioning && !isProvisioned) {
+      const provisioningStatus = (project as any).onchainProvisioningStatus as string || 'NOT_STARTED';
+      if (provisioningStatus === OnchainProvisioningStatus.FAILED) {
+        const reason = (project as any).onchainProvisioningError || 'Unknown provisioning error';
+        throw new BadRequestException(
+          `ROI project on-chain provisioning previously failed: ${reason}. ` +
+          'An admin must run the repair endpoint before investments can proceed.',
+        );
+      }
+      throw new BadRequestException(
+        'This ROI project has not yet been provisioned on-chain. ' +
+        'It cannot accept investments until provisioning completes.',
+      );
+    }
+    // ──────────────────────────────────────────────────────────────────────────
+
     return project;
   }
 
@@ -738,39 +786,221 @@ export class ProjectsService {
     return project;
   }
 
-  private async ensureRoiProjectReadyForFunding(project: ProjectDocument) {
+  /**
+   * Idempotent on-chain provisioning for a single ROI project.
+   *
+   * - Safe to call multiple times (re-uses existing projectOnchainId).
+   * - Called at approval time and by the admin repair endpoint / backfill script.
+   * - Persists projectOnchainId + provisioningStatus=READY on success.
+   * - Callers must persist FAILED state themselves if they catch an error here.
+   */
+  async ensureProjectProvisionedOnChain(
+    projectId: string,
+  ): Promise<{ projectOnchainId: string }> {
+    this.ensureValidObjectId(projectId);
+    const project = await this.projectsRepo.findById(projectId);
+    if (!project) throw new NotFoundException('Project not found');
+
+    const projectType = this.normalizeProjectType(this.readProjectType(project));
+    if (projectType !== ProjectType.ROI) {
+      throw new BadRequestException('Only ROI projects can be provisioned on-chain');
+    }
+
+    // ── Already provisioned — idempotency guard ─────────────────────────────
+    const existingOnchainId = String((project as any).projectOnchainId || '').trim();
+    if (existingOnchainId && existingOnchainId !== '0') {
+      // Ensure status field is synced in case it was set before this field existed
+      await this.projectsRepo.updateById(projectId, {
+        $set: {
+          onchainProvisioningStatus: OnchainProvisioningStatus.READY,
+          onchainProvisionedAt: (project as any).onchainProvisionedAt ?? new Date(),
+        },
+        $unset: { onchainProvisioningError: 1 },
+      });
+      return { projectOnchainId: existingOnchainId };
+    }
+
+    // ── Validate creator and wallet ─────────────────────────────────────────
     const creatorId = String(project.creatorId);
     const creator = await this.usersRepo.findById(creatorId);
     if (!creator) {
       throw new BadRequestException('Project creator not found');
     }
 
-    const creatorWallet =
+    const creatorWallet: string | undefined =
       creator.primaryWallet ||
       creator.linkedWallets?.find(
-        (wallet) => typeof wallet === 'string' && wallet.trim().length > 0,
+        (w): w is string => typeof w === 'string' && w.trim().length > 0,
       );
 
     if (!creatorWallet) {
       throw new BadRequestException(
-        'ROI project approval requires the creator to have a linked wallet address',
+        'ROI project provisioning requires the creator to have a linked wallet address. ' +
+        'Ask the creator to link a wallet before approving.',
       );
     }
 
-    const existingOnchainId = String(project.projectOnchainId || '').trim();
-    const projectOnchainId =
-      existingOnchainId || BigInt(`0x${String((project as any)._id)}`).toString();
+    // ── Derive deterministic on-chain ID ────────────────────────────────────
+    // Same derivation as the original ensureRoiProjectReadyForFunding so IDs are stable.
+    const projectOnchainId = BigInt(`0x${String((project as any)._id)}`).toString();
 
-    if (!existingOnchainId) {
-      await this.viemNftClient.createProjectNFT({
-        projectOnchainId: BigInt(projectOnchainId),
-        creator: creatorWallet as Address,
-        targetAmountWei: BigInt(Math.floor(Number(project.targetAmount || 0) * 1e6)),
-        paymentToken: '0x0000000000000000000000000000000000000000' as Address,
-      });
-    }
+    // ── Call contract ───────────────────────────────────────────────────────
+    await this.viemNftClient.createProjectNFT({
+      projectOnchainId: BigInt(projectOnchainId),
+      creator: creatorWallet as Address,
+      targetAmountWei: BigInt(Math.floor(Number(project.targetAmount || 0) * 1e6)),
+      paymentToken: '0x0000000000000000000000000000000000000000' as Address,
+    });
+
+    // ── Persist success ─────────────────────────────────────────────────────
+    const now = new Date();
+    await this.projectsRepo.updateById(projectId, {
+      $set: {
+        projectOnchainId,
+        onchainProvisioningStatus: OnchainProvisioningStatus.READY,
+        onchainProvisionedAt: now,
+      },
+      $unset: { onchainProvisioningError: 1 },
+    });
+
+    this.logger.log(
+      `ROI project ${projectId} provisioned on-chain: onchainId=${projectOnchainId}`,
+    );
 
     return { projectOnchainId };
+  }
+
+  /**
+   * Admin repair for a single ROI project.
+   * Wraps ensureProjectProvisionedOnChain with explicit FAILED state persistence
+   * so failures are always observable in the DB rather than only in logs.
+   */
+  async repairRoiProjectProvisioning(
+    projectId: string,
+  ): Promise<{
+    projectId: string;
+    result: 'ALREADY_PROVISIONED' | 'PROVISIONED' | 'FAILED';
+    projectOnchainId?: string;
+    error?: string;
+  }> {
+    // Capture pre-repair state BEFORE calling ensureProjectProvisionedOnChain,
+    // which updates the DB, so we can distinguish ALREADY_PROVISIONED from
+    // freshly PROVISIONED based on the original state rather than the post-update DB.
+    const preRepairProject = await this.projectsRepo.findById(projectId);
+    const preRepairOnchainId = String((preRepairProject as any)?.projectOnchainId || '').trim();
+    const wasAlreadyProvisioned = preRepairOnchainId.length > 0 && preRepairOnchainId !== '0';
+
+    try {
+      const { projectOnchainId } = await this.ensureProjectProvisionedOnChain(projectId);
+      // Re-fetch to get current status after provisioning may have changed it
+      const postRepairProject = await this.projectsRepo.findById(projectId);
+      // Promote APPROVED → FUNDING now that provisioning succeeded
+      if (postRepairProject?.status === ProjectStatus.APPROVED) {
+        await this.projectsRepo.updateById(projectId, {
+          $set: { status: ProjectStatus.FUNDING, projectOnchainId },
+        });
+      }
+      return {
+        projectId,
+        result: wasAlreadyProvisioned ? 'ALREADY_PROVISIONED' : 'PROVISIONED',
+        projectOnchainId,
+      };
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await this.projectsRepo.updateById(projectId, {
+        $set: {
+          onchainProvisioningStatus: OnchainProvisioningStatus.FAILED,
+          onchainProvisioningError: errMsg,
+        },
+      });
+      this.logger.error(`Repair failed for ROI project ${projectId}: ${errMsg}`);
+      return { projectId, result: 'FAILED', error: errMsg };
+    }
+  }
+
+  /**
+   * Batch backfill: scans ROI projects in APPROVED or FUNDING status with a
+   * missing or invalid projectOnchainId and attempts to provision each one.
+   * Idempotent — already-provisioned projects are skipped without modification.
+   */
+  async backfillRoiProvisioning(): Promise<{
+    total: number;
+    skipped: number;
+    provisioned: number;
+    failed: number;
+    results: Array<{
+      projectId: string;
+      name: string;
+      result: 'SKIPPED' | 'PROVISIONED' | 'FAILED';
+      projectOnchainId?: string;
+      error?: string;
+    }>;
+  }> {
+    const candidates = await this.projectsRepo.query(
+      {
+        projectType: ProjectType.ROI,
+        status: { $in: [ProjectStatus.APPROVED, ProjectStatus.FUNDING] },
+        $or: [
+          { projectOnchainId: { $exists: false } },
+          { projectOnchainId: null },
+          { projectOnchainId: '' },
+          { projectOnchainId: '0' },
+        ],
+      },
+      500,
+      0,
+    );
+
+    const results: Array<{
+      projectId: string;
+      name: string;
+      result: 'SKIPPED' | 'PROVISIONED' | 'FAILED';
+      projectOnchainId?: string;
+      error?: string;
+    }> = [];
+
+    let skipped = 0;
+    let provisioned = 0;
+    let failed = 0;
+
+    for (const project of candidates) {
+      const pid = String(project._id || project.id);
+      const name = String((project as any).name || pid);
+
+      // Double-check: skip if the freshly-fetched record already has a valid ID
+      const freshOnchainId = String((project as any).projectOnchainId || '').trim();
+      if (freshOnchainId && freshOnchainId !== '0') {
+        skipped++;
+        results.push({ projectId: pid, name, result: 'SKIPPED', projectOnchainId: freshOnchainId });
+        continue;
+      }
+
+      const repairResult = await this.repairRoiProjectProvisioning(pid);
+      if (repairResult.result === 'FAILED') {
+        failed++;
+        results.push({ projectId: pid, name, result: 'FAILED', error: repairResult.error });
+      } else {
+        provisioned++;
+        results.push({
+          projectId: pid,
+          name,
+          result: 'PROVISIONED',
+          projectOnchainId: repairResult.projectOnchainId,
+        });
+      }
+    }
+
+    this.logger.log(
+      `ROI backfill complete: total=${candidates.length} skipped=${skipped} provisioned=${provisioned} failed=${failed}`,
+    );
+
+    return {
+      total: candidates.length,
+      skipped,
+      provisioned,
+      failed,
+      results,
+    };
   }
 
   async incrementFunding(projectId: string, amount: number) {

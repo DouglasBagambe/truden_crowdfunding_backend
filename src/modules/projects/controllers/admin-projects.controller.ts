@@ -61,4 +61,28 @@ export class AdminProjectsController {
   ) {
     return this.projectsService.requestAttachment(id, dto);
   }
+
+  /**
+   * Repair a single ROI project's on-chain provisioning.
+   * Idempotent — safe to call if already provisioned (returns existing ID).
+   * ADMIN-only.
+   */
+  @RoleMetadataOr(UserRole.ADMIN)
+  @Permissions(Permission.APPROVE_PROJECTS)
+  @Post(':id/provision-onchain')
+  async provisionOnchain(@Param('id') id: string) {
+    return this.projectsService.repairRoiProjectProvisioning(id);
+  }
+
+  /**
+   * Batch backfill: finds all ROI projects in APPROVED or FUNDING status
+   * that are missing a valid projectOnchainId and attempts to provision them.
+   * Returns a per-project report. ADMIN-only. Idempotent.
+   */
+  @RoleMetadataOr(UserRole.ADMIN)
+  @Permissions(Permission.APPROVE_PROJECTS)
+  @Post('roi/backfill')
+  async backfillRoiProvisioning() {
+    return this.projectsService.backfillRoiProvisioning();
+  }
 }

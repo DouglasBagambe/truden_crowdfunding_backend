@@ -2,7 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { ConfigService } from '@nestjs/config';
 import { Investment, InvestmentDocument } from '../schemas/investment.schema';
+import { MintStatus } from '../schemas/investment.schema';
 import { InvestmentStatus } from '../interfaces/investment.interface';
 import { ProjectsService } from '../../projects/projects.service';
 import { PaymentsService } from '../../payments/payments.service';
@@ -39,6 +41,7 @@ export class PaymentInvestmentListener {
         private readonly investmentNFTService: InvestmentNFTService,
         private readonly usersRepository: UsersRepository,
         private readonly appEmailService: AppEmailService,
+        private readonly configService: ConfigService,
     ) { }
 
     private getUserDisplayName(user: any, fallback: string = 'there'): string {
@@ -196,6 +199,9 @@ export class PaymentInvestmentListener {
                 }
 
                 // ROI investment path — create investment record + increment raised amount
+                const provisioningBypassed =
+                    Boolean((tx?.metadata as any)?.provisioningBypassed);
+
                 investment = await this.investmentModel.create({
                     projectId: new Types.ObjectId(projectId),
                     investorId: new Types.ObjectId(userId),
@@ -205,6 +211,8 @@ export class PaymentInvestmentListener {
                     walletAddress: walletAddress?.toLowerCase() ?? null,
                     status: InvestmentStatus.Active,
                     nftMinted: false,
+                    mintStatus: MintStatus.PENDING,
+                    mintBypassedProvisioningCheck: provisioningBypassed,
                     listed: false,
                 });
 
@@ -268,18 +276,44 @@ export class PaymentInvestmentListener {
 
             // ── Step 5: Mint NFT to investor's self-custodial wallet ──────────────
             if (investment && walletAddress && projectType !== 'CHARITY') {
-                try {
-                    const projectOnchainId = String((project as any).projectOnchainId || '').trim();
+                const requireProvisioning =
+                    String(this.configService.get('ROI_REQUIRE_ONCHAIN_PROVISIONING') ?? 'true').toLowerCase() !== 'false';
+                const disableNftMinting =
+                    String(this.configService.get('ROI_DISABLE_NFT_MINTING') ?? 'false').toLowerCase() === 'true';
 
-                    if (!projectOnchainId || projectOnchainId === '0') {
-                        this.logger.warn(
-                            `Project ${projectId} has no on-chain ID — skipping NFT mint until project approval provisions it.`,
-                        );
-                        await this.investmentModel.findByIdAndUpdate(investment._id, {
-                            notes: 'NFT mint pending: project has no on-chain ID',
-                        });
-                        investmentEmailNote = 'Your investment NFT is pending because the project has not been provisioned on-chain yet.';
-                    } else {
+                const projectOnchainId = String((project as any).projectOnchainId || '').trim();
+                const isProvisioned = projectOnchainId.length > 0 && projectOnchainId !== '0';
+
+                if (disableNftMinting) {
+                    // Explicit test-only bypass — never silently skip
+                    const bypassReason = 'NFT minting disabled via ROI_DISABLE_NFT_MINTING env flag (test-only bypass)';
+                    this.logger.warn(`[BYPASS] Skipping NFT mint for investment ${investment._id}: ${bypassReason}`);
+                    await this.investmentModel.findByIdAndUpdate(investment._id, {
+                        mintStatus: MintStatus.BYPASSED,
+                        mintError: bypassReason,
+                    });
+                    investmentEmailNote = 'Your investment was recorded. NFT minting is temporarily disabled for testing.';
+                } else if (requireProvisioning && !isProvisioned) {
+                    // Strict mode: block mint until project is provisioned
+                    const pendingReason = `Project ${projectId} has no valid on-chain ID — NFT mint blocked (strict mode). Run admin repair to provision and retry.`;
+                    this.logger.warn(pendingReason);
+                    await this.investmentModel.findByIdAndUpdate(investment._id, {
+                        mintStatus: MintStatus.FAILED,
+                        mintError: pendingReason,
+                    });
+                    investmentEmailNote = 'Your investment was recorded. The NFT mint is pending admin action to provision this project on-chain.';
+                } else if (!isProvisioned) {
+                    // Bypass mode + not provisioned — record explicitly but don't attempt mint
+                    const bypassNote = `Project not provisioned on-chain; provisioning bypass is active. NFT not minted.`;
+                    this.logger.warn(`[BYPASS] ${bypassNote} Investment: ${investment._id}`);
+                    await this.investmentModel.findByIdAndUpdate(investment._id, {
+                        mintStatus: MintStatus.BYPASSED,
+                        mintError: bypassNote,
+                    });
+                    investmentEmailNote = 'Testing mode: your investment was recorded without NFT minting.';
+                } else {
+                    // Normal path — project is provisioned, proceed with mint
+                    try {
                         const mintResult = await this.investmentNFTService.mintForUser(
                             walletAddress,
                             projectOnchainId,
@@ -287,37 +321,45 @@ export class PaymentInvestmentListener {
                             String(investment._id),
                         );
 
-                        // Persist NFT metadata back to the investment record
                         await this.investmentModel.findByIdAndUpdate(investment._id, {
                             nftProjectId: mintResult.tokenId,
                             nftTokenAmount: mintResult.tokenAmount,
                             nftTxHash: mintResult.txHash,
                             nftMinted: true,
+                            mintStatus: MintStatus.MINTED,
+                            mintError: null,
                         });
 
                         investmentNftMinted = true;
                         this.logger.log(
                             `NFT minted for investment ${investment._id}: tokenId=${mintResult.tokenId}, tx=${mintResult.txHash}`,
                         );
+                    } catch (nftErr: unknown) {
+                        const errMsg = nftErr instanceof Error ? nftErr.message : String(nftErr);
+                        const errStack = nftErr instanceof Error ? nftErr.stack : undefined;
+                        // Non-fatal — investment is recorded; FAILED status enables admin retry
+                        this.logger.error(
+                            `NFT mint failed for investment ${investment._id}: ${errMsg}`,
+                            errStack,
+                        );
+                        await this.investmentModel.findByIdAndUpdate(investment._id, {
+                            mintStatus: MintStatus.FAILED,
+                            mintError: errMsg,
+                        });
+                        investmentEmailNote = `Your investment was recorded, but NFT minting failed and has been queued for admin retry: ${errMsg}`;
                     }
-                } catch (nftErr: any) {
-                    // Non-fatal — investment is recorded; admin can re-trigger mint manually
-                    this.logger.error(
-                        `NFT mint failed for investment ${investment._id}: ${nftErr.message}`,
-                        nftErr.stack,
-                    );
-                    await this.investmentModel.findByIdAndUpdate(investment._id, {
-                        notes: `NFT mint failed: ${nftErr.message}`,
-                    });
-                    investmentEmailNote = `Your investment was recorded, but NFT minting is pending follow-up: ${nftErr.message}`;
                 }
             } else if (investment && !walletAddress) {
                 this.logger.warn(
                     `Investment ${investment._id} has no wallet address — NFT not minted. ` +
                     `Investor must connect wallet in dashboard to trigger manual mint.`,
                 );
+                await this.investmentModel.findByIdAndUpdate(investment._id, {
+                    mintStatus: MintStatus.FAILED,
+                    mintError: 'No investor wallet address provided at checkout.',
+                });
                 investmentEmailNote =
-                    'Your investment was recorded, but no wallet address was available for NFT minting.';
+                    'Your investment was recorded, but no wallet address was available for NFT minting. Connect your wallet in the dashboard to complete minting.';
             }
 
             if (investment) {

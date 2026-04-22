@@ -152,18 +152,25 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     }) {
         const { project, projectType } = await this.resolveCheckoutProject(dto.projectId);
         const currency = (dto.currency || 'UGX').toUpperCase();
-        if (projectType === 'CHARITY') {
+    if (projectType === 'CHARITY') {
             await this.projectsService.ensureProjectCanReceiveDonation(dto.projectId);
         } else {
             await this.projectsService.ensureProjectIsOpenForInvestment(dto.projectId);
+            const requireProvisioning =
+                String(this.configService.get('ROI_REQUIRE_ONCHAIN_PROVISIONING') ?? 'true').toLowerCase() !== 'false';
             const projectOnchainId = String((project as any).projectOnchainId || '').trim();
-            if (!projectOnchainId || projectOnchainId === '0') {
+            const isProvisioned = projectOnchainId.length > 0 && projectOnchainId !== '0';
+            if (requireProvisioning && !isProvisioned) {
                 throw new BadRequestException(
                     'ROI checkout is unavailable until this project has been provisioned on-chain.',
                 );
             }
         }
         const quote = this.buildDpoIncomingQuote(dto.amount, currency);
+        const requireProvisioning =
+            String(this.configService.get('ROI_REQUIRE_ONCHAIN_PROVISIONING') ?? 'true').toLowerCase() !== 'false';
+        const nftMintingEnabled =
+            String(this.configService.get('ROI_DISABLE_NFT_MINTING') ?? 'false').toLowerCase() !== 'true';
 
         return {
             projectId: dto.projectId,
@@ -178,8 +185,14 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             providerNetAmount: quote.providerNetAmount,
             projectNetAmount: quote.projectNetAmount,
             roundingAdjustment: quote.roundingAdjustment,
+            // ROI testing-mode flags — frontend uses these to show bypass-mode info banner
+            roi: projectType !== 'CHARITY'
+                ? { bypassActive: !requireProvisioning, nftMintingEnabled }
+                : undefined,
         };
     }
+
+
 
     async creditTreasuryInboundFee(currency: string, amount: number) {
         const treasuryUserId = this.configService.get<string>('KEIBO_TREASURY_USER_ID');
@@ -1159,8 +1172,11 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             await this.projectsService.ensureProjectCanReceiveDonation(dto.projectId);
         } else {
             await this.projectsService.ensureProjectIsOpenForInvestment(dto.projectId);
-            const projectOnchainId = String((project as any).projectOnchainId || '').trim();
-            if (!projectOnchainId || projectOnchainId === '0') {
+            const requireProvisioning =
+                String(this.configService.get('ROI_REQUIRE_ONCHAIN_PROVISIONING') ?? 'true').toLowerCase() !== 'false';
+            const rawOnchainId = String((project as any).projectOnchainId || '').trim();
+            const isProvisioned = rawOnchainId.length > 0 && rawOnchainId !== '0';
+            if (requireProvisioning && !isProvisioned) {
                 throw new BadRequestException(
                     'ROI checkout is unavailable until this project has been provisioned on-chain.',
                 );
@@ -1204,6 +1220,14 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
                 companyRef,
             )).token;
 
+        const requireProvisioning =
+            String(this.configService.get('ROI_REQUIRE_ONCHAIN_PROVISIONING') ?? 'true').toLowerCase() !== 'false';
+        const disableNftMinting =
+            String(this.configService.get('ROI_DISABLE_NFT_MINTING') ?? 'false').toLowerCase() === 'true';
+        const roiOnchainId = String((project as any).projectOnchainId || '').trim();
+        const isProvisioned = roiOnchainId.length > 0 && roiOnchainId !== '0';
+        const provisioningBypassed = !isCharity && !requireProvisioning && !isProvisioned;
+
         const transaction = await this.paymentTransactionModel.create({
             ...(userId ? { userId: new Types.ObjectId(userId) } : {}),
             projectId: new Types.ObjectId(dto.projectId),
@@ -1226,6 +1250,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
                 localBypass: isLocalDonationBypass,
                 companyRef,
                 dpoQuote: quote,
+                // Explicit bypass markers — marketplace/NFT logic MUST check these
+                provisioningBypassed,
+                nftMintingDisabled: disableNftMinting,
             },
         });
 

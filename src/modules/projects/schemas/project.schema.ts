@@ -7,6 +7,14 @@ import { CharitySubcategory } from '../../../common/enums/charity-subcategory.en
 import { ROIIndustry } from '../../../common/enums/roi-industry.enum';
 import { User } from '../../users/schemas/user.schema';
 
+/** Lifecycle state of the on-chain provisioning for ROI projects. */
+export enum OnchainProvisioningStatus {
+  NOT_STARTED = 'NOT_STARTED',
+  PENDING = 'PENDING',
+  READY = 'READY',
+  FAILED = 'FAILED',
+}
+
 export type ProjectDocument = HydratedDocument<Project>;
 
 @Schema({
@@ -116,6 +124,19 @@ export class Project {
   @Prop({ type: String, trim: true })
   projectOnchainId?: string;
 
+  @Prop({
+    type: String,
+    enum: OnchainProvisioningStatus,
+    default: OnchainProvisioningStatus.NOT_STARTED,
+    index: true,
+  })
+  onchainProvisioningStatus!: OnchainProvisioningStatus;
+
+  @Prop({ type: String, trim: true })
+  onchainProvisioningError?: string;
+
+  @Prop({ type: Date })
+  onchainProvisionedAt?: Date;
 
   @Prop({ type: Boolean, default: true })
   requiresAgreement!: boolean;
