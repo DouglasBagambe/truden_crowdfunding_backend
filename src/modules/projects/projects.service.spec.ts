@@ -81,6 +81,7 @@ const createService = () => {
     projectsRepo,
     milestonesRepo,
     usersRepo,
+    configService,
     agreementTemplatesService,
     attachmentRequirementsService,
     attachmentFilesRepo,
@@ -307,6 +308,38 @@ describe('ProjectsService', () => {
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  it('allows investing in legacy approved ROI projects', async () => {
+    const { service, projectsRepo, configService } = createService();
+    projectsRepo.findById.mockResolvedValue({
+      status: ProjectStatus.APPROVED,
+      projectType: ProjectType.ROI,
+      targetAmount: 1000,
+    });
+    configService.get.mockReturnValue(undefined);
+
+    await expect(
+      service.ensureProjectIsOpenForInvestment(mockProjectId),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        status: ProjectStatus.APPROVED,
+      }),
+    );
+  });
+
+  it('blocks investing in ROI projects outside approved/funding states', async () => {
+    const { service, projectsRepo, configService } = createService();
+    projectsRepo.findById.mockResolvedValue({
+      status: ProjectStatus.PENDING_REVIEW,
+      projectType: ProjectType.ROI,
+      targetAmount: 1000,
+    });
+    configService.get.mockReturnValue(undefined);
+
+    await expect(
+      service.ensureProjectIsOpenForInvestment(mockProjectId),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('allows approval (verification log not required)', async () => {
     const { service, projectsRepo, usersRepo } = createService();
     const logs: CreateVerificationLogDto[] = [
@@ -324,14 +357,17 @@ describe('ProjectsService', () => {
       kyc: { status: KYCStatus.VERIFIED },
       creatorVerification: { status: CreatorVerificationStatus.VERIFIED },
     });
-    projectsRepo.setStatus.mockResolvedValue(true);
+    projectsRepo.updateById.mockResolvedValue(true);
     await service.decide(mockProjectId, {
       finalStatus: ProjectStatus.APPROVED,
     } as any);
-    expect(projectsRepo.setStatus).toHaveBeenCalledWith(
+    expect(projectsRepo.updateById).toHaveBeenCalledWith(
       mockProjectId,
-      ProjectStatus.APPROVED,
-      undefined,
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: ProjectStatus.APPROVED,
+        }),
+      }),
     );
   });
 });

@@ -701,7 +701,13 @@ export class ProjectsService {
       String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() === 'true';
 
     if (!investmentsTestMode && !kycBypass) {
-      if (project.status !== ProjectStatus.FUNDING) {
+      const openInvestmentStatuses = [
+        ProjectStatus.FUNDING,
+        // Legacy ROI approvals may still be stored as APPROVED instead of FUNDING.
+        ProjectStatus.APPROVED,
+      ];
+
+      if (!openInvestmentStatuses.includes(project.status)) {
         throw new BadRequestException('Project is not accepting investments');
       }
     }
