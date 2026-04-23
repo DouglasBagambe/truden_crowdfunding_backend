@@ -53,6 +53,32 @@ export class PaymentInvestmentListener {
         return displayName || fullName || user?.email || fallback;
     }
 
+    private extractObjectId(value: unknown): string | undefined {
+        if (!value) {
+            return undefined;
+        }
+
+        if (typeof value === 'string') {
+            return value;
+        }
+
+        if (value instanceof Types.ObjectId) {
+            return value.toString();
+        }
+
+        if (typeof value === 'object' && value !== null) {
+            const nestedId = (value as { _id?: unknown })._id;
+            if (typeof nestedId === 'string') {
+                return nestedId;
+            }
+            if (nestedId instanceof Types.ObjectId) {
+                return nestedId.toString();
+            }
+        }
+
+        return undefined;
+    }
+
     private async sendDonationEmails(params: {
         donorEmail?: string;
         donorName?: string;
@@ -139,6 +165,16 @@ export class PaymentInvestmentListener {
                 .findById(transactionId)
                 .lean() as PaymentTransactionDocument | null;
 
+            if (!tx) {
+                this.logger.warn(`Payment transaction ${transactionId} no longer exists; skipping listener`);
+                return;
+            }
+
+            if ((tx.metadata as any)?.applicationAppliedAt) {
+                this.logger.log(`Payment transaction ${transactionId} already applied; skipping replay`);
+                return;
+            }
+
             const projectType = (
                 payload.projectType ||
                 (tx?.metadata as any)?.projectType ||
@@ -154,8 +190,9 @@ export class PaymentInvestmentListener {
             const amountCurrency = (payload.currency ?? 'UGX').toUpperCase();
             const project = await this.projectsService.ensureProjectExists(projectId);
             const projectName = String((project as any).name || 'project');
-            const creator = project?.creatorId
-                ? await this.usersRepository.findById(String(project.creatorId))
+            const creatorId = this.extractObjectId((project as any)?.creatorId);
+            const creator = creatorId
+                ? await this.usersRepository.findById(creatorId)
                 : null;
             const creatorEmail = creator?.email;
             const creatorName = this.getUserDisplayName(creator);
@@ -224,7 +261,10 @@ export class PaymentInvestmentListener {
             // ── Step 4: Credit creator's Keibo fiat wallet ────────────────────────
             try {
                 if (project?.creatorId) {
-                    const creatorId = String(project.creatorId);
+                    if (!creatorId) {
+                        throw new Error(`Project ${projectId} creator id could not be resolved`);
+                    }
+
                     const creatorWallet = await this.paymentsService.getOrCreateWallet(creatorId);
                     const currency = amountCurrency;
 
@@ -376,6 +416,17 @@ export class PaymentInvestmentListener {
                     nftNote: investmentEmailNote,
                 });
             }
+
+            await this.paymentTransactionModel.updateOne(
+                { _id: new Types.ObjectId(transactionId) },
+                {
+                    $set: {
+                        'metadata.applicationAppliedAt': new Date(),
+                        'metadata.applicationProjectType': projectType,
+                        'metadata.applicationNftMinted': investmentNftMinted,
+                    },
+                },
+            );
         } catch (err: any) {
             this.logger.error(
                 `Failed to handle payment.successful for transaction ${transactionId}: ${err.message}`,

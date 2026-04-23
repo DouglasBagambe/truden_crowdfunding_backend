@@ -261,6 +261,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         transaction: PaymentTransactionDocument,
         verify: Awaited<ReturnType<DpoService['verifyToken']>>,
         sourcePayload?: Record<string, unknown>,
+        emitSuccessEvent: boolean = true,
     ) {
         const mergedWebhookData = {
             ...(sourcePayload || {}),
@@ -293,7 +294,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
                 mergedWebhookData,
             );
 
-            if (changed) {
+            if (changed && emitSuccessEvent) {
                 this.eventEmitter.emit('payment.successful', {
                     transactionId: transaction._id,
                     userId: transaction.userId,
@@ -1329,7 +1330,54 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     }
 
     async repairDPOPaymentByToken(token: string) {
-        return this.verifyDPOPayment(token);
+        const transaction = await this.paymentTransactionModel.findOne({ dpoToken: token });
+        if (!transaction) {
+            throw new NotFoundException('DPO transaction not found');
+        }
+
+        if ((transaction.metadata as any)?.localBypass) {
+            return {
+                status: transaction.status,
+                verify: {
+                    status: '000',
+                    message: 'Local development donation bypass confirmed.',
+                },
+            };
+        }
+
+        const verify = await this.dpoService.verifyToken(token);
+        this.logger.log(
+            `DPO repair invoked: token=${token} providerStatus=${verify.status} companyRef=${verify.companyRef || 'n/a'} amount=${verify.amount || 'n/a'} net=${verify.netAmount || 'n/a'}`,
+        );
+
+        const resolvedStatus = await this.synchronizeDpoTransaction(
+            transaction,
+            verify,
+            { source: 'repair' },
+            false,
+        );
+
+        const refreshed = await this.paymentTransactionModel.findById(transaction._id).lean();
+        const currentStatus = refreshed?.status || resolvedStatus || transaction.status;
+        const applicationAppliedAt = (refreshed?.metadata as any)?.applicationAppliedAt;
+
+        if (currentStatus === PaymentStatus.Successful && !applicationAppliedAt) {
+            this.eventEmitter.emit('payment.successful', {
+                transactionId: transaction._id,
+                userId: transaction.userId,
+                projectId: transaction.projectId,
+                amount: transaction.amount,
+                currency: transaction.currency,
+                projectType: (transaction.metadata as any)?.projectType,
+                walletAddress: (transaction.metadata as any)?.walletAddress || undefined,
+            });
+        }
+
+        return {
+            status: currentStatus,
+            verify,
+            replayTriggered: currentStatus === PaymentStatus.Successful && !applicationAppliedAt,
+        };
     }
 
     /**
