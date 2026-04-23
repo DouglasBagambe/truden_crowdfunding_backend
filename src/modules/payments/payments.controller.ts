@@ -158,6 +158,14 @@ export class PaymentsController {
         return this.paymentsService.verifyDPOPayment(token);
     }
 
+    @Post('dpo/repair/:token')
+    @Roles(UserRole.ADMIN)
+    @ApiBearerAuth('JWT-auth')
+    @ApiOperation({ summary: 'Re-run DPO verification and repair a paid transaction by token' })
+    async repairDPOPayment(@Param('token') token: string) {
+        return this.paymentsService.repairDPOPaymentByToken(token);
+    }
+
     @Post('payout-callback')
     @HttpCode(HttpStatus.OK)
     @Public()

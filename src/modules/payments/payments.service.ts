@@ -1318,14 +1318,18 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
             `DPO verify polled: token=${token} providerStatus=${verify.status} companyRef=${verify.companyRef || 'n/a'} amount=${verify.amount || 'n/a'} net=${verify.netAmount || 'n/a'}`,
         );
-        await this.synchronizeDpoTransaction(
+        const resolvedStatus = await this.synchronizeDpoTransaction(
             transaction,
             verify,
             { source: 'verify' },
         );
 
         const refreshed = await this.paymentTransactionModel.findById(transaction._id).lean();
-        return { status: refreshed?.status || transaction.status, verify };
+        return { status: refreshed?.status || resolvedStatus || transaction.status, verify };
+    }
+
+    async repairDPOPaymentByToken(token: string) {
+        return this.verifyDPOPayment(token);
     }
 
     /**
