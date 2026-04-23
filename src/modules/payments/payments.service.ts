@@ -240,9 +240,11 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         }
 
         const actualProviderNetAmount = parseProviderAmount(verify.netAmount);
+        const hasUsableProviderNetAmount =
+            actualProviderNetAmount !== null && actualProviderNetAmount > 0;
         if (
             expectedProviderNetAmount > 0 &&
-            actualProviderNetAmount !== null &&
+            hasUsableProviderNetAmount &&
             !amountsMatch({
                 expected: expectedProviderNetAmount,
                 actual: actualProviderNetAmount,
@@ -269,12 +271,21 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         if (disposition.paymentStatus === PaymentStatus.Successful) {
             const settlementCheck = this.verifyDpoSettlementData(transaction, verify);
             if (!settlementCheck.ok) {
+                this.logger.error(
+                    `DPO settlement verification failed: token=${transaction.dpoToken} reason=${settlementCheck.reason || 'unknown'} providerStatus=${verify.status} amount=${verify.amount || 'n/a'} companyRef=${verify.companyRef || 'n/a'} net=${verify.netAmount || 'n/a'}`,
+                );
                 await this.markTransactionFailedIfUnsettled(
                     String(transaction._id),
                     settlementCheck.reason || 'DPO settlement verification failed',
                     mergedWebhookData,
                 );
                 return PaymentStatus.Failed;
+            }
+
+            if (!verify.companyRef || Number(verify.netAmount || 0) <= 0) {
+                this.logger.warn(
+                    `DPO settlement fields incomplete but payment is marked successful: token=${transaction.dpoToken} companyRef=${verify.companyRef || 'n/a'} net=${verify.netAmount || 'n/a'}`,
+                );
             }
 
             const changed = await this.markTransactionSuccessful(
