@@ -41,6 +41,12 @@ export interface InvestmentView {
   txHash?: string | null;
   /** Self-custodial wallet address for NFT delivery */
   walletAddress?: string | null;
+  nftProjectId?: number | null;
+  nftTokenAmount?: number | null;
+  nftTxHash?: string | null;
+  nftMetadataUri?: string | null;
+  nftMinted?: boolean;
+  listed?: boolean;
   nft?: InvestmentViewNft;
   status: InvestmentStatus;
   createdAt: Date;

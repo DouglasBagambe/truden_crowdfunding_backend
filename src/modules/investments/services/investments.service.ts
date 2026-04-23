@@ -105,7 +105,6 @@ export class InvestmentsService {
   }
 
   async getMyInvestments(currentUser: JwtPayload): Promise<InvestmentView[]> {
-    this.ensureInvestorRole(currentUser);
     const userId = currentUser.sub;
     if (!userId) throw new BadRequestException('Missing user id in token');
     return this.getInvestmentsByUser(userId, currentUser);
@@ -326,6 +325,12 @@ export class InvestmentsService {
       currency: (investment as any).currency ?? 'UGX',
       txHash: investment.txHash ?? null,
       walletAddress: (investment as any).walletAddress ?? null,
+      nftProjectId: (investment as any).nftProjectId ?? null,
+      nftTokenAmount: (investment as any).nftTokenAmount ?? null,
+      nftTxHash: (investment as any).nftTxHash ?? null,
+      nftMetadataUri: (investment as any).nftMetadataUri ?? null,
+      nftMinted: (investment as any).nftMinted ?? false,
+      listed: (investment as any).listed ?? false,
       nft: {
         projectId: (investment as any).nftProjectId ?? null,
         tokenAmount: (investment as any).nftTokenAmount ?? null,

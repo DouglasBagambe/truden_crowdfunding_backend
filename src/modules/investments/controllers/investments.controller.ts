@@ -46,7 +46,7 @@ export class InvestmentsController {
   }
 
   @Get('user/:userId')
-  @Roles(UserRole.INVESTOR, UserRole.ADMIN, UserRole.INNOVATOR)
+  @Roles(UserRole.INVESTOR, UserRole.ADMIN, UserRole.SUPERADMIN, UserRole.INNOVATOR)
   async getUserInvestments(
     @Param('userId') userId: string,
     @CurrentUser() currentUser: JwtPayload,
@@ -55,7 +55,7 @@ export class InvestmentsController {
   }
 
   @Get('my')
-  @Roles(UserRole.INVESTOR)
+  @Roles(UserRole.INVESTOR, UserRole.ADMIN, UserRole.SUPERADMIN, UserRole.INNOVATOR)
   async getMyInvestments(@CurrentUser() currentUser: JwtPayload) {
     return this.investmentsService.getMyInvestments(currentUser);
   }
