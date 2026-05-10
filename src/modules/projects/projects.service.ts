@@ -207,7 +207,7 @@ export class ProjectsService {
     const currentType = this.normalizeProjectType(
       this.readProjectType(project),
     );
-    if (project.creatorId !== creatorId) {
+    if (this.extractObjectIdString(project.creatorId, 'creatorId') !== creatorId) {
       throw new ForbiddenException('You can only edit your own projects');
     }
     const isOwnerEditable = OWNER_EDITABLE_STATUSES.some(
@@ -393,7 +393,7 @@ export class ProjectsService {
     this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
-    if (project.creatorId !== creatorId) {
+    if (this.extractObjectIdString(project.creatorId, 'creatorId') !== creatorId) {
       throw new ForbiddenException('You can only submit your own projects');
     }
     if (
@@ -1201,7 +1201,7 @@ export class ProjectsService {
     this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
-    if (project.creatorId !== userId) {
+    if (this.extractObjectIdString(project.creatorId, 'creatorId') !== userId) {
       throw new ForbiddenException(
         'Only the project owner can upload attachments',
       );
@@ -1673,7 +1673,7 @@ export class ProjectsService {
     this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
-    if (String(project.creatorId) !== ownerId) {
+    if (this.extractObjectIdString(project.creatorId, 'creatorId') !== ownerId) {
       throw new ForbiddenException('You can only view your own project');
     }
     return this.getProjectWithMilestones(projectId);

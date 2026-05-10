@@ -61,6 +61,11 @@ const createService = () => {
   const viemNftClient = {
     createProjectNFT: jest.fn(),
     mintInvestmentTokens: jest.fn(),
+    getDiagnostics: jest.fn().mockReturnValue({
+      chainId: 84532,
+      rpcUrl: 'https://example-rpc.test',
+      nftAddress: '0x0000000000000000000000000000000000000001',
+    }),
   };
 
   const service = new ProjectsService(
