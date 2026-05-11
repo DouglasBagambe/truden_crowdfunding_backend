@@ -19,16 +19,26 @@ const toNumber = (value: unknown, fallback: number) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+const toStringArray = (value: unknown): string[] | undefined => {
+  if (value === undefined || value === null || value === '') return undefined;
+  const values = Array.isArray(value) ? value : String(value).split(',');
+  return values
+    .map((item) => String(item).trim())
+    .filter(Boolean);
+};
+
 export class QueryProjectsDto {
   @ApiPropertyOptional({ enum: ProjectStatus, isArray: true })
   @IsOptional()
   @IsArray()
   @IsEnum(ProjectStatus, { each: true })
+  @Transform(({ value }) => toStringArray(value)?.map((status) => status.toUpperCase()))
   statuses?: ProjectStatus[];
 
   @ApiPropertyOptional({ enum: ProjectType, description: 'Project type filter' })
   @IsOptional()
   @IsEnum(ProjectType)
+  @Transform(({ value }) => (value ? String(value).trim().toUpperCase() : value))
   type?: ProjectType;
 
   @ApiPropertyOptional({
@@ -37,6 +47,7 @@ export class QueryProjectsDto {
   })
   @IsOptional()
   @IsEnum(CharityCategory)
+  @Transform(({ value }) => (value ? String(value).trim().toLowerCase() : value))
   category?: CharityCategory;
 
   @ApiPropertyOptional({
@@ -45,6 +56,7 @@ export class QueryProjectsDto {
   })
   @IsOptional()
   @IsEnum(ROIIndustry)
+  @Transform(({ value }) => (value ? String(value).trim().toLowerCase() : value))
   industry?: ROIIndustry;
 
   @ApiPropertyOptional({ description: 'Filter by country of operation' })
