@@ -869,16 +869,19 @@ export class AuthService {
         : { ...(user as any) };
 
     // Drop passwordHash/nonce/__v from responses
-    const { passwordHash, nonce, __v, ...sanitized } = raw;
+    const { passwordHash, nonce, __v, mfa, ...sanitized } = raw;
     const primaryWallet = raw.primaryWallet;
     const roles = Array.isArray(raw.roles) ? raw.roles : [];
     void passwordHash;
     void nonce;
     void __v;
+    void mfa;
     const id = raw._id != null ? String(raw._id) : undefined;
     return {
       ...sanitized,
       roles,
+      mfa: { enabled: Boolean(raw.mfa?.enabled) },
+      mfaEnabled: Boolean(raw.mfa?.enabled),
       walletAddress: primaryWallet,
       id,
     };

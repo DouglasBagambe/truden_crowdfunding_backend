@@ -725,6 +725,9 @@ export class UsersService {
     const obj = user.toObject();
     delete (obj as any).password;
     delete (obj as any).passwordHash;
+    const mfaEnabled = Boolean(obj.mfa?.enabled);
+    obj.mfa = { enabled: mfaEnabled };
+    (obj as any).mfaEnabled = mfaEnabled;
     // Decrypt KYC PII for runtime use; keep encrypted data at rest
     if (obj.kyc?.piiEncrypted || obj.kyc?.attachmentsEncrypted) {
       const key = this.safeGetEncryptionKey();
