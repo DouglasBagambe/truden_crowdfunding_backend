@@ -357,6 +357,39 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         return String(rawId);
     }
 
+    private getProviderTransferStatus(payload: unknown): string {
+        const root = this.asRecord(payload);
+        const data = this.asRecord(root?.data);
+        const nestedData = this.asRecord(data?.data);
+
+        return String(
+            data?.status ??
+            nestedData?.status ??
+            root?.status ??
+            '',
+        )
+            .trim()
+            .toLowerCase();
+    }
+
+    private assertPayoutWasAccepted(payload: unknown, reference: string) {
+        const root = this.asRecord(payload);
+        const data = this.asRecord(root?.data);
+        const providerStatus = this.getProviderTransferStatus(payload);
+        const topLevelStatus = String(root?.status || '').trim().toLowerCase();
+        const failedStatuses = new Set(['failed', 'error', 'cancelled', 'canceled', 'reversed']);
+
+        if (failedStatuses.has(providerStatus) || failedStatuses.has(topLevelStatus)) {
+            const reason =
+                data?.complete_message ||
+                data?.message ||
+                root?.message ||
+                'Provider rejected payout request';
+            this.logger.error(`Payout rejected before wallet debit: reference=${reference}, status=${providerStatus || topLevelStatus}, reason=${reason}`);
+            throw new BadRequestException(`Payout failed: ${reason}`);
+        }
+    }
+
     private async markTransactionSuccessful(
         transactionId: string,
         webhookData?: Record<string, unknown>,
@@ -851,6 +884,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             beneficiaryName: method.accountName,
             mobileNumber: method.accountNumber,
         });
+        this.assertPayoutWasAccepted(payoutResult, payoutRef);
 
         // Deduct full requested amount from creator's Charity wallet
         (wallet.fiatBalance as any)[currency] -= dto.amount;
@@ -877,6 +911,8 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         // Create transaction record
         const payoutTransferId =
             payoutResult?.data?.id || payoutResult?.data?.data?.id || null;
+        const payoutProviderStatus = this.getProviderTransferStatus(payoutResult);
+        const payoutIsImmediatelySuccessful = ['successful', 'success', 'completed'].includes(payoutProviderStatus);
         const transaction = await this.paymentTransactionModel.create({
             userId: new Types.ObjectId(userId),
             projectId: new Types.ObjectId(dto.projectId || '000000000000000000000000'),
@@ -884,12 +920,14 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             currency: dto.currency,
             paymentMethod: method.type === 'mobile_money' ? PaymentMethod.MobileMoney : PaymentMethod.BankTransfer,
             provider: PaymentProvider.Flutterwave,
-            status: PaymentStatus.Processing,
+            status: payoutIsImmediatelySuccessful ? PaymentStatus.Successful : PaymentStatus.Processing,
             flutterwaveReference: payoutRef,
+            ...(payoutIsImmediatelySuccessful ? { completedAt: new Date() } : {}),
             metadata: {
                 type: 'WITHDRAWAL_CHARITY',
                 payoutResult,
                 payoutTransferId,
+                payoutProviderStatus: payoutProviderStatus || 'processing',
                 platformFee,
                 payoutAmount,
                 feeRate: PLATFORM_FEE_RATE,
@@ -899,21 +937,28 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
 
         this.logger.log(`Charity Withdrawal processed for user ${userId}`);
 
-        await this.sendWithdrawalEmail(userId, {
-            subject: 'Withdrawal submitted',
-            body: `Your withdrawal of ${this.formatAmount(currency, dto.amount)} has been submitted to Flutterwave. Final delivery depends on provider confirmation.`,
-        });
+        await this.sendWithdrawalEmail(userId, payoutIsImmediatelySuccessful
+            ? {
+                subject: 'Withdrawal completed',
+                body: `Your withdrawal of ${this.formatAmount(currency, dto.amount)} has been completed successfully.`,
+            }
+            : {
+                subject: 'Withdrawal request submitted',
+                body: `Your withdrawal of ${this.formatAmount(currency, dto.amount)} has been submitted to Flutterwave and is awaiting Mobile Money delivery confirmation. We will notify you again after the provider confirms completion.`,
+            });
 
         return {
             transactionId: transaction._id,
-            status: PaymentStatus.Processing,
+            status: transaction.status,
             amount: dto.amount,
             platformFee,
             youReceive: payoutAmount,
             providerReference: payoutRef,
             providerTransferId: payoutTransferId,
-            providerStatus: payoutResult?.status || payoutResult?.data?.status || 'processing',
-            message: 'Withdrawal request submitted to Flutterwave. Final delivery depends on network and provider confirmation.',
+            providerStatus: payoutProviderStatus || payoutResult?.status || 'processing',
+            message: payoutIsImmediatelySuccessful
+                ? 'Withdrawal completed successfully.'
+                : 'Withdrawal request submitted to Flutterwave. Mobile Money delivery is still awaiting provider confirmation.',
             newBalance: (wallet.fiatBalance as any)[currency],
         };
     }
@@ -935,6 +980,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             beneficiaryName: transaction.metadata!.method.accountName,
             mobileNumber: transaction.metadata!.method.accountNumber,
         });
+        this.assertPayoutWasAccepted(payoutResult, payoutRef);
 
         const platformFee = transaction.metadata!.platformFee;
         const currency = transaction.currency;
@@ -951,19 +997,30 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             }
         }
 
-        transaction.status = PaymentStatus.Processing;
+        const payoutProviderStatus = this.getProviderTransferStatus(payoutResult);
+        const payoutIsImmediatelySuccessful = ['successful', 'success', 'completed'].includes(payoutProviderStatus);
+        transaction.status = payoutIsImmediatelySuccessful ? PaymentStatus.Successful : PaymentStatus.Processing;
+        if (payoutIsImmediatelySuccessful) {
+            transaction.completedAt = new Date();
+        }
         transaction.flutterwaveReference = payoutRef;
         transaction.metadata!.payoutResult = payoutResult;
         transaction.metadata!.payoutTransferId =
             payoutResult?.data?.id || payoutResult?.data?.data?.id || null;
+        transaction.metadata!.payoutProviderStatus = payoutProviderStatus || 'processing';
         transaction.metadata!.pendingApproval = false;
         transaction.markModified('metadata');
         await transaction.save();
 
-        await this.sendWithdrawalEmail(String(transaction.userId), {
-            subject: 'ROI withdrawal approved',
-            body: `Your ROI withdrawal of ${this.formatAmount(transaction.currency, Math.abs(transaction.amount))} has been approved and submitted to Flutterwave for processing.`,
-        });
+        await this.sendWithdrawalEmail(String(transaction.userId), payoutIsImmediatelySuccessful
+            ? {
+                subject: 'ROI withdrawal completed',
+                body: `Your ROI withdrawal of ${this.formatAmount(transaction.currency, Math.abs(transaction.amount))} has been completed successfully.`,
+            }
+            : {
+                subject: 'ROI withdrawal approved',
+                body: `Your ROI withdrawal of ${this.formatAmount(transaction.currency, Math.abs(transaction.amount))} has been approved and submitted to Flutterwave. Mobile Money delivery is still awaiting provider confirmation.`,
+            });
 
         return { success: true, message: 'Payout approved and processing' };
     }
