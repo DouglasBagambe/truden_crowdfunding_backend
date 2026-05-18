@@ -27,7 +27,7 @@ export class FlutterwaveService {
     }
 
     private getBackendUrl(): string {
-        return (this.configService.get<string>('BACKEND_URL') || 'https://trufund.onrender.com')
+        return (this.configService.get<string>('BACKEND_URL') || '')
             .trim()
             .replace(/[,\s]+$/, '')
             .replace(/\/+$/, '');
@@ -42,7 +42,12 @@ export class FlutterwaveService {
     }
 
     private getPayoutCallbackUrl(): string {
-        const base = `${this.getBackendUrl()}/api/payments/payout-callback`;
+        const backendUrl = this.getBackendUrl();
+        if (!backendUrl) {
+            throw new BadRequestException('BACKEND_URL is required for Flutterwave payout callbacks');
+        }
+
+        const base = `${backendUrl}/api/payments/payout-callback`;
         const token = this.getPayoutCallbackToken();
         if (!token) {
             return base;
