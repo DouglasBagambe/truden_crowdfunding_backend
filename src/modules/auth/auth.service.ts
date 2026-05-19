@@ -31,6 +31,7 @@ import {
 } from './schemas/refresh-token.schema';
 import { RolesService } from '../roles/roles.service';
 import { AuditService } from '../audit/audit.service';
+import { AppEmailService } from '../../common/services/app-email.service';
 
 @Injectable()
 export class AuthService {
@@ -46,6 +47,7 @@ export class AuthService {
   private readonly emailVerificationMaxSends = 3;
   private readonly emailVerificationMaxAttempts = 5;
   private readonly emailVerificationBlockMs = 10 * 60 * 1000; // 10 minutes
+  private readonly emailMfaCodeWindowMs = 10 * 60 * 1000;
 
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
@@ -55,6 +57,7 @@ export class AuthService {
     private configService: ConfigService,
     private rolesService: RolesService,
     private readonly auditService: AuditService,
+    private readonly appEmailService: AppEmailService,
   ) { }
 
   private isLocalEmailVerificationBypassEnabled(): boolean {
@@ -135,7 +138,7 @@ export class AuthService {
 
     const user = await this.userModel
       .findOne({ email: email.toLowerCase() })
-      .select('+passwordHash +mfa.secret +mfa.setupSecret')
+      .select('+passwordHash +mfa.secret +mfa.setupSecret +mfa.emailCodeHash +mfa.emailCodeExpiresAt')
       .exec();
 
     if (!user) {
@@ -167,12 +170,28 @@ export class AuthService {
     const requiresMfa = this.requiresMfa(user);
     if (requiresMfa) {
       if (!loginDto.otp) {
-        throw new UnauthorizedException('MFA code required');
+        if (user.mfa?.emailEnabled) {
+          await this.issueEmailMfaCode(user);
+        }
+        throw new UnauthorizedException({
+          message: 'MFA code required',
+          code: 'MFA_REQUIRED',
+          factors: {
+            authenticator: Boolean(user.mfa?.secret),
+            email: Boolean(user.mfa?.emailEnabled),
+          },
+          emailSent: Boolean(user.mfa?.emailEnabled),
+        });
       }
       const secret = user.mfa?.secret;
-      const valid = secret ? this.verifyTotp(secret, loginDto.otp) : false;
+      const valid =
+        (secret ? this.verifyTotp(secret, loginDto.otp) : false) ||
+        this.verifyEmailMfaCode(user, loginDto.otp);
       if (!valid) {
         throw new UnauthorizedException('Invalid MFA code');
+      }
+      if (user.isModified('mfa')) {
+        await user.save();
       }
     }
 
@@ -708,6 +727,7 @@ export class AuthService {
       ...(user.mfa || {}),
       setupSecret: secret.base32,
       enabled: user.mfa?.enabled ?? false,
+      emailEnabled: user.mfa?.emailEnabled ?? false,
     };
     await user.save();
     return {
@@ -732,7 +752,9 @@ export class AuthService {
       throw new UnauthorizedException('Invalid MFA code');
     }
     user.mfa = {
+      ...(user.mfa || {}),
       enabled: true,
+      emailEnabled: user.mfa?.emailEnabled ?? false,
       secret,
       setupSecret: undefined,
       verifiedAt: new Date(),
@@ -741,24 +763,65 @@ export class AuthService {
     return { message: 'MFA enabled' };
   }
 
+  async startEmailMfaSetup(userId: string) {
+    const user = await this.userModel
+      .findById(userId)
+      .select('+mfa.emailCodeHash +mfa.emailCodeExpiresAt')
+      .exec();
+    if (!user) throw new UnauthorizedException('User not found');
+    if (!user.email) throw new BadRequestException('User email is missing');
+
+    await this.issueEmailMfaCode(user);
+    await user.save();
+    return { message: 'Email MFA code sent' };
+  }
+
+  async enableEmailMfa(userId: string, token: string) {
+    const user = await this.userModel
+      .findById(userId)
+      .select('+mfa.emailCodeHash +mfa.emailCodeExpiresAt')
+      .exec();
+    if (!user) throw new UnauthorizedException('User not found');
+
+    if (!this.verifyEmailMfaCode(user, token)) {
+      throw new UnauthorizedException('Invalid email MFA code');
+    }
+
+    user.mfa = {
+      ...(user.mfa || {}),
+      enabled: true,
+      emailEnabled: true,
+      emailCodeHash: undefined,
+      emailCodeExpiresAt: undefined,
+      verifiedAt: new Date(),
+    };
+    await user.save();
+    return { message: 'Email MFA enabled' };
+  }
+
   async disableMfa(userId: string, token: string) {
     const user = await this.userModel
       .findById(userId)
-      .select('+mfa.secret +mfa.setupSecret')
+      .select('+mfa.secret +mfa.setupSecret +mfa.emailCodeHash +mfa.emailCodeExpiresAt')
       .exec();
     if (!user) throw new UnauthorizedException('User not found');
     const secret = user.mfa?.secret;
-    if (!secret || !user.mfa?.enabled) {
+    if (!user.mfa?.enabled) {
       throw new BadRequestException('MFA is not enabled');
     }
-    const verified = this.verifyTotp(secret, token);
+    const verified =
+      (secret ? this.verifyTotp(secret, token) : false) ||
+      this.verifyEmailMfaCode(user, token);
     if (!verified) {
       throw new UnauthorizedException('Invalid MFA code');
     }
     user.mfa = {
       enabled: false,
+      emailEnabled: false,
       secret: undefined,
       setupSecret: undefined,
+      emailCodeHash: undefined,
+      emailCodeExpiresAt: undefined,
       verifiedAt: undefined,
     };
     await user.save();
@@ -880,7 +943,11 @@ export class AuthService {
     return {
       ...sanitized,
       roles,
-      mfa: { enabled: Boolean(raw.mfa?.enabled) },
+      mfa: {
+        enabled: Boolean(raw.mfa?.enabled),
+        emailEnabled: Boolean(raw.mfa?.emailEnabled),
+        authenticatorEnabled: Boolean(raw.mfa?.secret),
+      },
       mfaEnabled: Boolean(raw.mfa?.enabled),
       walletAddress: primaryWallet,
       id,
@@ -910,6 +977,59 @@ export class AuthService {
       token,
       window: 1,
     });
+  }
+
+  private generateEmailMfaCode(): string {
+    return String(crypto.randomInt(100000, 1000000));
+  }
+
+  private async issueEmailMfaCode(user: UserDocument) {
+    if (!user.email) {
+      throw new BadRequestException('User email is missing');
+    }
+
+    const code = this.generateEmailMfaCode();
+    user.mfa = {
+      ...(user.mfa || {}),
+      enabled: user.mfa?.enabled ?? false,
+      emailEnabled: user.mfa?.emailEnabled ?? false,
+      emailCodeHash: this.hashToken(code),
+      emailCodeExpiresAt: new Date(Date.now() + this.emailMfaCodeWindowMs),
+    };
+    user.markModified('mfa');
+
+    const sent = await this.appEmailService.send({
+      to: user.email,
+      subject: 'Your Keibo sign-in code',
+      text: `Your Keibo verification code is ${code}. It expires in 10 minutes.`,
+      html: `<p>Your Keibo verification code is <strong>${code}</strong>.</p><p>This code expires in 10 minutes.</p>`,
+    });
+
+    if (!sent) {
+      throw new BadRequestException('Unable to send MFA email code');
+    }
+  }
+
+  private verifyEmailMfaCode(user: UserDocument, token: string): boolean {
+    const hash = user.mfa?.emailCodeHash;
+    const expiresAt = user.mfa?.emailCodeExpiresAt;
+    if (!hash || !expiresAt) {
+      return false;
+    }
+    if (expiresAt.getTime() < Date.now()) {
+      return false;
+    }
+    if (this.hashToken(token.trim()) !== hash) {
+      return false;
+    }
+
+    user.mfa = {
+      ...(user.mfa || {}),
+      emailCodeHash: undefined,
+      emailCodeExpiresAt: undefined,
+    };
+    user.markModified('mfa');
+    return true;
   }
 
   async triggerEmailVerification(user: UserDocument) {

@@ -141,11 +141,20 @@ export class MfaSettings {
   @Prop({ type: Boolean, default: false })
   enabled!: boolean;
 
+  @Prop({ type: Boolean, default: false })
+  emailEnabled!: boolean;
+
   @Prop({ type: String, select: false, trim: true })
   secret?: string;
 
   @Prop({ type: String, select: false, trim: true })
   setupSecret?: string;
+
+  @Prop({ type: String, select: false, trim: true })
+  emailCodeHash?: string;
+
+  @Prop({ type: Date, select: false })
+  emailCodeExpiresAt?: Date;
 
   @Prop({ type: Date })
   verifiedAt?: Date;

@@ -12,7 +12,7 @@ export class LoginDto {
   @IsString()
   password!: string;
 
-  @ApiProperty({ required: false, description: 'TOTP code when MFA is enabled' })
+  @ApiProperty({ required: false, description: 'TOTP or email MFA code when MFA is enabled' })
   @IsOptional()
   @IsString()
   otp?: string;

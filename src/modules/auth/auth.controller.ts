@@ -23,6 +23,7 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { EnableMfaDto } from './dto/enable-mfa.dto';
 import { DisableMfaDto } from './dto/disable-mfa.dto';
+import { VerifyEmailMfaDto } from './dto/email-mfa.dto';
 import { SiweNonceDto } from './dto/siwe.dto';
 
 @Controller('auth')
@@ -165,6 +166,23 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   enableMfa(@CurrentUser('sub') userId: string, @Body() dto: EnableMfaDto) {
     return this.authService.enableMfa(userId, dto.token);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('mfa/email/start')
+  @HttpCode(HttpStatus.OK)
+  startEmailMfa(@CurrentUser('sub') userId: string) {
+    return this.authService.startEmailMfaSetup(userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('mfa/email/enable')
+  @HttpCode(HttpStatus.OK)
+  enableEmailMfa(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: VerifyEmailMfaDto,
+  ) {
+    return this.authService.enableEmailMfa(userId, dto.token);
   }
 
   @UseGuards(JwtAuthGuard)
