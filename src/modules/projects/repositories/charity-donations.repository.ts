@@ -19,6 +19,7 @@ export class CharityDonationsRepository {
     donorName: string;
     message?: string | null;
     userId?: Types.ObjectId;
+    transactionId?: Types.ObjectId;
   }): Promise<CharityDonationDocument> {
     return this.donationModel.create(payload);
   }

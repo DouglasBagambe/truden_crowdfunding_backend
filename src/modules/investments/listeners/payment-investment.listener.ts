@@ -210,13 +210,20 @@ export class PaymentInvestmentListener {
             const inboundKeiboFee = Number((tx?.metadata as any)?.dpoQuote?.keiboFee || 0);
 
             if (projectType === 'CHARITY') {
-                // Charity donation path — mirror existing working flow
-                await this.projectsService.incrementCharityDonation(
+                const charitySettlement = await this.paymentsService.applySuccessfulCharityPayment({
+                    transactionId,
                     projectId,
-                    payload.amount,
+                    amount: payload.amount,
+                    currency: amountCurrency,
                     userId,
-                    (tx?.metadata as any)?.donorName,
-                );
+                    donorName: (tx?.metadata as any)?.donorName,
+                    inboundKeiboFee,
+                });
+                if (!charitySettlement.applied) {
+                    this.logger.log(`Charity payment ${transactionId} was already settled; skipping replay`);
+                    return;
+                }
+                creatorWalletCredited = charitySettlement.creatorWalletCredited;
 
             } else {
                 if (!userId) {
@@ -261,6 +268,9 @@ export class PaymentInvestmentListener {
             // ── Step 4: Credit creator's Keibo fiat wallet ────────────────────────
             try {
                 if (project?.creatorId) {
+                    if (projectType === 'CHARITY') {
+                        this.logger.log(`Charity payment ${transactionId} settled atomically`);
+                    } else {
                     if (!creatorId) {
                         throw new Error(`Project ${projectId} creator id could not be resolved`);
                     }
@@ -268,28 +278,23 @@ export class PaymentInvestmentListener {
                     const creatorWallet = await this.paymentsService.getOrCreateWallet(creatorId);
                     const currency = amountCurrency;
 
-                    if (projectType === 'CHARITY') {
-                        (creatorWallet.fiatBalance as any)[currency] =
-                            ((creatorWallet.fiatBalance as any)[currency] || 0) + payload.amount;
-                        creatorWallet.markModified('fiatBalance');
-                    } else {
                         if (!creatorWallet.roiBalance) creatorWallet.roiBalance = { UGX: 0, USD: 0 };
                         (creatorWallet.roiBalance as any)[currency] =
                             ((creatorWallet.roiBalance as any)[currency] || 0) + payload.amount;
                         creatorWallet.markModified('roiBalance');
-                    }
 
                     await creatorWallet.save();
                     creatorWalletCredited = true;
                     this.logger.log(
                         `Credited creator ${creatorId} wallet ${currency} +${payload.amount}`,
                     );
+                    }
                 }
             } catch (creditErr: any) {
                 this.logger.error(`Failed to credit creator wallet: ${creditErr.message}`);
             }
 
-            if (inboundKeiboFee > 0) {
+            if (projectType !== 'CHARITY' && inboundKeiboFee > 0) {
                 try {
                     await this.paymentsService.creditTreasuryInboundFee(
                         amountCurrency,

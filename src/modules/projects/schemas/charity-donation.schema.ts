@@ -27,6 +27,16 @@ export class CharityDonation {
     ref: 'User',
   })
   userId?: Types.ObjectId;
+
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    required: false,
+    unique: true,
+    sparse: true,
+    index: true,
+    ref: 'PaymentTransaction',
+  })
+  transactionId?: Types.ObjectId;
 }
 
 export type CharityDonationDocument = CharityDonation & Document;

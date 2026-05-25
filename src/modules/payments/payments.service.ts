@@ -7,8 +7,8 @@ import {
     OnModuleDestroy,
     OnModuleInit,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import { Connection, Model, Types } from 'mongoose';
 import { FlutterwaveService } from './flutterwave.service';
 import {
     PaymentTransaction,
@@ -29,6 +29,11 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DpoService } from './dpo.service';
 import { ConfigService } from '@nestjs/config';
 import { ProjectsService } from '../projects/projects.service';
+import { Project, ProjectDocument } from '../projects/schemas/project.schema';
+import {
+    CharityDonation,
+    CharityDonationDocument,
+} from '../projects/schemas/charity-donation.schema';
 import { hasBackendRoiAccess } from '../../common/utils/roi-access.util';
 import { UsersRepository } from '../users/repositories/users.repository';
 import { AppEmailService } from '../../common/services/app-email.service';
@@ -50,6 +55,12 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         private paymentTransactionModel: Model<PaymentTransactionDocument>,
         @InjectModel(Wallet.name)
         private walletModel: Model<WalletDocument>,
+        @InjectModel(Project.name)
+        private projectModel: Model<ProjectDocument>,
+        @InjectModel(CharityDonation.name)
+        private charityDonationModel: Model<CharityDonationDocument>,
+        @InjectConnection()
+        private readonly connection: Connection,
         private flutterwaveService: FlutterwaveService,
         private dpoService: DpoService,
         private eventEmitter: EventEmitter2,
@@ -108,6 +119,28 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         }
 
         return '';
+    }
+
+    private extractObjectId(value: unknown): string | undefined {
+        if (!value) {
+            return undefined;
+        }
+        if (typeof value === 'string') {
+            return value;
+        }
+        if (value instanceof Types.ObjectId) {
+            return value.toString();
+        }
+        if (typeof value === 'object' && value !== null) {
+            const nestedId = (value as { _id?: unknown })._id;
+            if (typeof nestedId === 'string') {
+                return nestedId;
+            }
+            if (nestedId instanceof Types.ObjectId) {
+                return nestedId.toString();
+            }
+        }
+        return undefined;
     }
 
     async resolveCheckoutProject(projectId: string) {
@@ -443,6 +476,16 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         ).trim();
 
         if (!providerTransferId) {
+            if (transaction.flutterwaveReference) {
+                this.logger.warn(
+                    `Payout ${transaction.flutterwaveReference} has no provider transfer id; keeping it processing until callback supplies one.`,
+                );
+                return {
+                    normalizedStatus: '',
+                    providerData: payload,
+                };
+            }
+
             const payloadData = this.asRecord(payload);
             const nestedData = this.asRecord(payloadData?.data);
             return {
@@ -753,6 +796,170 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         return wallet;
     }
 
+    async applySuccessfulCharityPayment(params: {
+        transactionId: string;
+        projectId: string;
+        amount: number;
+        currency: string;
+        userId?: string;
+        donorName?: string;
+        inboundKeiboFee?: number;
+    }): Promise<{
+        applied: boolean;
+        creatorId?: string;
+        projectName: string;
+        creatorWalletCredited: boolean;
+    }> {
+        const transactionObjectId = new Types.ObjectId(params.transactionId);
+        const projectObjectId = new Types.ObjectId(params.projectId);
+        const currency = params.currency.toUpperCase();
+        const session = await this.connection.startSession();
+
+        try {
+            const result = await session.withTransaction(async () => {
+                const lockResult = await this.paymentTransactionModel.updateOne(
+                    {
+                        _id: transactionObjectId,
+                        'metadata.applicationAppliedAt': { $exists: false },
+                    },
+                    {
+                        $set: {
+                            'metadata.applicationApplyingAt': new Date(),
+                        },
+                    },
+                    { session },
+                );
+
+                const transaction = await this.paymentTransactionModel
+                    .findById(transactionObjectId)
+                    .session(session);
+
+                if (!transaction) {
+                    throw new NotFoundException('Payment transaction not found');
+                }
+
+                const project = await this.projectModel
+                    .findById(projectObjectId)
+                    .session(session);
+
+                if (!project) {
+                    throw new NotFoundException('Project not found');
+                }
+
+                const projectType = this.normalizeProjectType(
+                    (project as { projectType?: unknown; type?: unknown }).projectType ??
+                    (project as { type?: unknown }).type,
+                );
+                if (projectType !== 'CHARITY') {
+                    throw new BadRequestException('Only charity payments can use charity settlement');
+                }
+
+                const creatorId = this.extractObjectId((project as { creatorId?: unknown }).creatorId);
+                if (!creatorId) {
+                    throw new BadRequestException('Charity project creator could not be resolved');
+                }
+
+                const projectName = String((project as { name?: unknown }).name || 'project');
+
+                if (lockResult.modifiedCount === 0) {
+                    return {
+                        applied: false,
+                        creatorId,
+                        projectName,
+                        creatorWalletCredited: Boolean(transaction.metadata?.applicationWalletCredited),
+                    };
+                }
+
+                const donorName = (params.donorName ?? '').trim() || 'Anonymous';
+                await this.charityDonationModel.create(
+                    [{
+                        projectId: projectObjectId,
+                        amount: params.amount,
+                        donorName,
+                        userId: params.userId ? new Types.ObjectId(params.userId) : undefined,
+                        transactionId: transactionObjectId,
+                    }],
+                    { session },
+                );
+
+                await this.projectModel.updateOne(
+                    { _id: projectObjectId },
+                    { $inc: { raisedAmount: params.amount, backerCount: 1 } },
+                    { session },
+                );
+
+                await this.walletModel.updateOne(
+                    { userId: new Types.ObjectId(creatorId) },
+                    {
+                        $setOnInsert: {
+                            userId: new Types.ObjectId(creatorId),
+                            cryptoBalance: { ETH: 0, USDC: 0 },
+                            roiBalance: { UGX: 0, USD: 0 },
+                            withdrawalMethods: [],
+                            transactions: [],
+                        },
+                        $inc: {
+                            [`fiatBalance.${currency}`]: params.amount,
+                        },
+                    },
+                    { upsert: true, session },
+                );
+
+                const inboundKeiboFee = Number(params.inboundKeiboFee || 0);
+                const treasuryUserId = this.configService.get<string>('KEIBO_TREASURY_USER_ID');
+                if (treasuryUserId && inboundKeiboFee > 0) {
+                    await this.walletModel.updateOne(
+                        { userId: new Types.ObjectId(treasuryUserId) },
+                        {
+                            $setOnInsert: {
+                                userId: new Types.ObjectId(treasuryUserId),
+                                cryptoBalance: { ETH: 0, USDC: 0 },
+                                roiBalance: { UGX: 0, USD: 0 },
+                                withdrawalMethods: [],
+                                transactions: [],
+                            },
+                            $inc: {
+                                [`fiatBalance.${currency}`]: inboundKeiboFee,
+                            },
+                        },
+                        { upsert: true, session },
+                    );
+                }
+
+                await this.paymentTransactionModel.updateOne(
+                    { _id: transactionObjectId },
+                    {
+                        $set: {
+                            'metadata.applicationAppliedAt': new Date(),
+                            'metadata.applicationProjectType': 'CHARITY',
+                            'metadata.applicationWalletCredited': true,
+                            'metadata.applicationTreasuryFeeCredited': inboundKeiboFee > 0,
+                        },
+                        $unset: {
+                            'metadata.applicationApplyingAt': 1,
+                        },
+                    },
+                    { session },
+                );
+
+                return {
+                    applied: true,
+                    creatorId,
+                    projectName,
+                    creatorWalletCredited: true,
+                };
+            });
+
+            return result ?? {
+                applied: false,
+                projectName: 'project',
+                creatorWalletCredited: false,
+            };
+        } finally {
+            await session.endSession();
+        }
+    }
+
     /**
      * Deposit to wallet via Flutterwave
      */
@@ -873,67 +1080,127 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             };
         }
 
-        // Process Charity payout directly with Flutterwave
-        const payoutResult = await this.flutterwaveService.processPayout({
-            amount: payoutAmount,
-            currency: dto.currency,
-            accountNumber: method.accountNumber,
-            accountBank: method.provider,
-            narration: dto.note || 'Wallet withdrawal - Keibo',
-            reference: payoutRef,
-            beneficiaryName: method.accountName,
-            mobileNumber: method.accountNumber,
-        });
-        this.assertPayoutWasAccepted(payoutResult, payoutRef);
-
-        // Deduct full requested amount from creator's Charity wallet
-        (wallet.fiatBalance as any)[currency] -= dto.amount;
-        wallet.markModified('fiatBalance');
-        await wallet.save();
-
-        // Credit the 2% fee to the Keibo Treasury wallet
         const treasuryUserId = this.configService.get<string>('KEIBO_TREASURY_USER_ID');
-        if (treasuryUserId && platformFee > 0) {
-            try {
-                const treasuryWallet = await this.getOrCreateWallet(treasuryUserId);
-                (treasuryWallet.fiatBalance as any)[currency] =
-                    ((treasuryWallet.fiatBalance as any)[currency] || 0) + platformFee;
-                treasuryWallet.markModified('fiatBalance');
-                await treasuryWallet.save();
-                this.logger.log(
-                    `Platform fee ${currency} ${platformFee} credited to treasury wallet`,
+        const charityWithdrawalSession = await this.connection.startSession();
+        let transaction!: PaymentTransactionDocument;
+
+        try {
+            transaction = await charityWithdrawalSession.withTransaction(async () => {
+                const debitResult = await this.walletModel.updateOne(
+                    {
+                        userId: new Types.ObjectId(userId),
+                        [`fiatBalance.${currency}`]: { $gte: dto.amount },
+                    },
+                    {
+                        $inc: {
+                            [`fiatBalance.${currency}`]: -dto.amount,
+                        },
+                    },
+                    { session: charityWithdrawalSession },
                 );
-            } catch (feeErr: any) {
-                this.logger.warn(`Failed to credit treasury fee: ${feeErr.message}`);
-            }
+
+                if (debitResult.modifiedCount !== 1) {
+                    throw new BadRequestException(`Insufficient Charity ${currency} balance`);
+                }
+
+                if (treasuryUserId && platformFee > 0) {
+                    await this.walletModel.updateOne(
+                        { userId: new Types.ObjectId(treasuryUserId) },
+                        {
+                            $setOnInsert: {
+                                userId: new Types.ObjectId(treasuryUserId),
+                                cryptoBalance: { ETH: 0, USDC: 0 },
+                                roiBalance: { UGX: 0, USD: 0 },
+                                withdrawalMethods: [],
+                                transactions: [],
+                            },
+                            $inc: {
+                                [`fiatBalance.${currency}`]: platformFee,
+                            },
+                        },
+                        { upsert: true, session: charityWithdrawalSession },
+                    );
+                }
+
+                const created = await this.paymentTransactionModel.create(
+                    [{
+                        userId: new Types.ObjectId(userId),
+                        projectId: new Types.ObjectId(dto.projectId || '000000000000000000000000'),
+                        amount: -dto.amount,
+                        currency: dto.currency,
+                        paymentMethod: method.type === 'mobile_money' ? PaymentMethod.MobileMoney : PaymentMethod.BankTransfer,
+                        provider: PaymentProvider.Flutterwave,
+                        status: PaymentStatus.Processing,
+                        flutterwaveReference: payoutRef,
+                        metadata: {
+                            type: 'WITHDRAWAL_CHARITY',
+                            providerDispatchStatus: 'reserved',
+                            platformFee,
+                            payoutAmount,
+                            feeRate: PLATFORM_FEE_RATE,
+                            method,
+                        },
+                    }],
+                    { session: charityWithdrawalSession },
+                );
+
+                return created[0];
+            });
+        } finally {
+            await charityWithdrawalSession.endSession();
         }
 
-        // Create transaction record
+        let payoutResult: any;
+        try {
+            payoutResult = await this.flutterwaveService.processPayout({
+                amount: payoutAmount,
+                currency: dto.currency,
+                accountNumber: method.accountNumber,
+                accountBank: method.provider,
+                narration: dto.note || 'Wallet withdrawal - Keibo',
+                reference: payoutRef,
+                beneficiaryName: method.accountName,
+                mobileNumber: method.accountNumber,
+            });
+            this.assertPayoutWasAccepted(payoutResult, payoutRef);
+        } catch (payoutErr: any) {
+            const persistedTransaction = await this.paymentTransactionModel.findById(transaction._id);
+            if (persistedTransaction) {
+                await this.refundFailedWithdrawal(
+                    persistedTransaction,
+                    payoutErr?.message || 'Payout dispatch failed',
+                    { dispatchError: payoutErr?.message || String(payoutErr) },
+                );
+            }
+            throw payoutErr;
+        }
+
         const payoutTransferId =
             payoutResult?.data?.id || payoutResult?.data?.data?.id || null;
         const payoutProviderStatus = this.getProviderTransferStatus(payoutResult);
         const payoutIsImmediatelySuccessful = ['successful', 'success', 'completed'].includes(payoutProviderStatus);
-        const transaction = await this.paymentTransactionModel.create({
-            userId: new Types.ObjectId(userId),
-            projectId: new Types.ObjectId(dto.projectId || '000000000000000000000000'),
-            amount: -dto.amount,
-            currency: dto.currency,
-            paymentMethod: method.type === 'mobile_money' ? PaymentMethod.MobileMoney : PaymentMethod.BankTransfer,
-            provider: PaymentProvider.Flutterwave,
-            status: payoutIsImmediatelySuccessful ? PaymentStatus.Successful : PaymentStatus.Processing,
-            flutterwaveReference: payoutRef,
-            ...(payoutIsImmediatelySuccessful ? { completedAt: new Date() } : {}),
-            metadata: {
-                type: 'WITHDRAWAL_CHARITY',
-                payoutResult,
-                payoutTransferId,
-                payoutProviderStatus: payoutProviderStatus || 'processing',
-                platformFee,
-                payoutAmount,
-                feeRate: PLATFORM_FEE_RATE,
-                method,
+
+        await this.paymentTransactionModel.updateOne(
+            { _id: transaction._id },
+            {
+                $set: {
+                    status: payoutIsImmediatelySuccessful ? PaymentStatus.Successful : PaymentStatus.Processing,
+                    ...(payoutIsImmediatelySuccessful ? { completedAt: new Date() } : {}),
+                    'metadata.providerDispatchStatus': 'accepted',
+                    'metadata.payoutResult': payoutResult,
+                    'metadata.payoutTransferId': payoutTransferId,
+                    'metadata.payoutProviderStatus': payoutProviderStatus || 'processing',
+                },
             },
-        });
+        );
+
+        const refreshedTransaction =
+            await this.paymentTransactionModel.findById(transaction._id);
+        if (refreshedTransaction) {
+            transaction = refreshedTransaction;
+        }
+        const refreshedWallet = await this.walletModel.findOne({ userId: new Types.ObjectId(userId) });
+        const newBalance = Number((refreshedWallet?.fiatBalance as any)?.[currency] || 0);
 
         this.logger.log(`Charity Withdrawal processed for user ${userId}`);
 
@@ -959,7 +1226,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             message: payoutIsImmediatelySuccessful
                 ? 'Withdrawal completed successfully.'
                 : 'Withdrawal request submitted to Flutterwave. Mobile Money delivery is still awaiting provider confirmation.',
-            newBalance: (wallet.fiatBalance as any)[currency],
+            newBalance,
         };
     }
 
@@ -1222,7 +1489,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         },
         userId?: string,
     ) {
-        const backendUrl = (this.configService.get<string>('BACKEND_URL') ?? 'https://trufund.onrender.com')
+        const backendUrl = (this.configService.get<string>('BACKEND_URL') ?? '')
             .trim()
             .replace(/[,\s]+$/, '')
             .replace(/\/+$/, '');
@@ -1230,6 +1497,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             .trim()
             .replace(/[,\s]+$/, '')
             .replace(/\/+$/, '');
+        if (!backendUrl) {
+            throw new BadRequestException('BACKEND_URL is required for DPO payment callbacks');
+        }
         const { project, projectType } = await this.resolveCheckoutProject(dto.projectId);
         const isCharity = projectType === 'CHARITY';
 
