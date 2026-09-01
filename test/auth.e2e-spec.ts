@@ -1,6 +1,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
+import type { Server } from 'node:http';
 import { Model } from 'mongoose';
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server-core';
@@ -65,9 +66,9 @@ const isRefreshResponse = (value: unknown): value is RefreshResponse => {
 
 describe('Auth integration (e2e)', () => {
   let app: INestApplication;
+  let httpServer: Server;
   let mongo: MongoMemoryServer | null = null;
   let userModel: Model<UserDocument>;
-  let setupFailed = false;
 
   const registerPayload = {
     email: 'alice@example.com',
@@ -77,31 +78,27 @@ describe('Auth integration (e2e)', () => {
   };
 
   beforeAll(async () => {
+    let startupTimeout: NodeJS.Timeout | undefined;
     try {
       const startPromise = MongoMemoryServer.create();
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error('MongoMemoryServer startup timeout')),
-          15000,
-        ),
+      const timeoutPromise = new Promise<never>(
+        (_, reject) =>
+          (startupTimeout = setTimeout(
+            () => reject(new Error('MongoMemoryServer startup timeout')),
+            15000,
+          )),
       );
-      mongo = (await Promise.race([startPromise, timeoutPromise])) as MongoMemoryServer;
+      mongo = await Promise.race([startPromise, timeoutPromise]);
     } catch (err) {
-      // In environments without network access or MongoDB binaries,
-      // starting MongoMemoryServer can fail. Mark setup as failed so
-      // tests can be skipped gracefully instead of crashing the suite.
-      // eslint-disable-next-line no-console
-      console.warn(
-        'Skipping Auth e2e tests: failed to start MongoMemoryServer',
-        err,
-      );
-      setupFailed = true;
-      return;
+      throw new Error('Auth e2e database failed to start', { cause: err });
+    } finally {
+      if (startupTimeout) {
+        clearTimeout(startupTimeout);
+      }
     }
 
     if (!mongo) {
-      setupFailed = true;
-      return;
+      throw new Error('Auth e2e database returned no running instance');
     }
 
     process.env.MONGO_URI = mongo.getUri();
@@ -123,15 +120,15 @@ describe('Auth integration (e2e)', () => {
     app.setGlobalPrefix('api');
 
     await app.init();
+    httpServer = app.getHttpServer() as Server;
 
     userModel = app.get<Model<UserDocument>>(getModelToken(User.name));
   });
 
   afterAll(async () => {
-    if (!app) {
-      return;
+    if (app) {
+      await app.close();
     }
-    await app.close();
     await mongoose.disconnect();
     if (mongo) {
       await mongo.stop();
@@ -146,13 +143,8 @@ describe('Auth integration (e2e)', () => {
   });
 
   async function registerUser(overrides: Partial<typeof registerPayload> = {}) {
-    if (setupFailed) {
-      return Promise.reject(
-        new Error('Auth e2e setup failed; tests are being skipped'),
-      );
-    }
     const payload = { ...registerPayload, ...overrides };
-    const res = await request(app.getHttpServer())
+    const res = await request(httpServer)
       .post('/api/auth/register')
       .send(payload)
       .expect(201);
@@ -163,9 +155,6 @@ describe('Auth integration (e2e)', () => {
   }
 
   it('registers a user with default roles and permissions', async () => {
-    if (setupFailed) {
-      return;
-    }
     const response = await registerUser();
 
     expect(response.accessToken).toBeDefined();
@@ -180,12 +169,9 @@ describe('Auth integration (e2e)', () => {
   });
 
   it('logs in an existing user and returns tokens', async () => {
-    if (setupFailed) {
-      return;
-    }
     await registerUser();
 
-    const loginRes = await request(app.getHttpServer())
+    const loginRes = await request(httpServer)
       .post('/api/auth/login')
       .send({
         email: registerPayload.email,
@@ -204,12 +190,9 @@ describe('Auth integration (e2e)', () => {
   });
 
   it('rejects invalid login attempts', async () => {
-    if (setupFailed) {
-      return;
-    }
     await registerUser();
 
-    await request(app.getHttpServer())
+    await request(httpServer)
       .post('/api/auth/login')
       .send({
         email: registerPayload.email,
@@ -219,12 +202,9 @@ describe('Auth integration (e2e)', () => {
   });
 
   it('returns the authenticated user profile', async () => {
-    if (setupFailed) {
-      return;
-    }
     const { accessToken, user } = await registerUser();
 
-    const profileRes = await request(app.getHttpServer())
+    const profileRes = await request(httpServer)
       .get('/api/auth/profile')
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(200);
@@ -241,12 +221,9 @@ describe('Auth integration (e2e)', () => {
   });
 
   it('refreshes tokens using a valid refresh token', async () => {
-    if (setupFailed) {
-      return;
-    }
     const { refreshToken } = await registerUser();
 
-    const refreshRes = await request(app.getHttpServer())
+    const refreshRes = await request(httpServer)
       .post('/api/auth/refresh')
       .send({ refreshToken })
       .expect(200);

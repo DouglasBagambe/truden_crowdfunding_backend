@@ -1,7 +1,18 @@
 image: atlassian/default-image:4
 
+clone:
+  depth: full
+
 definitions:
   steps:
+    - step: &verify_backend
+        name: Verify backend (no deployment)
+        image: node:22-bookworm-slim
+        caches:
+          - node
+        script:
+          - npm ci --ignore-scripts --no-audit --no-fund
+          - npm run verify
     - step: &build_and_update
         runs-on:
           - self.hosted
@@ -56,6 +67,8 @@ definitions:
 
 pipelines:
   branches:
+    'keibo/**':
+      - step: *verify_backend
     dev:
       - step: *build_and_update
     prod:
