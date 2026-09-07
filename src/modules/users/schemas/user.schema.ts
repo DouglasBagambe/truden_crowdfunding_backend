@@ -306,11 +306,11 @@ export class User {
   @Prop({ default: null, select: false })
   nonce?: string;
 
-  /** Custodial EVM wallet address managed by the platform (public, safe to show) */
-  @Prop({ trim: true, lowercase: true })
+  /** Historical field retained only for a separately approved data migration. */
+  @Prop({ trim: true, lowercase: true, select: false })
   custodialWalletAddress?: string;
 
-  /** AES-256-GCM encrypted private key for the custodial wallet – NEVER expose to clients */
+  /** Historical encrypted material. Application code must never select or write it. */
   @Prop({ trim: true, select: false })
   custodialWalletKeyEncrypted?: string;
 

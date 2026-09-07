@@ -17,8 +17,14 @@ async function seedAdmin() {
   await connect(mongoUri);
   const UserModel = connection.model(User.name, UserSchema);
 
-  const email = (process.env.ADMIN_EMAIL || 'admin@keibo.net').toLowerCase();
-  const password = process.env.ADMIN_PASSWORD || 'F13ryl10n!';
+  const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  const password = process.env.ADMIN_PASSWORD;
+  if (!email) throw new Error('ADMIN_EMAIL is required');
+  if (!password || password.length < 16) {
+    throw new Error(
+      'ADMIN_PASSWORD is required and must contain at least 16 characters',
+    );
+  }
   const firstName = process.env.ADMIN_FIRST_NAME || 'Admin';
   const lastName = process.env.ADMIN_LAST_NAME || 'User';
 
@@ -46,7 +52,8 @@ async function seedAdmin() {
     existing.emailVerificationCodeHash = undefined;
     existing.emailVerificationCodeExpiresAt = undefined;
     existing.emailVerificationAttempts = 0;
-    existing.emailVerificationSendCount = existing.emailVerificationSendCount ?? 0;
+    existing.emailVerificationSendCount =
+      existing.emailVerificationSendCount ?? 0;
     existing.kycStatus = KYCStatus.VERIFIED;
     existing.kyc = {
       ...(existing.kyc || {}),
@@ -70,7 +77,7 @@ async function seedAdmin() {
       verifiedAt: now,
     };
     await existing.save();
-    console.log(`Admin user updated: ${email}`);
+    console.log('Administrator account updated');
   } else {
     await UserModel.create({
       email,
@@ -108,13 +115,14 @@ async function seedAdmin() {
         verifiedAt: now,
       },
     });
-    console.log(`Admin user created: ${email}`);
+    console.log('Administrator account created');
   }
 }
 
 seedAdmin()
-  .catch((err) => {
-    console.error('Admin seeding failed:', err.message);
+  .catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Admin seeding failed:', message);
     process.exit(1);
   })
   .finally(async () => {

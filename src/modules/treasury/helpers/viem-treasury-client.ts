@@ -2,7 +2,6 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   createPublicClient,
-  createWalletClient,
   http,
   type Abi,
   type Address,
@@ -10,7 +9,7 @@ import {
   type Hash,
   type TransactionReceipt,
 } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import { PlatformSignerService } from '../../../common/services/platform-signer.service';
 
 const TREASURY_ABI = [
   {
@@ -73,34 +72,32 @@ const TREASURY_ABI = [
   },
 ] as const satisfies Abi;
 
-type Hex = `0x${string}`;
-
 @Injectable()
 export class ViemTreasuryClient {
-  private readonly publicClient;
-  private readonly walletClient;
-  private readonly treasuryAddress: Address;
+  private readonly publicClient?: ReturnType<typeof createPublicClient>;
+  private readonly treasuryAddress?: Address;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly signer: PlatformSignerService,
+  ) {
     const blockchain = this.configService.get<{
+      enabled?: boolean;
       rpcUrl?: string;
       chainId?: number;
       contracts?: { treasury?: string };
-      adminPrivateKey?: string;
     }>('blockchain');
+
+    if (!blockchain?.enabled) return;
 
     if (!blockchain?.rpcUrl || !blockchain.chainId) {
       throw new BadRequestException('Blockchain RPC configuration is missing');
     }
 
-    if (!blockchain.adminPrivateKey) {
-      throw new BadRequestException(
-        'Blockchain admin private key is not configured',
-      );
-    }
-
     if (!blockchain.contracts?.treasury) {
-      throw new BadRequestException('Treasury contract address is not configured');
+      throw new BadRequestException(
+        'Treasury contract address is not configured',
+      );
     }
 
     const chain: Chain = {
@@ -113,22 +110,9 @@ export class ViemTreasuryClient {
       },
     };
 
-    const rawKey = blockchain.adminPrivateKey.trim();
-    const normalizedKey = (rawKey.startsWith('0x')
-      ? rawKey
-      : `0x${rawKey}`) as Hex;
-
-    const account = privateKeyToAccount(normalizedKey);
-
     this.publicClient = createPublicClient({
       chain,
       transport: http(blockchain.rpcUrl),
-    });
-
-    this.walletClient = createWalletClient({
-      chain,
-      transport: http(blockchain.rpcUrl),
-      account,
     });
 
     this.treasuryAddress = blockchain.contracts.treasury as Address;
@@ -138,14 +122,15 @@ export class ViemTreasuryClient {
     to: string;
     amount: bigint;
   }): Promise<{ hash: Hash; receipt: TransactionReceipt }> {
-    const hash: Hash = await this.walletClient.writeContract({
-      address: this.treasuryAddress,
+    const { publicClient, address } = this.requireEnabled();
+    const hash = await this.signer.writeContract({
+      address,
       abi: TREASURY_ABI,
       functionName: 'adminWithdraw',
       args: [params.to as Address, params.amount],
     });
 
-    const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
     return { hash, receipt };
   }
@@ -154,33 +139,46 @@ export class ViemTreasuryClient {
     recipients: string[];
     amounts: bigint[];
   }): Promise<{ hash: Hash; receipt: TransactionReceipt }> {
-    const hash: Hash = await this.walletClient.writeContract({
-      address: this.treasuryAddress,
+    const { publicClient, address } = this.requireEnabled();
+    const hash = await this.signer.writeContract({
+      address,
       abi: TREASURY_ABI,
       functionName: 'distributeFunds',
       args: [params.recipients as Address[], params.amounts],
     });
 
-    const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
     return { hash, receipt };
   }
 
   async getLatestBlockNumber(): Promise<bigint> {
-    return this.publicClient.getBlockNumber();
+    return this.requireEnabled().publicClient.getBlockNumber();
   }
 
-  async getFeeCapturedLogs(fromBlock?: bigint, toBlock?: bigint): Promise<any[]> {
-    const logs = await (this.publicClient as any).getLogs({
-      address: this.treasuryAddress,
-      events: [{ abi: TREASURY_ABI, eventName: 'FeeCaptured' }],
+  async getFeeCapturedLogs(
+    fromBlock?: bigint,
+    toBlock?: bigint,
+  ): Promise<unknown[]> {
+    const { publicClient, address } = this.requireEnabled();
+    return publicClient.getLogs({
+      address,
+      event: TREASURY_ABI[2],
       fromBlock,
       toBlock,
     });
-    return logs as any[];
   }
 
   getAbi(): Abi {
     return TREASURY_ABI;
+  }
+
+  private requireEnabled() {
+    if (!this.publicClient || !this.treasuryAddress) {
+      throw new BadRequestException(
+        'Blockchain treasury operations are disabled pending production approval',
+      );
+    }
+    return { publicClient: this.publicClient, address: this.treasuryAddress };
   }
 }

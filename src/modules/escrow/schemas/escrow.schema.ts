@@ -15,7 +15,7 @@ export type MilestoneLockDocument = MilestoneLock & Document;
 
 @Schema({ timestamps: true })
 export class Escrow {
-  @Prop({ type: MongooseSchema.Types.ObjectId, required: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, required: true })
   projectId!: Types.ObjectId;
 
   @Prop({ required: true, unique: true })

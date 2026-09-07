@@ -32,6 +32,12 @@ import {
 import { RolesService } from '../roles/roles.service';
 import { AuditService } from '../audit/audit.service';
 import { AppEmailService } from '../../common/services/app-email.service';
+import { SiweMessage } from 'siwe';
+import {
+  WalletChallenge,
+  WalletChallengeDocument,
+  WalletChallengePurpose,
+} from './schemas/wallet-challenge.schema';
 
 @Injectable()
 export class AuthService {
@@ -53,23 +59,37 @@ export class AuthService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(RefreshToken.name)
     private refreshTokenModel: Model<RefreshTokenDocument>,
+    @InjectModel(WalletChallenge.name)
+    private walletChallengeModel: Model<WalletChallengeDocument>,
     private jwtService: JwtService,
     private configService: ConfigService,
     private rolesService: RolesService,
     private readonly auditService: AuditService,
     private readonly appEmailService: AppEmailService,
-  ) { }
+  ) {}
 
   private isLocalEmailVerificationBypassEnabled(): boolean {
-    if ((this.configService.get<string>('AUTH_EMAIL_BYPASS') || '').trim().toLowerCase() === 'true') {
-      return true;
+    const nodeEnv = (this.configService.get<string>('NODE_ENV') || '')
+      .trim()
+      .toLowerCase();
+    const explicitlyEnabled =
+      (this.configService.get<string>('AUTH_EMAIL_BYPASS') || '')
+        .trim()
+        .toLowerCase() === 'true';
+    if (nodeEnv === 'production' && explicitlyEnabled) {
+      throw new Error('AUTH_EMAIL_BYPASS is prohibited in production');
     }
+    if (explicitlyEnabled) return true;
 
-    const nodeEnv = (this.configService.get<string>('NODE_ENV') || '').trim().toLowerCase();
-    const backendUrl = (this.configService.get<string>('BACKEND_URL') || '').trim().toLowerCase();
-    const frontendUrl = (this.configService.get<string>('FRONTEND_URL') || '').trim().toLowerCase();
+    const backendUrl = (this.configService.get<string>('BACKEND_URL') || '')
+      .trim()
+      .toLowerCase();
+    const frontendUrl = (this.configService.get<string>('FRONTEND_URL') || '')
+      .trim()
+      .toLowerCase();
     const isDevOrTest = nodeEnv === 'development' || nodeEnv === 'test';
-    const isLocalTarget = backendUrl.includes('localhost') || frontendUrl.includes('localhost');
+    const isLocalTarget =
+      backendUrl.includes('localhost') || frontendUrl.includes('localhost');
 
     return isDevOrTest && isLocalTarget;
   }
@@ -138,7 +158,9 @@ export class AuthService {
 
     const user = await this.userModel
       .findOne({ email: email.toLowerCase() })
-      .select('+passwordHash +mfa.secret +mfa.setupSecret +mfa.emailCodeHash +mfa.emailCodeExpiresAt')
+      .select(
+        '+passwordHash +mfa.secret +mfa.setupSecret +mfa.emailCodeHash +mfa.emailCodeExpiresAt',
+      )
       .exec();
 
     if (!user) {
@@ -156,15 +178,16 @@ export class AuthService {
     }
 
     const roles = Array.isArray(user.roles) ? user.roles : [];
-    const isAdmin = roles.includes(UserRole.ADMIN) || roles.includes(UserRole.SUPERADMIN);
+    const isAdmin =
+      roles.includes(UserRole.ADMIN) || roles.includes(UserRole.SUPERADMIN);
     if (isAdmin) {
       const allowedIps = this.getAdminAllowedIps();
       if (allowedIps && ipAddress && !allowedIps.has(ipAddress)) {
         throw new UnauthorizedException('Admin login not allowed from this IP');
       }
-      // if (!user.mfa?.enabled) {
-      //   throw new UnauthorizedException('Admin MFA required');
-      // }
+      if (!user.mfa?.enabled) {
+        throw new UnauthorizedException('Administrator MFA is required');
+      }
     }
 
     const requiresMfa = this.requiresMfa(user);
@@ -313,9 +336,9 @@ export class AuthService {
       typeof decoded.name === 'string'
         ? decoded.name
         : [decoded.given_name, decoded.family_name]
-          .filter((val): val is string => typeof val === 'string')
-          .join(' ')
-          .trim();
+            .filter((val): val is string => typeof val === 'string')
+            .join(' ')
+            .trim();
     const displayName = decodedDisplayName || email || providerSubject;
     const locale =
       typeof decoded.locale === 'string' ? decoded.locale : undefined;
@@ -388,23 +411,155 @@ export class AuthService {
     };
   }
 
-  async issueSiweNonce(userId: string, walletAddress: string) {
+  async issueSiweNonce(
+    userId: string,
+    walletAddress: string,
+    purpose: WalletChallengePurpose = 'link',
+  ) {
     const normalizedWallet = walletAddress.trim().toLowerCase();
     if (!/^0x[a-f0-9]{40}$/.test(normalizedWallet)) {
-      throw new BadRequestException('Wallet address must be a valid EVM address');
+      throw new BadRequestException(
+        'Wallet address must be a valid EVM address',
+      );
     }
 
-    const nonce = crypto.randomBytes(16).toString('hex');
-    const user = await this.userModel
-      .findByIdAndUpdate(userId, { $set: { nonce } }, { new: true })
-      .select('_id')
-      .exec();
+    const user = await this.userModel.findById(userId).select('_id').exec();
 
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    return { nonce };
+    const domain = this.getRequiredSiweDomain();
+    const uri = this.getRequiredSiweUri();
+    const allowedChainIds = this.getAllowedSiweChainIds();
+    const nonce = crypto.randomBytes(24).toString('base64url');
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+    await this.walletChallengeModel.create({
+      userId: user._id,
+      address: normalizedWallet,
+      purpose,
+      nonceHash: this.hashToken(nonce),
+      domain,
+      uri,
+      allowedChainIds,
+      expiresAt,
+    });
+
+    return {
+      nonce,
+      purpose,
+      domain,
+      uri,
+      chainIds: allowedChainIds,
+      issuedAt: new Date().toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    };
+  }
+
+  async consumeSiweChallenge(
+    userId: string,
+    expectedAddress: string,
+    purpose: WalletChallengePurpose,
+    rawMessage?: string,
+    signature?: string,
+  ): Promise<void> {
+    if (!rawMessage || !signature) {
+      throw new BadRequestException('Wallet signature is required');
+    }
+
+    let message: SiweMessage;
+    try {
+      message = new SiweMessage(rawMessage);
+    } catch {
+      throw new BadRequestException('Invalid SIWE message');
+    }
+
+    const address = expectedAddress.trim().toLowerCase();
+    if (message.address.toLowerCase() !== address || message.version !== '1') {
+      throw new BadRequestException('Signed wallet identity is invalid');
+    }
+
+    const challenge = await this.walletChallengeModel
+      .findOne({
+        userId: new Types.ObjectId(userId),
+        address,
+        purpose,
+        consumedAt: { $exists: false },
+        expiresAt: { $gt: new Date() },
+      })
+      .sort({ createdAt: -1 })
+      .select('+nonceHash')
+      .exec();
+
+    if (!challenge) {
+      throw new UnauthorizedException(
+        'Wallet challenge is missing, expired or already used',
+      );
+    }
+
+    const suppliedHash = this.hashToken(message.nonce);
+    if (!this.safeEqual(suppliedHash, challenge.nonceHash)) {
+      throw new UnauthorizedException('Wallet challenge is invalid');
+    }
+    if (message.domain !== challenge.domain || message.uri !== challenge.uri) {
+      throw new UnauthorizedException('Wallet challenge origin is invalid');
+    }
+    if (!challenge.allowedChainIds.includes(message.chainId)) {
+      throw new UnauthorizedException('Wallet challenge chain is not allowed');
+    }
+
+    const now = new Date();
+    const issuedAt = message.issuedAt ? new Date(message.issuedAt) : undefined;
+    const expirationTime = message.expirationTime
+      ? new Date(message.expirationTime)
+      : undefined;
+    if (
+      !issuedAt ||
+      Number.isNaN(issuedAt.getTime()) ||
+      issuedAt.getTime() > now.getTime() + 60_000 ||
+      issuedAt.getTime() < now.getTime() - 5 * 60_000
+    ) {
+      throw new UnauthorizedException(
+        'Wallet challenge issued-at time is invalid',
+      );
+    }
+    if (
+      !expirationTime ||
+      Number.isNaN(expirationTime.getTime()) ||
+      expirationTime <= now ||
+      expirationTime > challenge.expiresAt
+    ) {
+      throw new UnauthorizedException('Wallet challenge expiry is invalid');
+    }
+
+    try {
+      await message.verify({
+        signature,
+        nonce: message.nonce,
+        domain: challenge.domain,
+        time: now.toISOString(),
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid wallet signature');
+    }
+
+    const consumed = await this.walletChallengeModel.findOneAndUpdate(
+      { _id: challenge._id, consumedAt: { $exists: false } },
+      { $set: { consumedAt: now } },
+      { new: true },
+    );
+    if (!consumed) {
+      throw new UnauthorizedException('Wallet challenge has already been used');
+    }
+
+    await this.auditService.log({
+      action: `wallet.challenge.${purpose}.verified`,
+      actorId: userId,
+      targetType: 'wallet',
+      targetId: address,
+      metadata: { chainId: message.chainId, domain: message.domain },
+    });
   }
 
   async verifyEmail(dto: { code?: string; email?: string }) {
@@ -454,7 +609,8 @@ export class AuthService {
         !!user?.emailVerificationCodeExpiresAt &&
         user.emailVerificationCodeExpiresAt <= now;
       const codeMismatch =
-        !user || user.emailVerificationCodeHash !== hashedInput;
+        !user?.emailVerificationCodeHash ||
+        !this.safeEqual(user.emailVerificationCodeHash, hashedInput);
 
       if (missingCode || codeExpired || codeMismatch) {
         if (user) {
@@ -488,7 +644,10 @@ export class AuthService {
         )
         .exec();
 
-      return { message: 'Email verified', user: this.sanitizeUser(updated!) };
+      if (!updated) {
+        throw new UnauthorizedException('User not found');
+      }
+      return { message: 'Email verified', user: this.sanitizeUser(updated) };
     }
 
     // Legacy token path removed
@@ -499,8 +658,18 @@ export class AuthService {
     if (this.isLocalEmailVerificationBypassEnabled()) {
       return { message: 'Verification email sent' };
     }
-    this.enforceRateLimit('resendEmail', normalizedEmail, 3, this.emailVerificationWindowMs);
-    this.enforceRateLimitForIp('resendEmail', ipAddress, 10, this.emailVerificationWindowMs);
+    this.enforceRateLimit(
+      'resendEmail',
+      normalizedEmail,
+      3,
+      this.emailVerificationWindowMs,
+    );
+    this.enforceRateLimitForIp(
+      'resendEmail',
+      ipAddress,
+      10,
+      this.emailVerificationWindowMs,
+    );
 
     const user = await this.userModel
       .findOne({ email: normalizedEmail })
@@ -617,9 +786,7 @@ export class AuthService {
     this.enforceRateLimit('resetPassword', token.slice(-12), 5, 10 * 60 * 1000);
     try {
       const payload = this.jwtService.verify<{ sub: string }>(token, {
-        secret:
-          this.configService.get<string>('PASSWORD_RESET_SECRET') ||
-          this.configService.get<string>('JWT_SECRET'),
+        secret: this.getRequiredSecret('PASSWORD_RESET_SECRET'),
       });
       const user = await this.userModel
         .findById(payload.sub)
@@ -656,61 +823,144 @@ export class AuthService {
     return { ...this.sanitizeUser(user), permissions };
   }
 
-  async logout(userId: string) {
+  async logoutAll(userId: string) {
     await this.revokeAllRefreshTokensForUser(userId);
-    return { message: 'Logged out successfully' };
   }
 
-  async refreshToken(refreshToken: string) {
+  async logoutCurrent(userId: string, refreshToken?: string) {
+    if (!refreshToken) return;
     try {
       const payload = this.jwtService.verify<{ sub: string; jti?: string }>(
         refreshToken,
         {
-          secret: this.configService.get<string>('REFRESH_TOKEN_SECRET'),
+          secret: this.getRequiredSecret('REFRESH_TOKEN_SECRET'),
           issuer: this.getIssuer(),
           audience: this.getAudience(),
         },
       );
+      if (payload.sub !== userId || !payload.jti) return;
+      await this.refreshTokenModel.updateOne(
+        {
+          userId: new Types.ObjectId(userId),
+          jti: payload.jti,
+          tokenHash: this.hashToken(refreshToken),
+          revoked: false,
+        },
+        { $set: { revoked: true, revokedAt: new Date() } },
+      );
+    } catch {
+      return;
+    }
+  }
 
-      if (!payload.jti) {
+  async refreshToken(refreshToken?: string) {
+    if (!refreshToken) throw new UnauthorizedException('Session expired');
+    try {
+      const payload = this.jwtService.verify<{
+        sub: string;
+        jti?: string;
+        sid?: string;
+        typ?: string;
+      }>(refreshToken, {
+        secret: this.getRequiredSecret('REFRESH_TOKEN_SECRET'),
+        issuer: this.getIssuer(),
+        audience: this.getAudience(),
+      });
+
+      if (!payload.jti || payload.typ !== 'refresh') {
         throw new UnauthorizedException('Invalid refresh token: missing jti');
+      }
+      if (!Types.ObjectId.isValid(payload.sub)) {
+        throw new UnauthorizedException('Invalid refresh token');
       }
 
       const tokenHash = this.hashToken(refreshToken);
       const record = await this.refreshTokenModel
         .findOne({
-          userId: payload.sub,
+          userId: new Types.ObjectId(payload.sub),
           jti: payload.jti,
         })
         .exec();
 
-      if (!record || record.revoked || record.tokenHash !== tokenHash) {
+      if (!record || !this.safeEqual(record.tokenHash, tokenHash)) {
         throw new UnauthorizedException('Invalid refresh token');
+      }
+      if (record.revoked || record.usedAt) {
+        await this.refreshTokenModel.updateMany(
+          { userId: record.userId, familyId: record.familyId },
+          {
+            $set: {
+              revoked: true,
+              revokedAt: new Date(),
+              reuseDetectedAt: new Date(),
+            },
+          },
+        );
+        await this.auditService.log({
+          action: 'auth.session.reuse_detected',
+          actorId: record.userId,
+          targetType: 'session_family',
+          targetId: record.familyId,
+        });
+        throw new UnauthorizedException('Session expired');
       }
       if (record.expiresAt.getTime() <= Date.now()) {
         throw new UnauthorizedException('Refresh token expired');
       }
 
-      // rotate: revoke old token
-      await this.refreshTokenModel.updateOne(
-        { _id: record._id },
-        { $set: { revoked: true, revokedAt: new Date() } },
+      const rotated = await this.refreshTokenModel.findOneAndUpdate(
+        {
+          _id: record._id,
+          revoked: false,
+          $or: [{ usedAt: { $exists: false } }, { usedAt: null }],
+          expiresAt: { $gt: new Date() },
+        },
+        { $set: { revoked: true, revokedAt: new Date(), usedAt: new Date() } },
+        { new: true },
       );
+      if (!rotated) {
+        await this.refreshTokenModel.updateMany(
+          { userId: record.userId, familyId: record.familyId },
+          {
+            $set: {
+              revoked: true,
+              revokedAt: new Date(),
+              reuseDetectedAt: new Date(),
+            },
+          },
+        );
+        await this.auditService.log({
+          action: 'auth.session.reuse_detected',
+          actorId: record.userId,
+          targetType: 'session_family',
+          targetId: record.familyId,
+        });
+        throw new UnauthorizedException('Session expired');
+      }
 
       const user = await this.userModel.findById(payload.sub).exec();
       if (!user || !user.isActive || user.isBlocked) {
         throw new UnauthorizedException('User not found or inactive');
       }
 
-      const tokens = await this.generateTokens(user);
+      const nextJti = crypto.randomUUID();
+      const tokens = await this.generateTokens(user, {
+        familyId: record.familyId,
+        parentJti: record.jti,
+        refreshJti: nextJti,
+        ip: record.ip,
+        userAgent: record.userAgent,
+      });
+      await this.refreshTokenModel.updateOne(
+        { _id: record._id },
+        { $set: { replacedBy: nextJti } },
+      );
       const permissions = await this.rolesService.getPermissionsForRoles(
         user.roles,
       );
       return { ...tokens, permissions };
-    } catch (error) {
-      throw new UnauthorizedException(
-        'Invalid refresh token: ' + (error as Error).message,
-      );
+    } catch {
+      throw new UnauthorizedException('Session expired');
     }
   }
 
@@ -802,7 +1052,9 @@ export class AuthService {
   async disableMfa(userId: string, token: string) {
     const user = await this.userModel
       .findById(userId)
-      .select('+mfa.secret +mfa.setupSecret +mfa.emailCodeHash +mfa.emailCodeExpiresAt')
+      .select(
+        '+mfa.secret +mfa.setupSecret +mfa.emailCodeHash +mfa.emailCodeExpiresAt',
+      )
       .exec();
     if (!user) throw new UnauthorizedException('User not found');
     const secret = user.mfa?.secret;
@@ -830,20 +1082,28 @@ export class AuthService {
 
   private async generateTokens(
     user: UserDocument,
-    options: { ip?: string; userAgent?: string } = {},
+    options: {
+      ip?: string;
+      userAgent?: string;
+      familyId?: string;
+      parentJti?: string;
+      refreshJti?: string;
+    } = {},
   ) {
     const roles = Array.isArray(user.roles) ? user.roles : [];
     const permissions = await this.rolesService.getPermissionsForRoles(roles);
-    const jti = crypto.randomUUID();
-    const payload: JwtPayload = {
+    const accessJti = crypto.randomUUID();
+    const refreshJti = options.refreshJti ?? crypto.randomUUID();
+    const familyId = options.familyId ?? crypto.randomUUID();
+    const basePayload: JwtPayload = {
       sub: String(user._id),
       email: user.email,
       primaryWallet: user.primaryWallet,
       walletAddress: user.primaryWallet,
       roles,
       permissions,
-      jti,
       emailVerified: !!user.emailVerifiedAt,
+      sid: familyId,
     };
 
     const accessExpiresIn = (this.configService.get<string>('JWT_EXPIRY') ||
@@ -852,26 +1112,30 @@ export class AuthService {
       'REFRESH_TOKEN_EXPIRY',
     ) || '7d') as JwtSignOptions['expiresIn'];
 
-    const payloadObject: JwtPayload = { ...payload };
     const signOptions = {
       issuer: this.getIssuer(),
       audience: this.getAudience(),
     };
 
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(payloadObject, {
-        secret: this.configService.get<string>('JWT_SECRET') || undefined,
-        expiresIn: accessExpiresIn,
-        ...(signOptions.issuer ? { issuer: signOptions.issuer } : {}),
-        ...(signOptions.audience ? { audience: signOptions.audience } : {}),
-      }),
-      this.jwtService.signAsync(payloadObject, {
-        secret:
-          this.configService.get<string>('REFRESH_TOKEN_SECRET') || undefined,
-        expiresIn: refreshExpiresIn,
-        ...(signOptions.issuer ? { issuer: signOptions.issuer } : {}),
-        ...(signOptions.audience ? { audience: signOptions.audience } : {}),
-      }),
+      this.jwtService.signAsync(
+        { ...basePayload, jti: accessJti, typ: 'access' },
+        {
+          secret: this.getRequiredSecret('JWT_SECRET'),
+          expiresIn: accessExpiresIn,
+          ...(signOptions.issuer ? { issuer: signOptions.issuer } : {}),
+          ...(signOptions.audience ? { audience: signOptions.audience } : {}),
+        },
+      ),
+      this.jwtService.signAsync(
+        { ...basePayload, jti: refreshJti, typ: 'refresh' },
+        {
+          secret: this.getRequiredSecret('REFRESH_TOKEN_SECRET'),
+          expiresIn: refreshExpiresIn,
+          ...(signOptions.issuer ? { issuer: signOptions.issuer } : {}),
+          ...(signOptions.audience ? { audience: signOptions.audience } : {}),
+        },
+      ),
     ]);
 
     // persist refresh token for rotation/revocation
@@ -879,7 +1143,9 @@ export class AuthService {
     const tokenHash = this.hashToken(refreshToken);
     await this.refreshTokenModel.create({
       userId: new Types.ObjectId(user._id),
-      jti,
+      jti: refreshJti,
+      familyId,
+      parentJti: options.parentJti,
       tokenHash,
       expiresAt,
       revoked: false,
@@ -904,6 +1170,58 @@ export class AuthService {
     return crypto.createHash('sha256').update(token).digest('hex');
   }
 
+  private getRequiredSecret(name: string): string {
+    const value = this.configService.get<string>(name)?.trim();
+    if (!value) throw new Error(`${name} is required`);
+    return value;
+  }
+
+  private safeEqual(left: string, right: string): boolean {
+    const leftBuffer = Buffer.from(left);
+    const rightBuffer = Buffer.from(right);
+    return (
+      leftBuffer.length === rightBuffer.length &&
+      crypto.timingSafeEqual(leftBuffer, rightBuffer)
+    );
+  }
+
+  private getRequiredSiweDomain(): string {
+    const configured = this.configService.get<string>('SIWE_DOMAIN')?.trim();
+    if (configured) return configured;
+    if (this.configService.get<string>('NODE_ENV') === 'production') {
+      throw new Error('SIWE_DOMAIN is required');
+    }
+    return 'localhost:3000';
+  }
+
+  private getRequiredSiweUri(): string {
+    const configured = this.configService.get<string>('SIWE_URI')?.trim();
+    if (configured) return new URL(configured).origin;
+    if (this.configService.get<string>('NODE_ENV') === 'production') {
+      throw new Error('SIWE_URI is required');
+    }
+    return 'http://localhost:3000';
+  }
+
+  private getAllowedSiweChainIds(): number[] {
+    const raw = this.configService.get<string>('SIWE_CHAIN_IDS')?.trim();
+    const values = (
+      raw ||
+      (this.configService.get<string>('NODE_ENV') === 'production'
+        ? ''
+        : '84532')
+    )
+      .split(',')
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isSafeInteger(value) && value > 0);
+    if (values.length === 0) {
+      throw new Error(
+        'SIWE_CHAIN_IDS must contain at least one valid chain ID',
+      );
+    }
+    return [...new Set(values)];
+  }
+
   private computeExpiryDate(expiresIn: JwtSignOptions['expiresIn']) {
     if (typeof expiresIn === 'number') {
       return new Date(Date.now() + expiresIn * 1000);
@@ -911,8 +1229,7 @@ export class AuthService {
     // handle strings like "15m", "7d"
     const match = /^(\d+)([smhd])$/.exec(expiresIn as string);
     if (!match) {
-      // fallback: 7 days
-      return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      throw new Error('Session expiry must use s, m, h or d units');
     }
     const value = parseInt(match[1], 10);
     const unit = match[2];
@@ -926,29 +1243,42 @@ export class AuthService {
   }
 
   private sanitizeUser(user: UserDocument) {
-    const raw: any =
-      user && typeof (user as any).toObject === 'function'
-        ? (user as any).toObject()
-        : { ...(user as any) };
+    const candidate = user as unknown as { toObject?: unknown };
+    const raw =
+      typeof candidate.toObject === 'function'
+        ? ((candidate as { toObject: () => unknown }).toObject() as Record<
+            string,
+            unknown
+          >)
+        : (user as unknown as Record<string, unknown>);
 
     // Drop passwordHash/nonce/__v from responses
     const { passwordHash, nonce, __v, mfa, ...sanitized } = raw;
-    const primaryWallet = raw.primaryWallet;
-    const roles = Array.isArray(raw.roles) ? raw.roles : [];
+    const primaryWallet =
+      typeof raw.primaryWallet === 'string' ? raw.primaryWallet : undefined;
+    const roles = Array.isArray(raw.roles)
+      ? raw.roles.filter((role): role is UserRole =>
+          Object.values(UserRole).includes(role as UserRole),
+        )
+      : [];
+    const mfaRecord =
+      mfa && typeof mfa === 'object'
+        ? (mfa as Record<string, unknown>)
+        : undefined;
     void passwordHash;
     void nonce;
     void __v;
     void mfa;
-    const id = raw._id != null ? String(raw._id) : undefined;
+    const id = user._id.toHexString();
     return {
       ...sanitized,
       roles,
       mfa: {
-        enabled: Boolean(raw.mfa?.enabled),
-        emailEnabled: Boolean(raw.mfa?.emailEnabled),
-        authenticatorEnabled: Boolean(raw.mfa?.secret),
+        enabled: Boolean(mfaRecord?.enabled),
+        emailEnabled: Boolean(mfaRecord?.emailEnabled),
+        authenticatorEnabled: Boolean(mfaRecord?.secret),
       },
-      mfaEnabled: Boolean(raw.mfa?.enabled),
+      mfaEnabled: Boolean(mfaRecord?.enabled),
       walletAddress: primaryWallet,
       id,
     };
@@ -1019,7 +1349,7 @@ export class AuthService {
     if (expiresAt.getTime() < Date.now()) {
       return false;
     }
-    if (this.hashToken(token.trim()) !== hash) {
+    if (!this.safeEqual(this.hashToken(token.trim()), hash)) {
       return false;
     }
 
@@ -1055,9 +1385,7 @@ export class AuthService {
     return this.jwtService.signAsync(
       { sub: String(user._id) },
       {
-        secret:
-          this.configService.get<string>('PASSWORD_RESET_SECRET') ||
-          this.configService.get<string>('JWT_SECRET'),
+        secret: this.getRequiredSecret('PASSWORD_RESET_SECRET'),
         expiresIn,
         issuer,
         audience,
@@ -1075,7 +1403,6 @@ export class AuthService {
       this.configService.get<string>('NODE_ENV') || process.env.NODE_ENV;
     const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
     const from = this.configService.get<string>('EMAIL_FROM');
-    const verifyUrl = this.configService.get<string>('FRONTEND_VERIFY_URL');
     const isTestEnv = nodeEnv === 'test';
 
     if (!apiKey || !from) {
@@ -1102,12 +1429,7 @@ export class AuthService {
         }
       }
     }
-    const verificationLink = verifyUrl
-      ? `${verifyUrl}?code=${encodeURIComponent(code)}&email=${encodeURIComponent(email)}`
-      : undefined;
-    const text = verificationLink
-      ? `Welcome to Keibo.\n\nPlease verify your email by opening this link: ${verificationLink}\nIf you did not request this, you can ignore this email.`
-      : `Welcome to Keibo.\n\nYour verification code: ${code}\nSubmit it to /auth/verify-email along with your email to activate your account.`;
+    const text = `Welcome to Keibo.\n\nYour verification code is ${code}. Enter it in the verification screen. If you did not request this, ignore this email.`;
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; background: #f7f9fb; border: 1px solid #e5e8ec; border-radius: 12px;">
         <div style="text-align: center; margin-bottom: 16px;">
@@ -1125,21 +1447,13 @@ export class AuthService {
              ${code}
           </div>
 
-          ${verificationLink
-        ? `<p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">Or, you can simply click the button below:</p>
-           <div style="text-align:center; margin: 20px 0;">
-             <a href="${verificationLink}" style="background: #1f6feb; color: #ffffff; text-decoration: none; padding: 12px 20px; border-radius: 8px; font-weight: 600; display: inline-block;">Verify Email Automatically</a>
-           </div>
-           <p style="margin: 0 0 12px; color: #607087; font-size: 13px; line-height: 1.6;">If the button doesn’t work, use this link:<br><span style="word-break: break-all; color: #1f6feb;">${verificationLink}</span></p>`
-        : ''
-      }
           <p style="margin: 16px 0 0; color: #8a97ab; font-size: 12px;">If you did not request this, you can safely ignore this email.</p>
         </div>
       </div>
     `;
     try {
       const fromAddress = from || 'test@example.com';
-      this.logger.log(`Sending verification email to ${email}`);
+      this.logger.log('Sending verification email');
       await sgMail.send({
         to: email,
         from: fromAddress,
@@ -1147,12 +1461,10 @@ export class AuthService {
         text,
         html,
       });
-      this.logger.debug(`Sent verification email to ${email}`);
+      this.logger.debug('Verification email sent');
       return true;
-    } catch (err: unknown) {
-      this.logger.warn(
-        `Failed to send verification email to ${email}: ${this.formatSendgridError(err)}`,
-      );
+    } catch {
+      this.logger.warn('Verification email delivery failed');
       if (strictDelivery) {
         throw new BadRequestException(
           'Failed to send verification email. Please try again.',
@@ -1169,7 +1481,6 @@ export class AuthService {
     if (!email) return;
     const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
     const from = this.configService.get<string>('EMAIL_FROM');
-    const resetUrl = this.configService.get<string>('FRONTEND_RESET_URL');
     if (!apiKey || !from) {
       this.logger.warn(
         'Skipping password reset email: SENDGRID_API_KEY or EMAIL_FROM missing',
@@ -1186,12 +1497,7 @@ export class AuthService {
         sgWithResidency.setDataResidency(residency);
       }
     }
-    const resetLink = resetUrl
-      ? `${resetUrl}?token=${encodeURIComponent(token)}`
-      : undefined;
-    const text = resetLink
-      ? `Reset your password: ${resetLink}\nIf you did not request this, ignore this email.`
-      : `Reset token: ${token}\nSubmit it to /auth/reset-password with your new password.`;
+    const text = `Enter this password reset code in the Keibo reset screen:\n\n${token}\n\nIf you did not request this, ignore this email.`;
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; background: #f7f9fb; border: 1px solid #e5e8ec; border-radius: 12px;">
         <div style="text-align: center; margin-bottom: 16px;">
@@ -1201,22 +1507,16 @@ export class AuthService {
         <div style="background: #ffffff; padding: 20px; border-radius: 10px; border: 1px solid #eef1f5;">
           <h2 style="margin: 0 0 12px; color: #0f1f38;">Reset your password</h2>
           <p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">
-            We received a request to reset your password. If this was you, use the link or token below.
+            We received a request to reset your password. Enter the code below in the reset screen.
           </p>
-          ${resetLink
-        ? `<div style="text-align:center; margin: 20px 0;">
-                  <a href="${resetLink}" style="background: #1f6feb; color: #ffffff; text-decoration: none; padding: 12px 20px; border-radius: 8px; font-weight: 600; display: inline-block;">Reset Password</a>
-                </div>
-                <p style="margin: 0 0 12px; color: #607087; font-size: 13px; line-height: 1.6;">If the button doesn’t work, copy and paste this link into your browser:<br><span style="word-break: break-all; color: #1f6feb;">${resetLink}</span></p>`
-        : `<p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">Your reset token:</p>
-                <div style="padding: 12px; background: #f0f4ff; border-radius: 8px; font-family: monospace; font-size: 14px; color: #0f1f38;">${token}</div>`
-      }
+          <p style="margin: 0 0 12px; color: #304054; line-height: 1.6;">Your reset code:</p>
+          <div style="padding: 12px; background: #f0f4ff; border-radius: 8px; font-family: monospace; font-size: 14px; color: #0f1f38;">${token}</div>
           <p style="margin: 16px 0 0; color: #8a97ab; font-size: 12px;">If you did not request this, you can safely ignore this email.</p>
         </div>
       </div>
     `;
     try {
-      this.logger.log(`Sending password reset email to ${email}`);
+      this.logger.log('Sending password reset email');
       await sgMail.send({
         to: email,
         from,
@@ -1224,11 +1524,9 @@ export class AuthService {
         text,
         html,
       });
-      this.logger.debug(`Sent password reset email to ${email}`);
-    } catch (err: unknown) {
-      this.logger.warn(
-        `Failed to send password reset email to ${email}: ${this.formatSendgridError(err)}`,
-      );
+      this.logger.debug('Password reset email sent');
+    } catch {
+      this.logger.warn('Password reset email delivery failed');
     }
   }
 
@@ -1261,14 +1559,8 @@ export class AuthService {
         throw new Error('Missing payload in Google token');
       }
       return payload;
-    } catch (err: unknown) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : typeof err === 'string'
-            ? err
-            : 'unknown error';
-      this.logger.warn(`Google token verification failed: ${msg}`);
+    } catch {
+      this.logger.warn('Google token verification failed');
       throw new UnauthorizedException('Invalid Google id token');
     }
   }
@@ -1363,7 +1655,7 @@ export class AuthService {
 
   private getIssuer(): string | undefined {
     try {
-      const issuer = this.configService.get<any>('JWT_ISSUER');
+      const issuer = this.configService.get<unknown>('JWT_ISSUER');
       if (typeof issuer === 'string' && issuer.trim().length > 0) {
         return issuer.trim();
       }
@@ -1375,7 +1667,7 @@ export class AuthService {
 
   private getAudience(): string | undefined {
     try {
-      const audience = this.configService.get<any>('JWT_AUDIENCE');
+      const audience = this.configService.get<unknown>('JWT_AUDIENCE');
       if (typeof audience === 'string' && audience.trim().length > 0) {
         return audience.trim();
       }
@@ -1386,7 +1678,7 @@ export class AuthService {
   }
 
   private generateEmailVerificationCode() {
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const code = crypto.randomInt(100000, 1000000).toString();
     const ttlMs = 15 * 60 * 1000; // 15 minutes
     return {
       code,

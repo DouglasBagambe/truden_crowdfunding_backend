@@ -24,35 +24,15 @@ export class RolesGuard implements CanActivate {
     const userRoles: UserRole[] = Array.isArray(user?.roles)
       ? user.roles
       : user?.role
-      ? [user.role]
-      : [];
-
-    const kycBypass =
-      String(process.env.KYC_BYPASS ?? '').toLowerCase() === 'true';
+        ? [user.role]
+        : [];
 
     if (userRoles.includes(UserRole.SUPERADMIN)) {
       return true;
     }
 
     if (!user || userRoles.length === 0) {
-      if (kycBypass) {
-        const isPrivilegedRoute = requiredRoles.some((role) =>
-          [UserRole.ADMIN, UserRole.SUPERADMIN, UserRole.TREASURY].includes(role),
-        );
-        if (!isPrivilegedRoute) {
-          return true;
-        }
-      }
       return false;
-    }
-
-    if (kycBypass) {
-      const isPrivilegedRoute = requiredRoles.some((role) =>
-        [UserRole.ADMIN, UserRole.SUPERADMIN, UserRole.TREASURY].includes(role),
-      );
-      if (!isPrivilegedRoute) {
-        return true;
-      }
     }
 
     return requiredRoles.some((role) => userRoles.includes(role));

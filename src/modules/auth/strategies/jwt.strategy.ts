@@ -7,6 +7,8 @@ import { JwtPayload } from '../../../common/interfaces/user.interface';
 import { AuthService } from '../auth.service';
 
 function extractJwtFromAuthHeader(req: Request): string | null {
+  const cookieToken = req.cookies?.keibo_access as string | undefined;
+  if (cookieToken) return cookieToken;
   const authHeader = req.headers.authorization;
   if (!authHeader) return null;
   const [scheme, token] = authHeader.split(' ');
@@ -23,14 +25,20 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: extractJwtFromAuthHeader,
       ignoreExpiration: false,
-      secretOrKey:
-        configService.get<string>('JWT_SECRET') || 'default-secret-key',
+      secretOrKey: (() => {
+        const secret = configService.get<string>('JWT_SECRET')?.trim();
+        if (!secret) throw new Error('JWT_SECRET is required');
+        return secret;
+      })(),
       issuer: configService.get<string>('JWT_ISSUER') || undefined,
       audience: configService.get<string>('JWT_AUDIENCE') || undefined,
     });
   }
 
   async validate(payload: JwtPayload): Promise<JwtPayload> {
+    if (payload.typ !== 'access') {
+      throw new UnauthorizedException('Invalid session token');
+    }
     try {
       const profile = (await this.authService.getProfile(payload.sub)) as {
         email?: string;

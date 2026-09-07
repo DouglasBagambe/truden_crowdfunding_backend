@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
   Logger,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
@@ -28,11 +29,19 @@ import { SubmitKycApplicationDto } from './dto/submit-kyc-application.dto';
 import { AdminFilterKycDto } from './dto/admin-filter-kyc.dto';
 import { AdminOverrideKycStatusDto } from './dto/admin-override-kyc-status.dto';
 import { KycWebhookDto } from './dto/kyc-webhook.dto';
-import { KycProviderStatusResult } from './providers/kyc-provider.interface';
+import {
+  KycProviderStatusResult,
+  KycProviderSubmitResult,
+} from './providers/kyc-provider.interface';
 import { DiditKycProviderService } from './providers/didit-kyc.provider';
 // NOTE: LaboremusKycProviderService (KYB for businesses) removed for now.
 // Didit handles KYC for ALL user types. Re-add Laboremus when KYB is needed.
 import { DummyKycProviderService } from './providers/dummy-kyc.provider';
+import {
+  KycWebhookEvent,
+  KycWebhookEventDocument,
+} from './schemas/kyc-webhook-event.schema';
+import { AuditService } from '../audit/audit.service';
 
 /** KYC expires after 12 months and must be renewed */
 const KYC_EXPIRY_MONTHS = 12;
@@ -46,10 +55,13 @@ export class KycService {
     private readonly profileModel: Model<KycProfileDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    @InjectModel(KycWebhookEvent.name)
+    private readonly webhookEventModel: Model<KycWebhookEventDocument>,
     private readonly configService: ConfigService,
     private readonly diditProvider: DiditKycProviderService,
     private readonly dummyProvider: DummyKycProviderService,
-  ) { }
+    private readonly auditService: AuditService,
+  ) {}
 
   // ─────────────────────────────────────────────
   // Public user-facing API
@@ -74,12 +86,14 @@ export class KycService {
       try {
         const provider = this.getProviderByName(profile.providerName);
         const fresh = await provider.refreshStatus(profile);
-        if (fresh.status && fresh.status !== 'UNDER_REVIEW' && fresh.status !== 'PENDING') {
-          this.logger.log(
-            `Auto-refresh: Didit status for user ${userId} updated from ${profile.providerStatus} to ${fresh.status}`,
-          );
+        if (
+          fresh.status &&
+          fresh.status !== 'UNDER_REVIEW' &&
+          fresh.status !== 'PENDING'
+        ) {
+          this.logger.log('KYC status updated from the configured provider');
           profile.providerStatus = fresh.status;
-          profile.providerRawResponse = fresh.rawResponse ?? {};
+          profile.providerRawResponse = {};
           this.applyMappedStatus(profile, fresh);
           await profile.save();
           await this.syncUserKycStatus(user, profile);
@@ -87,8 +101,8 @@ export class KycService {
           const updatedUser = await this.userModel.findById(user._id).exec();
           return this.toProfileView(profile, updatedUser ?? user);
         }
-      } catch (err: any) {
-        this.logger.warn(`Auto-refresh from Didit failed for user ${userId}: ${err.message}`);
+      } catch {
+        this.logger.warn('Automatic KYC status refresh failed');
       }
     }
 
@@ -116,14 +130,12 @@ export class KycService {
       status.status === 'UNKNOWN' ||
       status.status === 'UNDER_REVIEW'
     ) {
-      this.logger.log(
-        `syncMyStatus: stored session ${profile.providerReference} is still ${status.status} for user ${userId}. Status unchanged.`,
-      );
+      this.logger.log('KYC status remains pending at the configured provider');
       return this.toProfileView(profile, user);
     }
 
     profile.providerStatus = status.status;
-    profile.providerRawResponse = status.rawResponse ?? {};
+    profile.providerRawResponse = {};
     this.applyMappedStatus(profile, status);
     await profile.save();
 
@@ -165,7 +177,7 @@ export class KycService {
       profile.status === KycApplicationStatus.DRAFT ||
       profile.status === KycApplicationStatus.EXPIRED
     ) {
-      (update as any).status = KycApplicationStatus.DRAFT;
+      update.status = KycApplicationStatus.DRAFT;
     }
 
     const updated = await this.profileModel
@@ -179,39 +191,19 @@ export class KycService {
     return this.toProfileView(updated, user);
   }
 
-  async uploadDocument(
+  uploadDocument(
     userId: string,
     dto: UploadKycDocumentDto,
     file: Express.Multer.File | undefined,
   ): Promise<KycDocumentView> {
-    if (!file) {
-      throw new BadRequestException('File is required');
-    }
-
-    const user = await this.findUser(userId);
-    const profile = await this.getOrCreateProfileForUser(user._id);
-
-    const storageKey = `kyc/${user._id.toString()}/${Date.now()}-${file.originalname}`;
-
-    const doc: KycDocument = {
-      type: dto.type,
-      label: dto.label,
-      storageKey,
-      url: storageKey,
-      mimeType: file.mimetype,
-      sizeBytes: file.size,
-      uploadedAt: new Date(),
-      metadata: dto.metadata,
-    };
-
-    profile.documents.push(doc);
-    await profile.save();
-
-    const reloaded = await this.profileModel.findById(profile._id).exec();
-    if (!reloaded) throw new NotFoundException('KYC profile not found');
-
-    const savedDoc = reloaded.documents[reloaded.documents.length - 1];
-    return this.toDocumentView(savedDoc);
+    void userId;
+    void dto;
+    void file;
+    return Promise.reject(
+      new ServiceUnavailableException(
+        'Direct KYC document upload is unavailable; use the hosted verification flow.',
+      ),
+    );
   }
 
   /**
@@ -243,7 +235,7 @@ export class KycService {
     if (!allowedStatuses.includes(profile.status)) {
       throw new BadRequestException(
         `Cannot submit KYC while status is ${profile.status}. ` +
-        'If under review, please wait for the result.',
+          'If under review, please wait for the result.',
       );
     }
 
@@ -254,23 +246,23 @@ export class KycService {
     profile.status = KycApplicationStatus.PENDING;
     profile.submittedAt = new Date();
 
-    let submitResult;
+    let submitResult: KycProviderSubmitResult;
     try {
       submitResult = await provider.submitApplication(profile);
-    } catch (err: any) {
-      this.logger.error(`KYC submit failed for user ${userId}: ${err.message}`);
+    } catch {
+      this.logger.error('KYC provider session creation failed');
       // Reset status back so user can retry
       profile.status = KycApplicationStatus.UNVERIFIED;
       await profile.save();
       throw new BadRequestException(
-        err.message || 'KYC provider session creation failed. Please try again.',
+        'KYC provider session creation failed. Please try again.',
       );
     }
 
     profile.providerName = provider.getProviderName();
     profile.providerReference = submitResult.reference;
     profile.providerStatus = submitResult.status;
-    profile.providerRawResponse = submitResult.rawResponse ?? {};
+    profile.providerRawResponse = {};
 
     const mapped = this.mapProviderStatus(submitResult);
     this.applyMappedStatus(profile, mapped);
@@ -283,8 +275,9 @@ export class KycService {
     };
 
     // Return the hosted URL so the frontend can redirect the user
-    if (submitResult.rawResponse?.verificationUrl) {
-      view.verificationUrl = submitResult.rawResponse.verificationUrl;
+    const verificationUrl = submitResult.rawResponse?.verificationUrl;
+    if (typeof verificationUrl === 'string') {
+      view.verificationUrl = verificationUrl;
     }
 
     return view;
@@ -297,13 +290,16 @@ export class KycService {
    */
   async requireVerified(userId: string): Promise<void> {
     const bypass =
-      String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() === 'true';
+      String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() ===
+      'true';
     if (bypass) return;
 
     const user = await this.findUser(userId);
     if (user.kycStatus === KYCStatus.VERIFIED) {
       // Also check expiry
-      const profile = await this.profileModel.findOne({ userId: user._id }).exec();
+      const profile = await this.profileModel
+        .findOne({ userId: user._id })
+        .exec();
       if (profile) {
         const isExpired = await this.checkAndMarkExpired(profile, user);
         if (!isExpired) return;
@@ -329,10 +325,20 @@ export class KycService {
   async handleProviderWebhook(
     providerName: string,
     dto: KycWebhookDto,
+    verification: { eventKey: string; eventAt: Date },
   ): Promise<void> {
-    this.logger.log(
-      `KYC webhook from provider: ${providerName}, ref=${dto.reference}, status=${dto.status}, vendorData=${dto.externalUserId}`,
-    );
+    try {
+      await this.webhookEventModel.create({
+        provider: providerName,
+        eventKey: verification.eventKey,
+        reference: dto.reference,
+        status: dto.status,
+        eventAt: verification.eventAt,
+      });
+    } catch (error: unknown) {
+      if ((error as { code?: number }).code === 11000) return;
+      throw error;
+    }
 
     const provider = this.getProviderByName(providerName);
     const mapped = await provider.handleWebhook(dto);
@@ -341,20 +347,17 @@ export class KycService {
     let profile: KycProfileDocument | null = null;
 
     // Priority 1: look up by vendor_data (userId) — most reliable for Didit
+    const rawVendorData =
+      dto.externalUserId ?? dto.payload?.vendor_data ?? dto.payload?.vendorData;
     const vendorData =
-      dto.externalUserId ??
-      dto.payload?.vendor_data ??
-      dto.payload?.vendorData;
+      typeof rawVendorData === 'string' ? rawVendorData : undefined;
 
     if (vendorData && Types.ObjectId.isValid(vendorData)) {
       profile = await this.profileModel
         .findOne({ userId: new Types.ObjectId(vendorData) })
         .exec();
       if (profile) {
-        // Always update the stored reference to the latest session
-        this.logger.log(
-          `KYC webhook: found profile via vendor_data=${vendorData}, updating ref to ${mapped.reference}`,
-        );
+        this.logger.log('KYC webhook matched an active profile');
         profile.providerReference = mapped.reference;
         profile.providerName = providerName;
       }
@@ -368,14 +371,20 @@ export class KycService {
     }
 
     if (!profile) {
-      this.logger.warn(
-        `KYC webhook: No profile found for provider=${providerName} ref=${mapped.reference} vendorData=${vendorData}`,
-      );
+      this.logger.warn(`KYC webhook did not match an active profile`);
+      return;
+    }
+
+    if (
+      profile.providerEventAt &&
+      verification.eventAt.getTime() <= profile.providerEventAt.getTime()
+    ) {
       return;
     }
 
     profile.providerStatus = mapped.status;
-    profile.providerRawResponse = mapped.rawResponse ?? {};
+    profile.providerRawResponse = {};
+    profile.providerEventAt = verification.eventAt;
     this.applyMappedStatus(profile, mapped);
 
     await profile.save();
@@ -383,9 +392,13 @@ export class KycService {
     const user = await this.userModel.findById(profile.userId).exec();
     if (user) await this.syncUserKycStatus(user, profile);
 
-    this.logger.log(
-      `KYC webhook processed: userId=${profile.userId}, newStatus=${profile.status}`,
-    );
+    await this.auditService.log({
+      action: 'kyc.webhook.applied',
+      actorId: profile.userId,
+      targetType: 'kyc_profile',
+      targetId: String(profile._id),
+      metadata: { provider: providerName, status: profile.status },
+    });
   }
 
   // ─────────────────────────────────────────────
@@ -401,9 +414,10 @@ export class KycService {
     if (dto.userId) filter.userId = new Types.ObjectId(dto.userId);
 
     if (dto.fromDate || dto.toDate) {
-      filter.submittedAt = {} as any;
-      if (dto.fromDate) (filter.submittedAt as any).$gte = new Date(dto.fromDate);
-      if (dto.toDate) (filter.submittedAt as any).$lte = new Date(dto.toDate);
+      filter.submittedAt = {
+        ...(dto.fromDate ? { $gte: new Date(dto.fromDate) } : {}),
+        ...(dto.toDate ? { $lte: new Date(dto.toDate) } : {}),
+      };
     }
 
     const page = dto.page ?? 1;
@@ -433,7 +447,8 @@ export class KycService {
       // Also get the creator's precise name from profile
       const firstName = user?.profile?.firstName ?? '';
       const lastName = user?.profile?.lastName ?? '';
-      const userName = [firstName, lastName].filter(Boolean).join(' ').trim() || undefined;
+      const userName =
+        [firstName, lastName].filter(Boolean).join(' ').trim() || undefined;
 
       return {
         id: p._id.toString(),
@@ -442,14 +457,14 @@ export class KycService {
         userName,
         status: p.status,
         userKycStatus,
-        level: (p.level as any) ?? null,
+        level: p.level ?? null,
         submittedAt: p.submittedAt ?? null,
         approvedAt: p.approvedAt ?? null,
         rejectedAt: p.rejectedAt ?? null,
         rejectionReason: p.rejectionReason ?? null,
         documentCount: (p.documents ?? []).length,
-        createdAt: (p as any).createdAt as Date,
-        updatedAt: (p as any).updatedAt as Date,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
       };
     });
 
@@ -468,6 +483,8 @@ export class KycService {
   async adminOverrideStatus(
     id: string,
     dto: AdminOverrideKycStatusDto,
+    actorId: string,
+    actorRoles: string[],
   ): Promise<KycProfileView> {
     if (!Types.ObjectId.isValid(id))
       throw new BadRequestException('Invalid profile id');
@@ -493,10 +510,23 @@ export class KycService {
     const user = await this.userModel.findById(profile.userId).exec();
     if (user) await this.syncUserKycStatus(user, profile);
 
+    await this.auditService.log({
+      action: 'kyc.admin.status_overridden',
+      actorId,
+      actorRoles,
+      targetType: 'kyc_profile',
+      targetId: String(profile._id),
+      metadata: { status: profile.status },
+    });
+
     return this.toProfileView(profile, user ?? undefined);
   }
 
-  async syncStatusFromProvider(id: string): Promise<KycProfileView> {
+  async syncStatusFromProvider(
+    id: string,
+    actorId: string,
+    actorRoles: string[],
+  ): Promise<KycProfileView> {
     if (!Types.ObjectId.isValid(id))
       throw new BadRequestException('Invalid profile id');
     const profile = await this.profileModel.findById(id).exec();
@@ -506,14 +536,22 @@ export class KycService {
     const status = await provider.refreshStatus(profile);
 
     profile.providerStatus = status.status;
-    profile.providerRawResponse = status.rawResponse ?? {};
+    profile.providerRawResponse = {};
     this.applyMappedStatus(profile, status);
 
     await profile.save();
 
     const user = await this.userModel.findById(profile.userId).exec();
+    if (user) await this.syncUserKycStatus(user, profile);
+    await this.auditService.log({
+      action: 'kyc.admin.provider_sync',
+      actorId,
+      actorRoles,
+      targetType: 'kyc_profile',
+      targetId: String(profile._id),
+      metadata: { provider: profile.providerName, status: profile.status },
+    });
     if (!user) return this.toProfileView(profile);
-    await this.syncUserKycStatus(user, profile);
     return this.toProfileView(profile, user);
   }
 
@@ -522,13 +560,24 @@ export class KycService {
   // ─────────────────────────────────────────────
 
   private selectProvider(
-    userType?: string,
+    _userType?: string,
   ): DiditKycProviderService | DummyKycProviderService {
+    void _userType;
     const configuredProvider = (
       this.configService.get<string>('KYC_PROVIDER') ?? ''
     ).toLowerCase();
 
     if (configuredProvider === 'dummy') {
+      const environment = this.configService.get<string>('NODE_ENV');
+      const mode = this.configService.get<string>('KYC_PROVIDER_MODE');
+      if (
+        !['development', 'test'].includes(environment || '') ||
+        mode !== 'sandbox'
+      ) {
+        throw new ForbiddenException(
+          'Dummy KYC is available only in explicit development/test sandbox mode',
+        );
+      }
       return this.dummyProvider;
     }
 
@@ -544,7 +593,7 @@ export class KycService {
       case 'didit':
         return this.diditProvider;
       default:
-        return this.dummyProvider;
+        throw new ForbiddenException('Unsupported KYC provider');
     }
   }
 
@@ -627,7 +676,9 @@ export class KycService {
           'kyc.status': newStatus,
           'kyc.submittedAt': profile.submittedAt,
           'kyc.verifiedAt':
-            newStatus === KYCStatus.VERIFIED ? new Date() : user.kyc?.verifiedAt,
+            newStatus === KYCStatus.VERIFIED
+              ? new Date()
+              : user.kyc?.verifiedAt,
           'kyc.failureReason': profile.rejectionReason ?? null,
           'kyc.documentType': profile.idType ?? user.kyc?.documentType,
           'kyc.documentCountry': profile.idCountry ?? user.kyc?.documentCountry,
@@ -693,7 +744,7 @@ export class KycService {
       userId: profile.userId.toString(),
       status: profile.status,
       userKycStatus,
-      level: (profile.level as any) ?? null,
+      level: profile.level ?? null,
       firstName: profile.firstName ?? null,
       lastName: profile.lastName ?? null,
       dateOfBirth: profile.dateOfBirth ?? null,
@@ -717,8 +768,8 @@ export class KycService {
       rejectionReason: profile.rejectionReason ?? null,
       manualNotes: profile.manualNotes ?? null,
       documents: docs,
-      createdAt: (profile as any).createdAt as Date,
-      updatedAt: (profile as any).updatedAt as Date,
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
     };
   }
 }

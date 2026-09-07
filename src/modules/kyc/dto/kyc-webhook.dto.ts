@@ -1,5 +1,8 @@
 import { IsObject, IsOptional, IsString } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '../../../common/swagger.decorators';
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+} from '../../../common/swagger.decorators';
 
 export class KycWebhookDto {
   @ApiProperty({ description: 'Provider reference ID for the KYC application' })
@@ -10,7 +13,9 @@ export class KycWebhookDto {
   @IsString()
   status!: string;
 
-  @ApiPropertyOptional({ description: 'Optional user identifier from provider' })
+  @ApiPropertyOptional({
+    description: 'Optional user identifier from provider',
+  })
   @IsOptional()
   @IsString()
   externalUserId?: string;
@@ -18,5 +23,5 @@ export class KycWebhookDto {
   @ApiPropertyOptional({ description: 'Raw provider payload' })
   @IsOptional()
   @IsObject()
-  payload?: Record<string, any>;
+  payload?: Record<string, unknown>;
 }

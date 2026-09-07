@@ -1,98 +1,115 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# KEIBO backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+NestJS API for KEIBO authentication, campaigns, KYC orchestration, payments,
+and the authoritative double-entry financial ledger.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Local verification
 
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
+Use Node 22. The repository lockfile is authoritative.
 
 ```bash
-$ yarn install
+npm ci --ignore-scripts --no-audit --no-fund
+npm run quality:changed
+npm run build
+npm run test:unit -- --runInBand
+npm audit --omit=dev --audit-level=high
 ```
 
-## Compile and run the project
+The repository-local `compose.financial-test.yml` starts disposable PostgreSQL
+and Redis test fixtures. It is not a production deployment prescription. With
+those fixtures running, apply the idempotent schema twice and run the hard-fail
+integration suite:
 
 ```bash
-# development
-$ yarn run start
-
-# watch mode
-$ yarn run start:dev
-
-# production mode
-$ yarn run start:prod
+npm run financial:migrate
+npm run financial:migrate
+npm run test:financial
 ```
 
-## Run tests
+CI also starts disposable MongoDB for the auth integration suite. CI values are
+non-secret, local to the job, and must never be copied into a deployment.
 
-```bash
-# unit tests
-$ yarn run test
+## Production runtime contract
 
-# e2e tests
-$ yarn run test:e2e
+Build one immutable Node 22 image with `npm ci` and `npm run build`, then run it
+as two separately scalable processes:
 
-# test coverage
-$ yarn run test:cov
-```
+- Web: `node dist/main` with `FINANCIAL_WORKERS_ENABLED=false`.
+- Financial worker: `node dist/financial-worker` from the same reviewed image with
+  `FINANCIAL_WORKERS_ENABLED=true`, isolated from public ingress. Until a
+  staging migration, queue, reconciliation, and rollback drill is verified, do
+  not enable this process in production.
 
-## Deployment
+The platform must provide managed PostgreSQL for the financial ledger, Redis
+for rate limiting and the durable financial event stream, MongoDB for
+application documents, and durable object storage for attachments. Local disk
+is ephemeral and must not hold authoritative uploads or financial evidence.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+Run `npm run financial:migrate` as a one-off release job before starting the new
+web or worker revision. The SQL is additive and idempotent, so CI runs it twice.
+Never roll the database backward destructively. If application rollback is
+needed, retain the migrated schema and roll the image back; correct data or
+schema defects with a reviewed forward migration and a recorded recovery plan.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+Expose a process liveness endpoint at `/api/health/live` and use
+`/api/financial/health/ready` for PostgreSQL and Redis readiness. Do not route
+traffic or start financial consumption until readiness is healthy.
 
-```bash
-$ yarn install -g @nestjs/mau
-$ mau deploy
-```
+### Environment names and validation
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+Use a secret manager and set names only from `.env.example.prod`. Core runtime
+configuration includes `NODE_ENV`, `PORT`, `TRUST_PROXY`, `FRONTEND_URL`,
+`BACKEND_URL`, `CORS_ORIGIN`, `MONGO_URI`, `FINANCIAL_DATABASE_URL`, `REDIS_URL`,
+`RATE_LIMIT_STORE`, `JWT_SECRET`, `REFRESH_TOKEN_SECRET`,
+`PASSWORD_RESET_SECRET`, `CSRF_SECRET`, `JWT_ISSUER`, `JWT_AUDIENCE`,
+`COOKIE_SECURE`, `COOKIE_SAME_SITE`, `COOKIE_DOMAIN`, `SIWE_DOMAIN`, `SIWE_URI`,
+and `SIWE_CHAIN_IDS`.
 
-## Resources
+Provider-specific names are `DPO_API_URL`, `DPO_PAYMENT_URL`,
+`DPO_COMPANY_TOKEN`, `DPO_FEE_RATE_BPS`, `DPO_FEE_VAT_RATE_BPS`,
+`KEIBO_INBOUND_FEE_RATE_BPS`, `FLUTTERWAVE_PUBLIC_KEY`,
+`FLUTTERWAVE_SECRET_KEY`, `FLUTTERWAVE_ENCRYPTION_KEY`,
+`FLUTTERWAVE_WEBHOOK_SECRET`, `KYC_PROVIDER`, `KYC_PROVIDER_MODE`,
+`DIDIT_API_KEY`, `DIDIT_CLIENT_ID`, `DIDIT_WORKFLOW_ID`,
+`DIDIT_WEBHOOK_SECRET`, `SENDGRID_API_KEY`, and `EMAIL_FROM`. Blockchain names
+are `CHAIN_ID`, `CHAIN_NAME`, `RPC_URL`, `ESCROW_CONTRACT_ADDRESS`,
+`NFT_CONTRACT_ADDRESS`, `TREASURY_CONTRACT_ADDRESS`,
+`VOTING_CONTRACT_ADDRESS`, `DEALROOM_CONTRACT_ADDRESS`, and
+`PLATFORM_SIGNER_PROVIDER`.
 
-Check out a few resources that may come in handy when working with NestJS:
+Production validation rejects missing core values, placeholders, insecure URLs,
+wildcard CORS, short secrets, insecure cookies, bypass modes, dummy KYC, sandbox
+KYC, and raw administrator private keys. Never bake values into an image, log
+them, or reuse CI values.
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+### Feature gates
 
-## Support
+Default all risky capabilities closed:
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+- Provider settlement: keep `FINANCIAL_WORKERS_ENABLED=false` until provider
+  credentials, signed callback verification, migration, reconciliation,
+  alerting, and worker rollback have passed staging.
+- ROI: keep `INVESTMENTS_TEST_MODE=false` and
+  `ROI_REQUIRE_ONCHAIN_PROVISIONING=true`; do not enable until reviewed contract
+  addresses and managed signing are approved.
+- NFT minting: keep `ROI_DISABLE_NFT_MINTING=true`.
+- Wallet deposits and payouts: remain disabled until ledger-backed adapters,
+  provider settlement, limits, reconciliation, and refund drills pass.
+- Marketplace and crypto escrow: keep `ENABLE_NFT_MARKETPLACE=false` and
+  `BLOCKCHAIN_FEATURES_ENABLED=false` until contract and operational approval.
+- Notifications: leave provider credentials absent until sender-domain,
+  delivery, retry, privacy, and alerting checks pass. Notification failure must
+  not fabricate business success.
+- Authentication/KYC bypasses: `AUTH_EMAIL_BYPASS=false`, `KYC_BYPASS=false`,
+  and `DIDIT_SANDBOX=false` in production.
 
-## Stay in touch
+## Container requirements
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+The image must be reproducible, immutable, minimal, vulnerability-scanned, and
+pinned by digest for promotion. Run as a non-root user on a read-only filesystem
+with only a bounded temporary directory. Configure liveness/readiness checks,
+graceful `SIGTERM` handling with sufficient drain time, structured stdout/stderr
+logs without secrets or PII, and explicit CPU/memory requests and limits.
+Existing formal Docker, Kubernetes, and ArgoCD practices may continue once they
+satisfy this contract; this application repository does not prescribe or alter
+the deployment repository.

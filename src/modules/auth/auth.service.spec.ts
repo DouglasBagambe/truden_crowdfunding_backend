@@ -3,11 +3,14 @@ import { RolesService } from '../roles/roles.service';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { UserDocument } from '../users/schemas/user.schema';
-import { Types } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { AuditService } from '../audit/audit.service';
 import * as crypto from 'crypto';
 import sgMail from '@sendgrid/mail';
 import { HttpException, UnauthorizedException } from '@nestjs/common';
+import type { RefreshTokenDocument } from './schemas/refresh-token.schema';
+import type { WalletChallengeDocument } from './schemas/wallet-challenge.schema';
+import type { AppEmailService } from '../../common/services/app-email.service';
 
 jest.mock('@sendgrid/mail', () => ({
   setApiKey: jest.fn(),
@@ -49,6 +52,7 @@ describe('AuthService email verification (codes)', () => {
   let configService: jest.Mocked<ConfigService>;
   let jwtService: jest.Mocked<JwtService>;
   let refreshTokenModel: Record<string, jest.Mock>;
+  let walletChallengeModel: Record<string, jest.Mock>;
   let auditService: jest.Mocked<AuditService>;
   let updates: Record<string, unknown>[];
 
@@ -92,16 +96,22 @@ describe('AuthService email verification (codes)', () => {
       findOne: jest.fn(),
       updateOne: jest.fn(),
     } as unknown as Record<string, jest.Mock>;
+    walletChallengeModel = {
+      create: jest.fn(),
+      findOneAndUpdate: jest.fn(),
+    } as unknown as Record<string, jest.Mock>;
     auditService = {
       log: jest.fn(),
     } as unknown as jest.Mocked<AuditService>;
     service = new AuthService(
-      userModel as unknown as any,
-      refreshTokenModel as unknown as any,
+      userModel as unknown as Model<UserDocument>,
+      refreshTokenModel as unknown as Model<RefreshTokenDocument>,
+      walletChallengeModel as unknown as Model<WalletChallengeDocument>,
       jwtService as unknown as JwtService,
       configService as unknown as ConfigService,
       rolesService as unknown as RolesService,
       auditService as unknown as AuditService,
+      {} as AppEmailService,
     );
   });
 
@@ -117,7 +127,7 @@ describe('AuthService email verification (codes)', () => {
       emailVerificationCodeExpiresAt: futureDate(),
       emailVerificationAttempts: 0,
       ...overrides,
-    } as unknown as UserDocument);
+    }) as unknown as UserDocument;
 
   it('verifies with a valid code', async () => {
     const user = mockUser();
@@ -125,14 +135,14 @@ describe('AuthService email verification (codes)', () => {
     userModel.findByIdAndUpdate.mockImplementation(
       (_id: string, update: Record<string, unknown>) => {
         updates.push(update);
-        return makeQuery(user as UserDocument);
+        return makeQuery(user);
       },
     );
 
     const res = await service.verifyEmail({ code, email });
     expect(res?.message).toBe('Email verified');
     expect(updates[0]).toMatchObject({
-      emailVerifiedAt: expect.any(Date),
+      emailVerifiedAt: expect.any(Date) as unknown,
       emailVerificationCodeHash: undefined,
       emailVerificationCodeExpiresAt: undefined,
       emailVerificationAttempts: 0,
@@ -158,7 +168,7 @@ describe('AuthService email verification (codes)', () => {
     userModel.findByIdAndUpdate.mockImplementation(
       (_id: string, update: Record<string, unknown>) => {
         updates.push(update);
-        return makeQuery(user as UserDocument);
+        return makeQuery(user);
       },
     );
 
@@ -167,7 +177,7 @@ describe('AuthService email verification (codes)', () => {
     );
     expect(updates[0]).toMatchObject({
       emailVerificationAttempts: 5,
-      emailVerificationBlockedUntil: expect.any(Date),
+      emailVerificationBlockedUntil: expect.any(Date) as unknown,
     });
   });
 
@@ -188,16 +198,17 @@ describe('AuthService email verification (codes)', () => {
     userModel.findByIdAndUpdate.mockImplementation(
       (_id: string, update: Record<string, unknown>) => {
         updates.push(update);
-        return makeQuery(user as UserDocument);
+        return makeQuery(user);
       },
     );
 
     await service.resendVerificationEmail(email);
 
-    expect(sgMail.send).toHaveBeenCalled();
+    const mailClient = sgMail as unknown as { send: jest.Mock };
+    expect(mailClient.send.mock.calls.length).toBeGreaterThan(0);
     expect(updates[0]).toMatchObject({
-      emailVerificationCodeHash: expect.any(String),
-      emailVerificationCodeExpiresAt: expect.any(Date),
+      emailVerificationCodeHash: expect.any(String) as unknown,
+      emailVerificationCodeExpiresAt: expect.any(Date) as unknown,
       emailVerificationAttempts: 0,
     } as Record<string, unknown>);
   });
@@ -208,7 +219,7 @@ describe('AuthService email verification (codes)', () => {
     userModel.findByIdAndUpdate.mockImplementation(
       (_id: string, update: Record<string, unknown>) => {
         updates.push(update);
-        return makeQuery(user as UserDocument);
+        return makeQuery(user);
       },
     );
     configService.get.mockImplementation((key?: string) => {
@@ -222,10 +233,11 @@ describe('AuthService email verification (codes)', () => {
 
     await service.resendVerificationEmail(email);
 
-    expect(sgMail.send).toHaveBeenCalled();
+    const mailClient = sgMail as unknown as { send: jest.Mock };
+    expect(mailClient.send.mock.calls.length).toBeGreaterThan(0);
     expect(updates[0]).toMatchObject({
-      emailVerificationCodeHash: expect.any(String),
-      emailVerificationCodeExpiresAt: expect.any(Date),
+      emailVerificationCodeHash: expect.any(String) as unknown,
+      emailVerificationCodeExpiresAt: expect.any(Date) as unknown,
     });
   });
 });

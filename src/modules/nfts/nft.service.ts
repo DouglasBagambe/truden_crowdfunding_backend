@@ -23,7 +23,7 @@ export class NftService {
     private readonly nftModel: Model<NftDocument>,
     private readonly viemNftClient: ViemNftClient,
     private readonly projectsService: ProjectsService,
-  ) { }
+  ) {}
 
   private parseObjectId(id: string, fieldName: string): Types.ObjectId {
     if (!Types.ObjectId.isValid(id)) {
@@ -84,13 +84,13 @@ export class NftService {
     };
   }
 
-  private async buildMetadata(params: {
+  private buildMetadata(params: {
     tokenId: number;
     projectId: string;
     projectName?: string;
     amountInvested: number;
     walletAddress: string;
-  }): Promise<NftMetadataView> {
+  }): NftMetadataView {
     const nameBase = `Investment NFT #${params.tokenId}`;
     const fullName = params.projectName
       ? `${nameBase} - ${params.projectName}`
@@ -111,10 +111,13 @@ export class NftService {
     };
   }
 
-  private async saveMetadataToIPFS(metadata: NftMetadataView): Promise<string> {
-    const payload = JSON.stringify(metadata);
-    const hash = Buffer.from(payload).toString('base64url');
-    return `ipfs://mock/${hash}`;
+  private saveMetadataToIPFS(metadata: NftMetadataView): Promise<string> {
+    void metadata;
+    return Promise.reject(
+      new BadRequestException(
+        'NFT metadata publishing is unavailable until verified storage is configured',
+      ),
+    );
   }
 
   private parseMintEvent(receipt: TransactionReceipt): number {
@@ -159,12 +162,12 @@ export class NftService {
     const investorObjectId = this.parseObjectId(dto.investorId, 'investorId');
     const wallet = dto.walletAddress.toLowerCase();
 
-    const project = await this.projectsService.ensureProjectExists(dto.projectId);
+    const project = await this.projectsService.ensureProjectExists(
+      dto.projectId,
+    );
 
     const projectOnchainId = BigInt(
-      /^\d+$/.test(dto.projectId)
-        ? dto.projectId
-        : '0',
+      /^\d+$/.test(dto.projectId) ? dto.projectId : '0',
     );
     const amountWei = BigInt(Math.floor(amountNumber * 1e6)); // UGX scaled to 6-decimal precision
 
@@ -176,10 +179,9 @@ export class NftService {
 
     const tokenId = this.parseMintEvent(receipt);
 
-    const projectName: string | undefined =
-      (project as any).name ?? (project as any).title;
+    const projectName = project.name;
 
-    const metadata = await this.buildMetadata({
+    const metadata = this.buildMetadata({
       tokenId,
       projectId: dto.projectId,
       projectName,

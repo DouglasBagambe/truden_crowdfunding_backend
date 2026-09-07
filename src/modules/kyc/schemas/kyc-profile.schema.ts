@@ -4,6 +4,7 @@ import { User } from '../../users/schemas/user.schema';
 import {
   KycApplicationStatus,
   KycDocumentType,
+  type KycLevel,
 } from '../interfaces/kyc.interface';
 
 export type KycProfileDocument = HydratedDocument<KycProfile>;
@@ -31,8 +32,8 @@ export class KycDocument {
   @Prop({ type: Date, default: Date.now })
   uploadedAt!: Date;
 
-  @Prop({ type: Object })
-  metadata?: Record<string, any>;
+  @Prop({ type: Object, select: false })
+  metadata?: Record<string, unknown>;
 }
 
 @Schema({ collection: 'kyc_profiles', timestamps: true })
@@ -48,7 +49,7 @@ export class KycProfile {
   status!: KycApplicationStatus;
 
   @Prop({ trim: true })
-  level?: string;
+  level?: KycLevel;
 
   @Prop({ trim: true })
   firstName?: string;
@@ -101,8 +102,11 @@ export class KycProfile {
   @Prop({ trim: true })
   providerStatus?: string;
 
+  @Prop({ type: Date })
+  providerEventAt?: Date;
+
   @Prop({ type: Object })
-  providerRawResponse?: Record<string, any>;
+  providerRawResponse?: Record<string, unknown>;
 
   @Prop({ type: Date })
   submittedAt?: Date;
@@ -121,6 +125,10 @@ export class KycProfile {
 
   @Prop({ type: [KycDocument], default: [] })
   documents!: KycDocument[];
+
+  createdAt!: Date;
+
+  updatedAt!: Date;
 }
 
 export const KycProfileSchema = SchemaFactory.createForClass(KycProfile);

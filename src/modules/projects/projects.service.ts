@@ -9,8 +9,14 @@ import sgMail from '@sendgrid/mail';
 import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
-import { Investment, InvestmentDocument } from '../investments/schemas/investment.schema';
-import { InvestmentStatus } from '../investments/interfaces/investment.interface';
+import {
+  Investment,
+  InvestmentDocument,
+} from '../investments/schemas/investment.schema';
+import {
+  InvestmentStatus,
+  type InvestmentView,
+} from '../investments/interfaces/investment.interface';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { QueryProjectsDto } from './dto/query-projects.dto';
@@ -59,6 +65,8 @@ const OWNER_EDITABLE_STATUSES = [
   ProjectStatus.APPROVED,
 ] as const satisfies ProjectStatus[];
 
+type UnknownRecord = Record<string, unknown>;
+
 @Injectable()
 export class ProjectsService {
   private readonly logger = new Logger(ProjectsService.name);
@@ -75,7 +83,7 @@ export class ProjectsService {
     private readonly viemNftClient: ViemNftClient,
     @InjectModel(Investment.name)
     private readonly investmentModel: Model<InvestmentDocument>,
-  ) { }
+  ) {}
 
   async findByOnchainId(projectOnchainId: string) {
     return this.projectsRepo.findByOnchainId(projectOnchainId);
@@ -85,10 +93,7 @@ export class ProjectsService {
     return this.projectsRepo.listRoiProjectsWithOnchainId();
   }
 
-  private extractObjectIdString(
-    value: unknown,
-    fieldName: string,
-  ): string {
+  private extractObjectIdString(value: unknown, fieldName: string): string {
     if (typeof value === 'string') {
       return value;
     }
@@ -110,9 +115,31 @@ export class ProjectsService {
     throw new BadRequestException(`${fieldName} is missing a valid ObjectId`);
   }
 
+  private asRecord(value: unknown): UnknownRecord | undefined {
+    return value !== null && typeof value === 'object'
+      ? (value as UnknownRecord)
+      : undefined;
+  }
+
+  private documentRecord(value: object): UnknownRecord {
+    const candidate = value as { toObject?: unknown };
+    return typeof candidate.toObject === 'function'
+      ? ((candidate as { toObject: () => unknown }).toObject() as UnknownRecord)
+      : (value as UnknownRecord);
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : 'Unknown error';
+  }
+
   async createProject(creatorId: string, dto: CreateProjectDto) {
     const projectType: ProjectType | undefined =
-      (dto.type ?? (dto as any).projectType ?? (dto.category ? ProjectType.CHARITY : (dto.industry ? ProjectType.ROI : undefined)));
+      dto.type ??
+      (dto.category
+        ? ProjectType.CHARITY
+        : dto.industry
+          ? ProjectType.ROI
+          : undefined);
 
     this.validateProjectType(
       { ...dto, type: projectType },
@@ -207,7 +234,9 @@ export class ProjectsService {
     const currentType = this.normalizeProjectType(
       this.readProjectType(project),
     );
-    if (this.extractObjectIdString(project.creatorId, 'creatorId') !== creatorId) {
+    if (
+      this.extractObjectIdString(project.creatorId, 'creatorId') !== creatorId
+    ) {
       throw new ForbiddenException('You can only edit your own projects');
     }
     const isOwnerEditable = OWNER_EDITABLE_STATUSES.some(
@@ -322,17 +351,17 @@ export class ProjectsService {
       const updatedType = inferredType ?? currentType;
       const normalizedAttachments = this.normalizeAttachmentArray(
         dto.attachments ??
-        (project.attachments as Array<{
-          title: string;
-          url?: string;
-          fileId?: string;
-          type?: string;
-          isRequired?: boolean;
-          templateId?: string;
-          templateVersion?: number;
-          requestedBy?: string;
-          requestedAt?: Date;
-        }>),
+          (project.attachments as Array<{
+            title: string;
+            url?: string;
+            fileId?: string;
+            type?: string;
+            isRequired?: boolean;
+            templateId?: string;
+            templateVersion?: number;
+            requestedBy?: string;
+            requestedAt?: Date;
+          }>),
       );
       setPayload.attachments = await this.applyAttachmentRequirementsAsync(
         updatedType,
@@ -370,22 +399,29 @@ export class ProjectsService {
     const project = await this.ensureProjectExists(projectId);
     const projectType = this.readProjectType(project);
     if (projectType !== ProjectType.CHARITY) {
-      throw new BadRequestException('Donations are only supported for charity projects');
+      throw new BadRequestException(
+        'Donations are only supported for charity projects',
+      );
     }
-    const isPublic = PUBLIC_STATUSES.some((status) => status === project.status);
+    const isPublic = PUBLIC_STATUSES.some(
+      (status) => status === project.status,
+    );
     if (!isPublic) {
       throw new NotFoundException('Project not available');
     }
     const safeLimit = Math.max(1, Math.min(100, Number(limit) || 50));
 
     // Fetch from CharityDonationsRepository
-    const items = await this.charityDonationsRepo.listByProject(projectId, safeLimit);
+    const items = await this.charityDonationsRepo.listByProject(
+      projectId,
+      safeLimit,
+    );
     return items.map((d) => ({
-      id: String((d as any)._id),
+      id: String(d._id),
       donorName: d.donorName || 'Anonymous',
       amount: d.amount,
       message: d.message ?? null,
-      createdAt: (d as any).createdAt ?? null,
+      createdAt: d.createdAt ?? null,
     }));
   }
 
@@ -393,7 +429,9 @@ export class ProjectsService {
     this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
-    if (this.extractObjectIdString(project.creatorId, 'creatorId') !== creatorId) {
+    if (
+      this.extractObjectIdString(project.creatorId, 'creatorId') !== creatorId
+    ) {
       throw new ForbiddenException('You can only submit your own projects');
     }
     if (
@@ -478,12 +516,16 @@ export class ProjectsService {
     this.ensureValidObjectId(id);
     const project = await this.projectsRepo.findById(id);
     if (!project) throw new NotFoundException('Project not found');
-    const projectType = this.normalizeProjectType(this.readProjectType(project));
+    const projectType = this.normalizeProjectType(
+      this.readProjectType(project),
+    );
     const canSeeRoi = hasBackendRoiAccess(userId, this.configService);
     if (projectType === ProjectType.ROI && !canSeeRoi) {
       throw new NotFoundException('Project not found');
     }
-    const isViewable = PUBLIC_STATUSES.some((status) => status === project.status);
+    const isViewable = PUBLIC_STATUSES.some(
+      (status) => status === project.status,
+    );
     if (!isViewable) {
       throw new NotFoundException('Project not available');
     }
@@ -577,7 +619,8 @@ export class ProjectsService {
       });
 
       try {
-        const { projectOnchainId } = await this.ensureProjectProvisionedOnChain(projectId);
+        const { projectOnchainId } =
+          await this.ensureProjectProvisionedOnChain(projectId);
         finalStatus = ProjectStatus.FUNDING;
         extraSet.projectOnchainId = projectOnchainId;
       } catch (provisionErr: unknown) {
@@ -598,7 +641,7 @@ export class ProjectsService {
         // Re-throw so the HTTP response reflects the failure to the admin
         throw new BadRequestException(
           `Project approved but on-chain provisioning failed: ${errMsg}. ` +
-          'Run the backfill repair to retry provisioning.',
+            'Run the backfill repair to retry provisioning.',
         );
       }
     }
@@ -614,23 +657,28 @@ export class ProjectsService {
 
     // Send email notification to creator on Rejection or Approval
     try {
-      const creatorId = this.extractObjectIdString(project.creatorId, 'project.creatorId');
+      const creatorId = this.extractObjectIdString(
+        project.creatorId,
+        'project.creatorId',
+      );
       const creator = await this.usersRepo.findById(creatorId);
       if (creator?.email) {
         await this.sendProjectDecisionEmail(
           creator.email,
-          (creator as any).profile?.displayName ||
-          `${(creator as any).profile?.firstName || ''} ${(creator as any).profile?.lastName || ''}`.trim() ||
-          creator.email,
+          creator.profile?.displayName ||
+            `${creator.profile?.firstName || ''} ${creator.profile?.lastName || ''}`.trim() ||
+            creator.email,
           project.name,
           finalStatus,
           this.readProjectType(project),
           dto.reason,
         );
       }
-    } catch (emailErr) {
+    } catch (emailError: unknown) {
       // Non-fatal: log but don't block
-      new Logger('ProjectsService').warn(`Failed to send decision email: ${emailErr}`);
+      new Logger('ProjectsService').warn(
+        `Failed to send decision email: ${this.errorMessage(emailError)}`,
+      );
     }
 
     return updated;
@@ -652,17 +700,25 @@ export class ProjectsService {
     const isApproved = decision === ProjectStatus.APPROVED;
     const isFunding = decision === ProjectStatus.FUNDING;
     const isRejected = decision === ProjectStatus.REJECTED;
-    const isChangesRequested = decision === ProjectStatus.CHANGES_REQUESTED;
 
-    const subject = isApproved || isFunding
-      ? `Your campaign "${projectName}" has been approved!`
-      : isRejected
-        ? `Update on your campaign "${projectName}"`
-        : `Changes requested for "${projectName}"`;
+    const subject =
+      isApproved || isFunding
+        ? `Your campaign "${projectName}" has been approved!`
+        : isRejected
+          ? `Update on your campaign "${projectName}"`
+          : `Changes requested for "${projectName}"`;
 
     const isPositive = isApproved || isFunding;
-    const statusColour = isPositive ? '#10b981' : isRejected ? '#ef4444' : '#f59e0b';
-    const statusLabel = isPositive ? 'Approved' : isRejected ? 'Rejected' : 'Changes Requested';
+    const statusColour = isPositive
+      ? '#10b981'
+      : isRejected
+        ? '#ef4444'
+        : '#f59e0b';
+    const statusLabel = isPositive
+      ? 'Approved'
+      : isRejected
+        ? 'Rejected'
+        : 'Changes Requested';
     const bodyMessage = isPositive
       ? projectType === ProjectType.ROI
         ? `Great news! Your ROI campaign <strong>${projectName}</strong> has been reviewed, approved, and is now <strong>open for investment</strong>.`
@@ -707,19 +763,23 @@ export class ProjectsService {
     // Manually resolve creator since legacy projects store creatorId as string (not ObjectId)
     // so Mongoose populate() silently fails on them
     const creatorIdStr = project.creatorId?.toString();
-    let creatorData: { _id: any; firstName?: string; lastName?: string; email?: string } | undefined;
+    let creatorData:
+      | { _id: string; firstName?: string; lastName?: string; email?: string }
+      | undefined;
     if (creatorIdStr) {
       try {
         const creatorUser = await this.usersRepo.findById(creatorIdStr);
         if (creatorUser) {
           creatorData = {
-            _id: (creatorUser as any)._id,
-            firstName: (creatorUser as any).profile?.firstName || (creatorUser as any).firstName,
-            lastName: (creatorUser as any).profile?.lastName || (creatorUser as any).lastName,
+            _id: creatorUser._id.toString(),
+            firstName: creatorUser.profile?.firstName,
+            lastName: creatorUser.profile?.lastName,
             email: creatorUser.email,
           };
         }
-      } catch { /* non-fatal */ }
+      } catch {
+        /* non-fatal */
+      }
     }
 
     return { project: this.withProgress(project, creatorData), milestones };
@@ -741,15 +801,22 @@ export class ProjectsService {
       throw new NotFoundException('Project not found');
     }
 
-    const projectType = this.normalizeProjectType(this.readProjectType(project));
+    const projectType = this.normalizeProjectType(
+      this.readProjectType(project),
+    );
     if (projectType !== ProjectType.ROI) {
-      throw new BadRequestException('Investments are only supported for ROI projects');
+      throw new BadRequestException(
+        'Investments are only supported for ROI projects',
+      );
     }
 
     const investmentsTestMode =
-      String(this.configService.get('INVESTMENTS_TEST_MODE') ?? '').toLowerCase() === 'true';
+      String(
+        this.configService.get('INVESTMENTS_TEST_MODE') ?? '',
+      ).toLowerCase() === 'true';
     const kycBypass =
-      String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() === 'true';
+      String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() ===
+      'true';
 
     if (!investmentsTestMode && !kycBypass) {
       const openInvestmentStatuses: ProjectStatus[] = [
@@ -770,23 +837,30 @@ export class ProjectsService {
     // ── On-chain provisioning gate ─────────────────────────────────────────────
     // Default: strict (ROI_REQUIRE_ONCHAIN_PROVISIONING=true)
     const requireProvisioning =
-      String(this.configService.get('ROI_REQUIRE_ONCHAIN_PROVISIONING') ?? 'true').toLowerCase() !== 'false';
+      String(
+        this.configService.get<string>('ROI_REQUIRE_ONCHAIN_PROVISIONING') ??
+          'true',
+      ).toLowerCase() !== 'false';
 
-    const projectOnchainId = String((project as any).projectOnchainId || '').trim();
-    const isProvisioned = projectOnchainId.length > 0 && projectOnchainId !== '0';
+    const projectOnchainId = project.projectOnchainId?.trim() ?? '';
+    const isProvisioned =
+      projectOnchainId.length > 0 && projectOnchainId !== '0';
 
     if (requireProvisioning && !isProvisioned) {
-      const provisioningStatus = (project as any).onchainProvisioningStatus as string || 'NOT_STARTED';
+      const provisioningStatus =
+        project.onchainProvisioningStatus ??
+        OnchainProvisioningStatus.NOT_STARTED;
       if (provisioningStatus === OnchainProvisioningStatus.FAILED) {
-        const reason = (project as any).onchainProvisioningError || 'Unknown provisioning error';
+        const reason =
+          project.onchainProvisioningError || 'Unknown provisioning error';
         throw new BadRequestException(
           `ROI project on-chain provisioning previously failed: ${reason}. ` +
-          'An admin must run the repair endpoint before investments can proceed.',
+            'An admin must run the repair endpoint before investments can proceed.',
         );
       }
       throw new BadRequestException(
         'This ROI project has not yet been provisioned on-chain. ' +
-        'It cannot accept investments until provisioning completes.',
+          'It cannot accept investments until provisioning completes.',
       );
     }
     // ──────────────────────────────────────────────────────────────────────────
@@ -801,12 +875,18 @@ export class ProjectsService {
       throw new NotFoundException('Project not found');
     }
 
-    const projectType = this.normalizeProjectType(this.readProjectType(project));
+    const projectType = this.normalizeProjectType(
+      this.readProjectType(project),
+    );
     if (projectType !== ProjectType.CHARITY) {
-      throw new BadRequestException('Donations are only supported for charity projects');
+      throw new BadRequestException(
+        'Donations are only supported for charity projects',
+      );
     }
 
-    const isPublic = PUBLIC_STATUSES.some((status) => status === project.status);
+    const isPublic = PUBLIC_STATUSES.some(
+      (status) => status === project.status,
+    );
     if (!isPublic) {
       throw new BadRequestException('Project is not available for donations');
     }
@@ -829,19 +909,23 @@ export class ProjectsService {
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
 
-    const projectType = this.normalizeProjectType(this.readProjectType(project));
+    const projectType = this.normalizeProjectType(
+      this.readProjectType(project),
+    );
     if (projectType !== ProjectType.ROI) {
-      throw new BadRequestException('Only ROI projects can be provisioned on-chain');
+      throw new BadRequestException(
+        'Only ROI projects can be provisioned on-chain',
+      );
     }
 
     // ── Already provisioned — idempotency guard ─────────────────────────────
-    const existingOnchainId = String((project as any).projectOnchainId || '').trim();
+    const existingOnchainId = project.projectOnchainId?.trim() ?? '';
     if (existingOnchainId && existingOnchainId !== '0') {
       // Ensure status field is synced in case it was set before this field existed
       await this.projectsRepo.updateById(projectId, {
         $set: {
           onchainProvisioningStatus: OnchainProvisioningStatus.READY,
-          onchainProvisionedAt: (project as any).onchainProvisionedAt ?? new Date(),
+          onchainProvisionedAt: project.onchainProvisionedAt ?? new Date(),
         },
         $unset: { onchainProvisioningError: 1 },
       });
@@ -849,7 +933,10 @@ export class ProjectsService {
     }
 
     // ── Validate creator and wallet ─────────────────────────────────────────
-    const creatorId = this.extractObjectIdString(project.creatorId, 'project.creatorId');
+    const creatorId = this.extractObjectIdString(
+      project.creatorId,
+      'project.creatorId',
+    );
     const creator = await this.usersRepo.findById(creatorId);
     if (!creator) {
       this.logger.error(
@@ -861,15 +948,13 @@ export class ProjectsService {
     const linkedWallet = creator.linkedWallets?.find(
       (w): w is string => typeof w === 'string' && w.trim().length > 0,
     );
+    const rawCreator = this.documentRecord(creator);
     const legacyWallet =
-      typeof (creator as any).walletAddress === 'string' &&
-      (creator as any).walletAddress.trim().length > 0
-        ? String((creator as any).walletAddress).trim().toLowerCase()
+      typeof rawCreator.walletAddress === 'string'
+        ? rawCreator.walletAddress.trim().toLowerCase() || undefined
         : undefined;
     const creatorWallet: string | undefined =
-      creator.primaryWallet ||
-      linkedWallet ||
-      legacyWallet;
+      creator.primaryWallet || linkedWallet || legacyWallet;
 
     if (!creatorWallet) {
       this.logger.error(
@@ -877,7 +962,7 @@ export class ProjectsService {
       );
       throw new BadRequestException(
         'ROI project provisioning requires the creator to have a linked wallet address. ' +
-        'Ask the creator to link a wallet before approving.',
+          'Ask the creator to link a wallet before approving.',
       );
     }
 
@@ -887,23 +972,22 @@ export class ProjectsService {
         $addToSet: { linkedWallets: legacyWallet },
       });
       this.logger.log(
-        `ROI provisioning recovered legacy wallet for creator ${creatorId}: ${legacyWallet}`,
+        `ROI provisioning recovered a legacy wallet for creator ${creatorId}`,
       );
     }
 
     // ── Derive deterministic on-chain ID ────────────────────────────────────
     // Same derivation as the original ensureRoiProjectReadyForFunding so IDs are stable.
-    const projectOnchainId = BigInt(`0x${String((project as any)._id)}`).toString();
-    const nftDiagnostics = this.viemNftClient.getDiagnostics();
-    const targetAmountWei = BigInt(Math.floor(Number(project.targetAmount || 0) * 1e6));
-
-    this.logger.log(
-      `ROI provisioning start: project=${projectId}, creator=${creatorId}, wallet=${creatorWallet}, onchainId=${projectOnchainId}, chainId=${nftDiagnostics.chainId}, rpcUrl=${nftDiagnostics.rpcUrl}, nftAddress=${nftDiagnostics.nftAddress}, targetAmount=${project.targetAmount}, targetAmountWei=${targetAmountWei.toString()}`,
+    const projectOnchainId = BigInt(`0x${project._id.toString()}`).toString();
+    const targetAmountWei = BigInt(
+      Math.floor(Number(project.targetAmount || 0) * 1e6),
     );
+
+    this.logger.log(`ROI provisioning started for project ${projectId}`);
 
     // ── Call contract ───────────────────────────────────────────────────────
     try {
-      const { hash, receipt } = await this.viemNftClient.createProjectNFT({
+      await this.viemNftClient.createProjectNFT({
         projectOnchainId: BigInt(projectOnchainId),
         creator: creatorWallet as Address,
         targetAmountWei,
@@ -911,13 +995,11 @@ export class ProjectsService {
       });
 
       this.logger.log(
-        `ROI provisioning contract write succeeded: project=${projectId}, txHash=${hash}, receiptStatus=${receipt.status}, block=${receipt.blockNumber?.toString?.() ?? 'unknown'}`,
+        `ROI provisioning contract write succeeded for project ${projectId}`,
       );
     } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error));
       this.logger.error(
-        `ROI provisioning contract write failed: project=${projectId}, creator=${creatorId}, wallet=${creatorWallet}, onchainId=${projectOnchainId}, chainId=${nftDiagnostics.chainId}, nftAddress=${nftDiagnostics.nftAddress}, error=${err.message}`,
-        err.stack,
+        `ROI provisioning contract write failed for project ${projectId}`,
       );
       throw error;
     }
@@ -945,9 +1027,7 @@ export class ProjectsService {
    * Wraps ensureProjectProvisionedOnChain with explicit FAILED state persistence
    * so failures are always observable in the DB rather than only in logs.
    */
-  async repairRoiProjectProvisioning(
-    projectId: string,
-  ): Promise<{
+  async repairRoiProjectProvisioning(projectId: string): Promise<{
     projectId: string;
     result: 'ALREADY_PROVISIONED' | 'PROVISIONED' | 'FAILED';
     projectOnchainId?: string;
@@ -957,11 +1037,13 @@ export class ProjectsService {
     // which updates the DB, so we can distinguish ALREADY_PROVISIONED from
     // freshly PROVISIONED based on the original state rather than the post-update DB.
     const preRepairProject = await this.projectsRepo.findById(projectId);
-    const preRepairOnchainId = String((preRepairProject as any)?.projectOnchainId || '').trim();
-    const wasAlreadyProvisioned = preRepairOnchainId.length > 0 && preRepairOnchainId !== '0';
+    const preRepairOnchainId = preRepairProject?.projectOnchainId?.trim() ?? '';
+    const wasAlreadyProvisioned =
+      preRepairOnchainId.length > 0 && preRepairOnchainId !== '0';
 
     try {
-      const { projectOnchainId } = await this.ensureProjectProvisionedOnChain(projectId);
+      const { projectOnchainId } =
+        await this.ensureProjectProvisionedOnChain(projectId);
       // Re-fetch to get current status after provisioning may have changed it
       const postRepairProject = await this.projectsRepo.findById(projectId);
       // Promote APPROVED → FUNDING now that provisioning succeeded
@@ -983,7 +1065,9 @@ export class ProjectsService {
           onchainProvisioningError: errMsg,
         },
       });
-      this.logger.error(`Repair failed for ROI project ${projectId}: ${errMsg}`);
+      this.logger.error(
+        `Repair failed for ROI project ${projectId}: ${errMsg}`,
+      );
       return { projectId, result: 'FAILED', error: errMsg };
     }
   }
@@ -1035,20 +1119,30 @@ export class ProjectsService {
 
     for (const project of candidates) {
       const pid = String(project._id || project.id);
-      const name = String((project as any).name || pid);
+      const name = project.name || pid;
 
       // Double-check: skip if the freshly-fetched record already has a valid ID
-      const freshOnchainId = String((project as any).projectOnchainId || '').trim();
+      const freshOnchainId = project.projectOnchainId?.trim() ?? '';
       if (freshOnchainId && freshOnchainId !== '0') {
         skipped++;
-        results.push({ projectId: pid, name, result: 'SKIPPED', projectOnchainId: freshOnchainId });
+        results.push({
+          projectId: pid,
+          name,
+          result: 'SKIPPED',
+          projectOnchainId: freshOnchainId,
+        });
         continue;
       }
 
       const repairResult = await this.repairRoiProjectProvisioning(pid);
       if (repairResult.result === 'FAILED') {
         failed++;
-        results.push({ projectId: pid, name, result: 'FAILED', error: repairResult.error });
+        results.push({
+          projectId: pid,
+          name,
+          result: 'FAILED',
+          error: repairResult.error,
+        });
       } else {
         provisioned++;
         results.push({
@@ -1112,17 +1206,21 @@ export class ProjectsService {
         message,
         userId: userId ? new Types.ObjectId(userId) : undefined,
       });
-    } catch (err) {
-      this.logger.error(`Failed to record charity donation for project ${projectId}: ${err}`);
+    } catch (error: unknown) {
+      this.logger.error(
+        `Failed to record charity donation for project ${projectId}: ${this.errorMessage(error)}`,
+      );
     }
 
     return this.getProjectWithMilestones(projectId);
   }
 
-  async getDonationsByUser(userId: string) {
+  async getDonationsByUser(userId: string): Promise<InvestmentView[]> {
     this.ensureValidObjectId(userId);
-    const donations = await this.charityDonationsRepo.findByUserId(new Types.ObjectId(userId));
-    const populated: any[] = [];
+    const donations = await this.charityDonationsRepo.findByUserId(
+      new Types.ObjectId(userId),
+    );
+    const populated: InvestmentView[] = [];
     for (const d of donations) {
       const project = await this.projectsRepo.findById(String(d.projectId));
       if (project) {
@@ -1132,18 +1230,19 @@ export class ProjectsService {
           investorId: userId,
           amount: d.amount,
           currency: 'UGX',
-          status: 'Active',
+          status: InvestmentStatus.Active,
           project: {
             id: project._id.toString(),
-            title: (project as any).title || project.name,
-            name: (project as any).title || project.name,
+            title: project.name,
+            name: project.name,
             category: project.category,
-            projectType: project.projectType || (project as any).type,
-            type: project.projectType || (project as any).type,
+            projectType: project.projectType,
+            type: project.projectType,
             creatorId: project.creatorId?.toString(),
             imageUrl: project.imageUrl,
           },
-          createdAt: (d as any).createdAt,
+          createdAt: d.createdAt,
+          updatedAt: d.updatedAt,
         });
       }
     }
@@ -1278,7 +1377,8 @@ export class ProjectsService {
     });
 
     // Provide a full URL that the frontend can use as an image src
-    const rawBaseUrl = process.env.BACKEND_URL || process.env.API_URL || 'http://localhost:3000';
+    const rawBaseUrl =
+      process.env.BACKEND_URL || process.env.API_URL || 'http://localhost:3000';
     const baseUrl = rawBaseUrl
       .trim()
       .replace(/[,\s]+$/, '')
@@ -1287,7 +1387,7 @@ export class ProjectsService {
     return {
       fileId: String(stored._id),
       filename: stored.filename,
-      url: `${baseUrl}/api/projects/files/${stored._id}`,
+      url: `${baseUrl}/api/projects/files/${String(stored._id)}`,
     };
   }
 
@@ -1525,21 +1625,7 @@ export class ProjectsService {
     return Array.isArray(value) ? (value as AgreementRuleDto[]) : [];
   }
 
-  private normalizeAttachmentArray(
-    value:
-      | Array<{
-        title: string;
-        url?: string;
-        fileId?: string;
-        type?: string;
-        isRequired?: boolean;
-        templateId?: string;
-        templateVersion?: number;
-        requestedBy?: string;
-        requestedAt?: Date;
-      }>
-      | unknown,
-  ) {
+  private normalizeAttachmentArray(value: unknown) {
     if (!Array.isArray(value)) return [];
     return value.map(
       (att: {
@@ -1618,23 +1704,34 @@ export class ProjectsService {
 
   private withProgress(
     project: ProjectDocument,
-    creatorOverride?: { _id: any; firstName?: string; lastName?: string; email?: string },
+    creatorOverride?: {
+      _id: string;
+      firstName?: string;
+      lastName?: string;
+      email?: string;
+    },
   ) {
-    const obj = project.toObject();
-    const target = obj.targetAmount || 0;
-    const raised = obj.raisedAmount || 0;
+    const obj = project.toObject() as unknown as UnknownRecord;
+    const target = project.targetAmount || 0;
+    const raised = project.raisedAmount || 0;
     const progressPct = target > 0 ? Math.min(100, (raised / target) * 100) : 0;
 
     // Use explicit creatorOverride first, then fall back to populated creatorId
-    const rawCreator = obj.creatorId as any;
-    const populatedCreator = rawCreator && typeof rawCreator === 'object' && rawCreator.email
-      ? {
-        _id: rawCreator._id,
-        firstName: rawCreator.profile?.firstName || rawCreator.firstName,
-        lastName: rawCreator.profile?.lastName || rawCreator.lastName,
-        email: rawCreator.email
-      }
-      : undefined;
+    const rawCreator = this.asRecord(obj.creatorId);
+    const rawProfile = this.asRecord(rawCreator?.profile);
+    const populatedCreator =
+      rawCreator && typeof rawCreator.email === 'string'
+        ? {
+            _id: this.extractObjectIdString(rawCreator, 'creatorId'),
+            firstName:
+              this.toOptionalString(rawProfile?.firstName) ??
+              this.toOptionalString(rawCreator.firstName),
+            lastName:
+              this.toOptionalString(rawProfile?.lastName) ??
+              this.toOptionalString(rawCreator.lastName),
+            email: rawCreator.email,
+          }
+        : undefined;
 
     const creator = creatorOverride || populatedCreator;
 
@@ -1653,7 +1750,11 @@ export class ProjectsService {
   private stripCreatorEmail<T extends { creator?: { email?: string } | null }>(
     payload: T,
   ): T {
-    if (payload.creator && typeof payload.creator === 'object' && 'email' in payload.creator) {
+    if (
+      payload.creator &&
+      typeof payload.creator === 'object' &&
+      'email' in payload.creator
+    ) {
       delete payload.creator.email;
     }
     return payload;
@@ -1673,7 +1774,9 @@ export class ProjectsService {
     this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
-    if (this.extractObjectIdString(project.creatorId, 'creatorId') !== ownerId) {
+    if (
+      this.extractObjectIdString(project.creatorId, 'creatorId') !== ownerId
+    ) {
       throw new ForbiddenException('You can only view your own project');
     }
     return this.getProjectWithMilestones(projectId);

@@ -7,8 +7,9 @@ import {
   HttpCode,
   HttpStatus,
   Req,
+  Res,
 } from '@nestjs/common';
-import type { Request as ExpressRequest } from 'express';
+import type { Request as ExpressRequest, Response } from 'express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -25,18 +26,33 @@ import { EnableMfaDto } from './dto/enable-mfa.dto';
 import { DisableMfaDto } from './dto/disable-mfa.dto';
 import { VerifyEmailMfaDto } from './dto/email-mfa.dto';
 import { SiweNonceDto } from './dto/siwe.dto';
+import { AuthCookieService } from './auth-cookie.service';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly authCookieService: AuthCookieService,
+  ) {}
+
+  @Public()
+  @Get('csrf')
+  issueCsrf(@Res({ passthrough: true }) response: Response) {
+    return { csrfToken: this.authCookieService.setCsrf(response) };
+  }
 
   @Public()
   @Post('register')
   async register(
     @Body() registerDto: RegisterDto,
     @Req() req: ExpressRequest,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.authService.register(registerDto, this.getClientIp(req));
+    const result = await this.authService.register(
+      registerDto,
+      this.getClientIp(req),
+    );
+    return this.establishSession(response, result);
   }
 
   @Public()
@@ -45,15 +61,28 @@ export class AuthController {
   async login(
     @Body() loginDto: LoginDto,
     @Req() req: ExpressRequest,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.authService.login(loginDto, this.getClientIp(req));
+    const result = await this.authService.login(
+      loginDto,
+      this.getClientIp(req),
+    );
+    return this.establishSession(response, result);
   }
 
   @Public()
   @Post('login/oauth')
   @HttpCode(HttpStatus.OK)
-  async oauthLogin(@Body() dto: OAuthLoginDto, @Req() req: ExpressRequest) {
-    return this.authService.oauthLogin(dto, this.getClientIp(req));
+  async oauthLogin(
+    @Body() dto: OAuthLoginDto,
+    @Req() req: ExpressRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.authService.oauthLogin(
+      dto,
+      this.getClientIp(req),
+    );
+    return this.establishSession(response, result);
   }
 
   // Aliases to keep original naming familiar while supporting Google/Apple directly
@@ -63,11 +92,13 @@ export class AuthController {
   async loginGoogle(
     @Body('idToken') idToken: string,
     @Req() req: ExpressRequest,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.authService.oauthLogin(
+    const result = await this.authService.oauthLogin(
       { provider: AuthProvider.GOOGLE, idToken },
       this.getClientIp(req),
     );
+    return this.establishSession(response, result);
   }
 
   @Public()
@@ -76,11 +107,13 @@ export class AuthController {
   async loginApple(
     @Body('idToken') idToken: string,
     @Req() req: ExpressRequest,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.authService.oauthLogin(
+    const result = await this.authService.oauthLogin(
       { provider: AuthProvider.APPLE, idToken },
       this.getClientIp(req),
     );
+    return this.establishSession(response, result);
   }
 
   @Public()
@@ -94,7 +127,10 @@ export class AuthController {
   @Post('resend-email')
   @HttpCode(HttpStatus.OK)
   async resendEmail(@Body() dto: ResendEmailDto, @Req() req: ExpressRequest) {
-    return this.authService.resendVerificationEmail(dto.email, this.getClientIp(req));
+    return this.authService.resendVerificationEmail(
+      dto.email,
+      this.getClientIp(req),
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -113,7 +149,10 @@ export class AuthController {
   @Public()
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
-  async forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: ExpressRequest) {
+  async forgotPassword(
+    @Body() dto: ForgotPasswordDto,
+    @Req() req: ExpressRequest,
+  ) {
     return this.authService.forgotPassword(dto.email, this.getClientIp(req));
   }
 
@@ -137,21 +176,47 @@ export class AuthController {
     @CurrentUser('sub') userId: string,
     @Body() dto: SiweNonceDto,
   ) {
-    return this.authService.issueSiweNonce(userId, dto.address);
+    return this.authService.issueSiweNonce(userId, dto.address, dto.purpose);
   }
 
   @Public()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  async refreshToken(@Body('refreshToken') refreshToken: string) {
-    return this.authService.refreshToken(refreshToken);
+  async refreshToken(
+    @Req() request: ExpressRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const refreshToken = request.cookies?.keibo_refresh as string | undefined;
+    const result = await this.authService.refreshToken(refreshToken);
+    return this.establishSession(response, result);
   }
 
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  logout(@CurrentUser('sub') userId: string) {
-    return this.authService.logout(userId);
+  async logout(
+    @CurrentUser('sub') userId: string,
+    @Req() request: ExpressRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    await this.authService.logoutCurrent(
+      userId,
+      request.cookies?.keibo_refresh as string | undefined,
+    );
+    this.authCookieService.clearSession(response);
+    return { message: 'Logged out successfully' };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout-all')
+  @HttpCode(HttpStatus.OK)
+  async logoutAll(
+    @CurrentUser('sub') userId: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    await this.authService.logoutAll(userId);
+    this.authCookieService.clearSession(response);
+    return { message: 'Logged out on all devices' };
   }
 
   @UseGuards(JwtAuthGuard)
@@ -193,13 +258,6 @@ export class AuthController {
   }
 
   private getClientIp(req: ExpressRequest): string | undefined {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (typeof forwarded === 'string' && forwarded.length > 0) {
-      return this.normalizeIp(forwarded.split(',')[0].trim());
-    }
-    if (Array.isArray(forwarded) && forwarded.length > 0) {
-      return this.normalizeIp(forwarded[0]);
-    }
     return this.normalizeIp(
       req.ip ||
         (req.socket?.remoteAddress ??
@@ -216,5 +274,19 @@ export class AuthController {
     const zoneIndex = ip.indexOf('%');
     if (zoneIndex !== -1) return ip.slice(0, zoneIndex);
     return ip;
+  }
+
+  private establishSession<
+    T extends { accessToken: string; refreshToken: string },
+  >(response: Response, result: T): Omit<T, 'accessToken' | 'refreshToken'> {
+    this.authCookieService.setSession(response, result);
+    const {
+      accessToken: _accessToken,
+      refreshToken: _refreshToken,
+      ...safe
+    } = result;
+    void _accessToken;
+    void _refreshToken;
+    return safe;
   }
 }

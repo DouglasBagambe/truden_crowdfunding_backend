@@ -12,7 +12,7 @@ import {
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
-import { createHmac } from 'crypto';
+import { createHash } from 'crypto';
 import type { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -30,6 +30,12 @@ import { SubmitKycApplicationDto } from './dto/submit-kyc-application.dto';
 import { AdminFilterKycDto } from './dto/admin-filter-kyc.dto';
 import { AdminOverrideKycStatusDto } from './dto/admin-override-kyc-status.dto';
 import { KycWebhookDto } from './dto/kyc-webhook.dto';
+import { CsrfExempt } from '../../common/decorators/csrf-exempt.decorator';
+import { verifyDiditWebhook } from './didit-webhook.util';
+
+function webhookString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
 
 @ApiTags('kyc')
 @ApiBearerAuth()
@@ -38,7 +44,7 @@ export class KycController {
   constructor(
     private readonly kycService: KycService,
     private readonly configService: ConfigService,
-  ) { }
+  ) {}
 
   @Get('profile')
   getMyProfile(@CurrentUser('sub') userId: string) {
@@ -98,18 +104,25 @@ export class KycController {
   adminOverrideStatus(
     @Param('id') id: string,
     @Body() dto: AdminOverrideKycStatusDto,
+    @CurrentUser('sub') actorId: string,
+    @CurrentUser('roles') actorRoles: string[],
   ) {
-    return this.kycService.adminOverrideStatus(id, dto);
+    return this.kycService.adminOverrideStatus(id, dto, actorId, actorRoles);
   }
 
   @Post('admin/profiles/:id/sync')
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.MANAGE_USERS)
-  adminSyncFromProvider(@Param('id') id: string) {
-    return this.kycService.syncStatusFromProvider(id);
+  adminSyncFromProvider(
+    @Param('id') id: string,
+    @CurrentUser('sub') actorId: string,
+    @CurrentUser('roles') actorRoles: string[],
+  ) {
+    return this.kycService.syncStatusFromProvider(id, actorId, actorRoles);
   }
 
   @Public()
+  @CsrfExempt()
   @Post('webhook/:provider')
   providerWebhook(
     @Param('provider') provider: string,
@@ -118,40 +131,51 @@ export class KycController {
     @Headers('x-signature-v2') sigV2?: string,
     @Headers('x-signature') sigV1?: string,
     @Headers('x-signature-simple') sigSimple?: string,
+    @Headers('x-timestamp') timestampHeader?: string,
   ) {
-    const webhookSecret = this.configService.get<string>('DIDIT_WEBHOOK_SECRET');
+    if (provider !== 'didit') {
+      throw new ForbiddenException('Unsupported KYC webhook provider');
+    }
+    const webhookSecret = this.configService.get<string>(
+      'DIDIT_WEBHOOK_SECRET',
+    );
 
     if (provider === 'didit' && !webhookSecret) {
       throw new ForbiddenException('Didit webhook secret is not configured');
     }
 
     if (provider === 'didit' && webhookSecret) {
-      // Try X-Signature-V2 first (recommended — signs unescaped Unicode JSON)
-      const sig = sigV2 || sigV1 || sigSimple;
-      if (!sig) {
+      if (!sigV2 && !sigV1 && !sigSimple) {
         throw new ForbiddenException('Missing webhook signature');
       }
 
-      const rawBody: string =
-        (req as any).rawBody ||
-        JSON.stringify(body);
-      const expected = createHmac('sha256', webhookSecret)
-        .update(rawBody)
-        .digest('hex');
-      if (sig !== expected) {
-        throw new ForbiddenException('Invalid webhook signature');
-      }
+      const rawValue = (req as Request & { rawBody?: Buffer }).rawBody;
+      const verification = verifyDiditWebhook({
+        body,
+        rawBody: rawValue,
+        signatureV2: sigV2,
+        signatureV1: sigV1,
+        signatureSimple: sigSimple,
+        timestamp: timestampHeader,
+        secret: webhookSecret,
+      });
+
+      const dto: KycWebhookDto = {
+        reference: webhookString(body.session_id ?? body.reference) ?? '',
+        status: webhookString(body.status) ?? '',
+        externalUserId: webhookString(
+          body.vendor_data ?? body.external_user_id,
+        ),
+        payload: body,
+      };
+
+      return this.kycService.handleProviderWebhook(provider, dto, {
+        eventKey: createHash('sha256')
+          .update(verification.canonicalBody)
+          .digest('hex'),
+        eventAt: verification.eventAt,
+      });
     }
-
-    // Build a unified DTO from Didit's flat payload
-    // Didit sends: { session_id, status, vendor_data, timestamp, ... }
-    const dto: KycWebhookDto = {
-      reference: body.session_id ?? body.reference ?? '',
-      status: body.status ?? '',
-      externalUserId: body.vendor_data ?? body.external_user_id ?? undefined,
-      payload: body,
-    };
-
-    return this.kycService.handleProviderWebhook(provider, dto);
+    throw new ForbiddenException('KYC webhook verification is unavailable');
   }
 }

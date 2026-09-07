@@ -13,6 +13,58 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: keibo_financial_test
+          POSTGRES_USER: keibo_test
+          POSTGRES_PASSWORD: keibo_test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U keibo_test -d keibo_financial_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NODE_ENV: test
+      E2E_MONGO_URI: mongodb://127.0.0.1:27017/keibo_e2e
+      REDIS_URL: redis://127.0.0.1:6379
+      FINANCIAL_DATABASE_URL: postgresql://keibo_test:keibo_test_only@127.0.0.1:5432/keibo_financial_test
+      RATE_LIMIT_STORE: redis
+      JWT_SECRET: ci-jwt-secret-for-keibo-tests-only
+      REFRESH_TOKEN_SECRET: ci-refresh-secret-for-keibo-tests-only
+      PASSWORD_RESET_SECRET: ci-password-reset-secret-for-keibo-tests-only
+      CSRF_SECRET: ci-csrf-secret-for-keibo-tests-only
+      JWT_ISSUER: keibo-ci
+      JWT_AUDIENCE: keibo-ci-client
+      AUTH_EMAIL_BYPASS: 'true'
+      COOKIE_SECURE: 'false'
+      COOKIE_SAME_SITE: lax
+      BACKEND_URL: http://localhost:3000
+      FRONTEND_URL: http://localhost:3001
+      SIWE_DOMAIN: localhost:3001
+      SIWE_URI: http://localhost:3001
+      SIWE_CHAIN_IDS: '31337'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -22,4 +74,21 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npm run verify
+      - name: Apply financial migration
+        run: npm run financial:migrate
+      - name: Prove financial migration idempotency
+        run: npm run financial:migrate
+      - name: Build
+        run: npm run build
+      - name: Unit tests
+        run: npm run test:unit -- --runInBand
+      - name: Financial integration tests
+        run: npm run test:financial
+      - name: Auth integration tests
+        run: npm run test:e2e -- --runInBand test/auth.e2e-spec.ts
+      - name: Changed-file quality gate
+        run: npm run quality:changed
+      - name: Legacy baseline guard
+        run: npm run quality:baseline
+      - name: Production dependency security audit
+        run: npm audit --omit=dev --audit-level=high

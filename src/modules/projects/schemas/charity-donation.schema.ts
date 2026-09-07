@@ -37,8 +37,13 @@ export class CharityDonation {
     ref: 'PaymentTransaction',
   })
   transactionId?: Types.ObjectId;
+
+  createdAt!: Date;
+
+  updatedAt!: Date;
 }
 
 export type CharityDonationDocument = CharityDonation & Document;
 
-export const CharityDonationSchema = SchemaFactory.createForClass(CharityDonation);
+export const CharityDonationSchema =
+  SchemaFactory.createForClass(CharityDonation);

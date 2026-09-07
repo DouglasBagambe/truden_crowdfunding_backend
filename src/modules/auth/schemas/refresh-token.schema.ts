@@ -14,6 +14,12 @@ export class RefreshToken {
   @Prop({ type: String, required: true, index: true })
   jti!: string;
 
+  @Prop({ type: String, required: true, index: true })
+  familyId!: string;
+
+  @Prop({ type: String, trim: true })
+  parentJti?: string;
+
   @Prop({ type: String, required: true })
   tokenHash!: string;
 
@@ -25,6 +31,12 @@ export class RefreshToken {
 
   @Prop({ type: Date })
   revokedAt?: Date;
+
+  @Prop({ type: Date })
+  usedAt?: Date;
+
+  @Prop({ type: Date })
+  reuseDetectedAt?: Date;
 
   @Prop({ type: String, trim: true })
   replacedBy?: string;

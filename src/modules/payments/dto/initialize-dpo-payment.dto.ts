@@ -3,46 +3,60 @@ import { ApiProperty } from '@nestjs/swagger';
 import { PaymentMethod } from '../schemas/payment-transaction.schema';
 
 export class InitializeDPOPaymentDto {
-    @ApiProperty({ description: 'Project ID', example: '6543c...' })
-    @IsString()
-    projectId!: string;
+  @ApiProperty({ description: 'Authoritative PostgreSQL payment intent ID' })
+  @IsString()
+  paymentIntentId!: string;
 
-    @ApiProperty({ description: 'Amount (e.g. 10000 UGX)', example: 10000 })
-    @IsNumber()
-    @Min(500)
-    amount!: number;
+  @ApiProperty({ description: 'Project ID', example: '6543c...' })
+  @IsString()
+  projectId!: string;
 
-    @ApiProperty({ description: 'Currency code', example: 'UGX', default: 'UGX' })
-    @IsString()
-    @IsOptional()
-    currency?: string;
+  @ApiProperty({ description: 'Amount (e.g. 10000 UGX)', example: 10000 })
+  @IsNumber()
+  @Min(500)
+  amount!: number;
 
-    @ApiProperty({
-        description: 'Payment method',
-        enum: PaymentMethod,
-        example: PaymentMethod.Card,
-    })
-    @IsEnum(PaymentMethod)
-    @IsOptional()
-    paymentMethod?: PaymentMethod;
+  @ApiProperty({ description: 'Currency code', example: 'UGX', default: 'UGX' })
+  @IsString()
+  @IsOptional()
+  currency?: string;
 
-    @ApiProperty({ description: 'Project type: CHARITY or ROI', example: 'CHARITY' })
-    @IsString()
-    @IsOptional()
-    projectType?: string;
+  @ApiProperty({
+    description: 'Payment method',
+    enum: PaymentMethod,
+    example: PaymentMethod.Card,
+  })
+  @IsEnum(PaymentMethod)
+  @IsOptional()
+  paymentMethod?: PaymentMethod;
 
-    @ApiProperty({ description: 'Payment description', required: false })
-    @IsString()
-    @IsOptional()
-    description?: string;
+  @ApiProperty({
+    description: 'Project type: CHARITY or ROI',
+    example: 'CHARITY',
+  })
+  @IsString()
+  @IsOptional()
+  projectType?: string;
 
-    @ApiProperty({ description: 'Donor name for charity projects', required: false })
-    @IsString()
-    @IsOptional()
-    donorName?: string;
+  @ApiProperty({ description: 'Payment description', required: false })
+  @IsString()
+  @IsOptional()
+  description?: string;
 
-    @ApiProperty({ description: 'Investor self-custodial wallet address for NFT minting (ROI projects)', required: false })
-    @IsString()
-    @IsOptional()
-    walletAddress?: string;
+  @ApiProperty({
+    description: 'Donor name for charity projects',
+    required: false,
+  })
+  @IsString()
+  @IsOptional()
+  donorName?: string;
+
+  @ApiProperty({
+    description:
+      'Investor self-custodial wallet address for NFT minting (ROI projects)',
+    required: false,
+  })
+  @IsString()
+  @IsOptional()
+  walletAddress?: string;
 }

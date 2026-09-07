@@ -5,7 +5,6 @@ import { ProjectType } from '../../../common/enums/project-type.enum';
 import { CharityCategory } from '../../../common/enums/charity-category.enum';
 import { CharitySubcategory } from '../../../common/enums/charity-subcategory.enum';
 import { ROIIndustry } from '../../../common/enums/roi-industry.enum';
-import { User } from '../../users/schemas/user.schema';
 
 /** Lifecycle state of the on-chain provisioning for ROI projects. */
 export enum OnchainProvisioningStatus {
@@ -23,7 +22,13 @@ export type ProjectDocument = HydratedDocument<Project>;
   discriminatorKey: 'projectType',
 })
 export class Project {
-  @Prop({ required: true, trim: true, index: true, type: Types.ObjectId, ref: 'User' })
+  @Prop({
+    required: true,
+    trim: true,
+    index: true,
+    type: Types.ObjectId,
+    ref: 'User',
+  })
   creatorId!: string | Types.ObjectId;
 
   @Prop({
@@ -308,7 +313,13 @@ export class Project {
 export const ProjectSchema = SchemaFactory.createForClass(Project);
 
 export class ROIProject {
-  @Prop({ required: true, trim: true, index: true, type: String, enum: ROIIndustry })
+  @Prop({
+    required: true,
+    trim: true,
+    index: true,
+    type: String,
+    enum: ROIIndustry,
+  })
   declare industry: string;
 
   @Prop({ trim: true })

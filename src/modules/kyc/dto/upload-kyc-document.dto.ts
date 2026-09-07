@@ -1,4 +1,10 @@
-import { IsEnum, IsObject, IsOptional, IsString, Length } from 'class-validator';
+import {
+  IsEnum,
+  IsObject,
+  IsOptional,
+  IsString,
+  Length,
+} from 'class-validator';
 import {
   ApiProperty,
   ApiPropertyOptional,
@@ -16,8 +22,10 @@ export class UploadKycDocumentDto {
   @Length(0, 128)
   label?: string;
 
-  @ApiPropertyOptional({ description: 'Additional metadata about the document' })
+  @ApiPropertyOptional({
+    description: 'Additional metadata about the document',
+  })
   @IsOptional()
   @IsObject()
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }

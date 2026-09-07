@@ -32,7 +32,7 @@ export interface KycDocumentView {
   mimeType?: string;
   sizeBytes?: number;
   uploadedAt: Date;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface KycProfileView {

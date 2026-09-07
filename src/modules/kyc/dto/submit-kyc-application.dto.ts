@@ -1,7 +1,5 @@
-import { IsEnum, IsObject, IsOptional, IsString } from 'class-validator';
-import {
-  ApiPropertyOptional,
-} from '../../../common/swagger.decorators';
+import { IsEnum, IsObject, IsOptional } from 'class-validator';
+import { ApiPropertyOptional } from '../../../common/swagger.decorators';
 import type { KycLevel } from '../interfaces/kyc.interface';
 
 export class SubmitKycApplicationDto {
@@ -20,11 +18,15 @@ export class SubmitKycApplicationDto {
    */
   @ApiPropertyOptional({ enum: ['INVESTOR', 'CREATOR'], default: 'INVESTOR' })
   @IsOptional()
-  @IsEnum(['INVESTOR', 'CREATOR'], { message: 'userType must be INVESTOR or CREATOR' })
+  @IsEnum(['INVESTOR', 'CREATOR'], {
+    message: 'userType must be INVESTOR or CREATOR',
+  })
   userType?: 'INVESTOR' | 'CREATOR';
 
-  @ApiPropertyOptional({ description: 'Additional metadata to send to provider' })
+  @ApiPropertyOptional({
+    description: 'Additional metadata to send to provider',
+  })
   @IsOptional()
   @IsObject()
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }

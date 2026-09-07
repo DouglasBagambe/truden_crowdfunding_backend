@@ -8,26 +8,27 @@ import { KycWebhookController } from './controllers/kyc-webhook.controller';
 import { UsersService } from './users.service';
 import { UsersRepository } from './repositories/users.repository';
 import { UserEventsListener } from './listeners/user-events.listener';
-import { CustodialWalletService } from './services/custodial-wallet.service';
 import { AuthModule } from '../auth/auth.module';
 import { AuditModule } from '../audit/audit.module';
 import { HttpModule } from '@nestjs/axios';
+import {
+  WalletOwnership,
+  WalletOwnershipSchema,
+} from './schemas/wallet-ownership.schema';
 
 @Module({
   imports: [
-    MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
+    MongooseModule.forFeature([
+      { name: User.name, schema: UserSchema },
+      { name: WalletOwnership.name, schema: WalletOwnershipSchema },
+    ]),
     ConfigModule,
     HttpModule,
     AuthModule,
     AuditModule,
   ],
   controllers: [UsersController, AdminUsersController, KycWebhookController],
-  providers: [
-    UsersService,
-    UsersRepository,
-    UserEventsListener,
-    CustodialWalletService,
-  ],
-  exports: [UsersService, UsersRepository, CustodialWalletService],
+  providers: [UsersService, UsersRepository, UserEventsListener],
+  exports: [UsersService, UsersRepository],
 })
-export class UsersModule { }
+export class UsersModule {}

@@ -30,25 +30,53 @@ import { AuthService } from '../auth/auth.service';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { AuditService } from '../audit/audit.service';
-import { encryptObject, decryptObject, getEncryptionKey } from '../../common/utils/encryption.util';
+import {
+  encryptObject,
+  decryptObject,
+  getEncryptionKey,
+} from '../../common/utils/encryption.util';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
-import { SiweMessage } from 'siwe';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import {
+  WalletOwnership,
+  WalletOwnershipDocument,
+} from './schemas/wallet-ownership.schema';
+
+type JsonRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): JsonRecord | undefined {
+  return value !== null && typeof value === 'object'
+    ? (value as JsonRecord)
+    : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
 
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
 
   constructor(
+    @InjectModel(WalletOwnership.name)
+    private readonly walletOwnershipModel: Model<WalletOwnershipDocument>,
     private readonly usersRepository: UsersRepository,
     private readonly events: EventEmitter2,
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
     private readonly auditService: AuditService,
     private readonly http: HttpService,
-  ) { }
+  ) {}
 
   async createUser(dto: CreateUserDto) {
+    if (dto.primaryWallet || dto.linkedWallets?.length) {
+      throw new BadRequestException(
+        'Wallets can only be linked by the account owner using a signed challenge',
+      );
+    }
     const primaryWallet = dto.primaryWallet?.toLowerCase();
     if (primaryWallet) {
       await this.ensureWalletAvailable(primaryWallet);
@@ -87,7 +115,9 @@ export class UsersService {
         country: dto.country,
       },
       creatorVerification: {
-        status: dto.creatorVerificationStatus ?? CreatorVerificationStatus.NOT_SUBMITTED,
+        status:
+          dto.creatorVerificationStatus ??
+          CreatorVerificationStatus.NOT_SUBMITTED,
         evidenceUrls: [],
         attachments: [],
       },
@@ -157,33 +187,54 @@ export class UsersService {
   async linkWallet(userId: string, dto: LinkWalletDto) {
     const wallet = dto.wallet.toLowerCase();
     const currentUser: UserDocument | null =
-      await this.usersRepository.findByIdWithNonce(userId);
+      await this.usersRepository.findById(userId);
     if (!currentUser) {
       throw new NotFoundException('User not found');
     }
 
-    if (currentUser.primaryWallet === wallet) {
+    if (currentUser.primaryWallet === wallet && !dto.makePrimary) {
       throw new ConflictException(
         'Wallet is already set as the primary wallet',
       );
     }
 
-    await this.assertValidWalletLinkSignature(currentUser, dto, wallet);
     await this.ensureWalletAvailable(wallet, userId);
-    let user: UserDocument | null =
-      await this.usersRepository.addLinkedWallet(userId, wallet);
-    if (!user) {
-      throw new NotFoundException('User not found');
+    await this.authService.consumeSiweChallenge(
+      userId,
+      wallet,
+      'link',
+      dto.message,
+      dto.signature,
+    );
+
+    try {
+      await this.walletOwnershipModel.updateOne(
+        { address: wallet },
+        {
+          $setOnInsert: { address: wallet, userId: new Types.ObjectId(userId) },
+        },
+        { upsert: true },
+      );
+    } catch (error: unknown) {
+      if ((error as { code?: number }).code === 11000) {
+        throw new ConflictException('Wallet already linked to another user');
+      }
+      throw error;
     }
 
-    if (!currentUser.primaryWallet) {
-      user = await this.usersRepository.updateById(userId, {
-        $set: { primaryWallet: wallet, nonce: null },
-        $pull: { linkedWallets: wallet },
-      });
+    const linkedWallets = new Set(currentUser.linkedWallets ?? []);
+    let primaryWallet = currentUser.primaryWallet;
+    if (!primaryWallet || dto.makePrimary) {
+      if (primaryWallet && primaryWallet !== wallet)
+        linkedWallets.add(primaryWallet);
+      primaryWallet = wallet;
+      linkedWallets.delete(wallet);
     } else {
-      user = await this.usersRepository.clearNonce(userId);
+      linkedWallets.add(wallet);
     }
+    const user = await this.usersRepository.updateById(userId, {
+      $set: { primaryWallet, linkedWallets: [...linkedWallets] },
+    });
 
     if (!user) {
       throw new NotFoundException('User not found');
@@ -194,6 +245,13 @@ export class UsersService {
       primaryWallet: user.primaryWallet,
       changes: { wallet },
     });
+    await this.auditService.log({
+      action: dto.makePrimary ? 'wallet.primary.changed' : 'wallet.linked',
+      actorId: userId,
+      actorRoles: currentUser.roles ?? [],
+      targetType: 'wallet',
+      targetId: wallet,
+    });
     return this.sanitizeUser(user);
   }
 
@@ -201,7 +259,9 @@ export class UsersService {
     const key = getEncryptionKey();
     const piiEncrypted = encryptObject(
       {
-        dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth).toISOString() : null,
+        dateOfBirth: dto.dateOfBirth
+          ? new Date(dto.dateOfBirth).toISOString()
+          : null,
         homeAddress: dto.homeAddress ?? null,
         documentType: dto.documentType,
         documentCountry: dto.documentCountry,
@@ -233,7 +293,12 @@ export class UsersService {
     const cfg = this.getSmileConfig();
     const jobId = crypto.randomUUID();
     const timestamp = Date.now().toString();
-    const signature = this.buildSmileSignature(cfg.partnerId, jobId, timestamp, cfg.apiKey);
+    const signature = this.buildSmileSignature(
+      cfg.partnerId,
+      jobId,
+      timestamp,
+      cfg.apiKey,
+    );
 
     const payload = {
       job_type: 1, // Document verification; Smile will handle selfie/liveness per configuration
@@ -284,8 +349,7 @@ export class UsersService {
       partnerId: cfg.partnerId,
       callbackUrl: cfg.callbackUrl,
       status: 'IN_PROGRESS',
-      note:
-        'Submit this token to Smile ID client SDK; backend does not call Smile directly in this scaffold.',
+      note: 'Submit this token to Smile ID client SDK; backend does not call Smile directly in this scaffold.',
     };
   }
 
@@ -303,13 +367,17 @@ export class UsersService {
 
     const partnerParams = this.safeParseJson(dto.partner_params);
     const result = this.safeParseJson(dto.result);
-    const userId = partnerParams?.user_id ?? partnerParams?.userId;
+    const userId = asString(partnerParams?.user_id ?? partnerParams?.userId);
     if (!userId) {
       throw new BadRequestException('Missing user_id in Smile callback');
     }
 
-    const passed = result?.ResultText === 'Passed' || result?.Passed === true;
-    const failureReason = result?.ResultText || result?.Errors?.[0]?.Message;
+    const resultText = asString(result?.ResultText);
+    const firstError = Array.isArray(result?.Errors)
+      ? asRecord(result.Errors[0])
+      : undefined;
+    const passed = resultText === 'Passed' || result?.Passed === true;
+    const failureReason = resultText ?? asString(firstError?.Message);
     const providerStatus = passed ? 'VERIFIED' : 'REJECTED';
     const kycStatus = passed ? KYCStatus.VERIFIED : KYCStatus.REJECTED;
 
@@ -323,11 +391,12 @@ export class UsersService {
       'kyc.verifiedAt': passed ? new Date() : undefined,
     };
 
-    if (result?.ResultURL) {
-      setPayload['kyc.providerResultUrl'] = result.ResultURL;
+    const resultUrl = asString(result?.ResultURL);
+    if (resultUrl) {
+      setPayload['kyc.providerResultUrl'] = resultUrl;
     }
-    const dob = result?.DOB || result?.dob;
-    const address = result?.Address || result?.address;
+    const dob = asString(result?.DOB ?? result?.dob);
+    const address = asRecord(result?.Address ?? result?.address);
     const key = this.safeGetEncryptionKey();
     if (key) {
       const piiEncrypted = encryptObject(
@@ -335,13 +404,13 @@ export class UsersService {
           dateOfBirth: dob ? new Date(dob).toISOString() : null,
           homeAddress: address
             ? {
-              line1: address?.Street || address?.line1,
-              line2: address?.line2,
-              city: address?.City || address?.city,
-              state: address?.State || address?.state,
-              postalCode: address?.PostalCode || address?.postalCode,
-              country: address?.Country || address?.country,
-            }
+                line1: asString(address.Street ?? address.line1),
+                line2: asString(address.line2),
+                city: asString(address.City ?? address.city),
+                state: asString(address.State ?? address.state),
+                postalCode: asString(address.PostalCode ?? address.postalCode),
+                country: asString(address.Country ?? address.country),
+              }
             : null,
           documentType: undefined,
           documentCountry: undefined,
@@ -390,15 +459,56 @@ export class UsersService {
 
   async unlinkWallet(userId: string, dto: LinkWalletDto) {
     const wallet = dto.wallet.toLowerCase();
-    const user: UserDocument | null =
-      await this.usersRepository.removeLinkedWallet(userId, wallet);
-    if (!user) {
+    const currentUser = await this.usersRepository.findById(userId);
+    if (!currentUser) {
       throw new NotFoundException('User not found');
     }
+    const ownsWallet =
+      currentUser.primaryWallet === wallet ||
+      (currentUser.linkedWallets ?? []).includes(wallet);
+    if (!ownsWallet)
+      throw new NotFoundException('Wallet is not linked to this account');
+
+    await this.authService.consumeSiweChallenge(
+      userId,
+      wallet,
+      'unlink',
+      dto.message,
+      dto.signature,
+    );
+
+    const remaining = (currentUser.linkedWallets ?? []).filter(
+      (address) => address !== wallet,
+    );
+    let primaryWallet = currentUser.primaryWallet;
+    if (primaryWallet === wallet) {
+      if (remaining.length === 0) {
+        throw new BadRequestException(
+          'The only linked wallet cannot be removed; link another wallet first',
+        );
+      }
+      primaryWallet = remaining.shift();
+    }
+
+    const user = await this.usersRepository.updateById(userId, {
+      $set: { primaryWallet, linkedWallets: remaining },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    await this.walletOwnershipModel.deleteOne({
+      address: wallet,
+      userId: new Types.ObjectId(userId),
+    });
     this.emitEvent(UserEvent.UnlinkedWallet, {
       userId: String(user.id),
       primaryWallet: user.primaryWallet,
       changes: { wallet },
+    });
+    await this.auditService.log({
+      action: 'wallet.unlinked',
+      actorId: userId,
+      actorRoles: currentUser.roles ?? [],
+      targetType: 'wallet',
+      targetId: wallet,
     });
     return this.sanitizeUser(user);
   }
@@ -547,89 +657,6 @@ export class UsersService {
     }
   }
 
-  private async assertValidWalletLinkSignature(
-    currentUser: UserDocument,
-    dto: LinkWalletDto,
-    wallet: string,
-  ) {
-    if (!dto.message || !dto.signature) {
-      throw new BadRequestException('Wallet signature is required');
-    }
-
-    if (!currentUser.nonce) {
-      throw new BadRequestException('Wallet link nonce missing. Request a fresh nonce and sign again.');
-    }
-
-    let message: SiweMessage;
-    try {
-      message = new SiweMessage(dto.message);
-    } catch {
-      throw new BadRequestException('Invalid SIWE message');
-    }
-
-    if (message.address.toLowerCase() !== wallet) {
-      throw new BadRequestException('Signed wallet address does not match the requested wallet');
-    }
-
-    if (message.nonce !== currentUser.nonce) {
-      throw new BadRequestException('Wallet signature nonce mismatch');
-    }
-
-    const { allowedHosts, allowedOrigins } = this.getAllowedWalletLinkOrigins();
-    if (!allowedHosts.has(message.domain)) {
-      throw new BadRequestException('Wallet signature domain is not allowed');
-    }
-
-    let uriOrigin = '';
-    try {
-      uriOrigin = new URL(message.uri).origin;
-    } catch {
-      throw new BadRequestException('Wallet signature URI is invalid');
-    }
-
-    if (!allowedOrigins.has(uriOrigin)) {
-      throw new BadRequestException('Wallet signature origin is not allowed');
-    }
-
-    try {
-      await message.verify({
-        signature: dto.signature,
-        nonce: currentUser.nonce,
-      });
-    } catch {
-      throw new BadRequestException('Invalid wallet signature');
-    }
-  }
-
-  private getAllowedWalletLinkOrigins() {
-    const allowedHosts = new Set<string>();
-    const allowedOrigins = new Set<string>();
-    const candidates = [
-      this.configService.get<string>('FRONTEND_URL'),
-      this.configService.get<string>('NEXT_PUBLIC_APP_URL'),
-      process.env.FRONTEND_URL,
-      process.env.NEXT_PUBLIC_APP_URL,
-      'http://localhost:3001',
-      'http://localhost:3000',
-    ];
-
-    for (const candidate of candidates) {
-      if (!candidate) {
-        continue;
-      }
-
-      try {
-        const url = new URL(candidate);
-        allowedHosts.add(url.host);
-        allowedOrigins.add(url.origin);
-      } catch {
-        // Ignore malformed URL values.
-      }
-    }
-
-    return { allowedHosts, allowedOrigins };
-  }
-
   private async ensureEmailAvailable(email: string, ownerId?: string) {
     const normalizedEmail = email.toLowerCase().trim();
     const existing = await this.usersRepository.findByEmail(normalizedEmail);
@@ -712,27 +739,31 @@ export class UsersService {
     }
   }
 
-  private safeParseJson(value: unknown) {
+  private safeParseJson(value: unknown): JsonRecord | undefined {
     if (typeof value !== 'string') return undefined;
     try {
-      return JSON.parse(value);
+      return asRecord(JSON.parse(value) as unknown);
     } catch {
       return undefined;
     }
   }
 
   private sanitizeUser(user: UserDocument) {
-    const obj = user.toObject();
-    delete (obj as any).password;
-    delete (obj as any).passwordHash;
-    const mfaEnabled = Boolean(obj.mfa?.enabled);
+    const obj = user.toObject() as unknown as JsonRecord;
+    delete obj.password;
+    delete obj.passwordHash;
+    const originalMfa = asRecord(obj.mfa);
+    const mfaEnabled = Boolean(originalMfa?.enabled);
     obj.mfa = {
       enabled: mfaEnabled,
-      emailEnabled: Boolean(obj.mfa?.emailEnabled),
+      emailEnabled: Boolean(originalMfa?.emailEnabled),
     };
-    (obj as any).mfaEnabled = mfaEnabled;
+    obj.mfaEnabled = mfaEnabled;
     // Decrypt KYC PII for runtime use; keep encrypted data at rest
-    if (obj.kyc?.piiEncrypted || obj.kyc?.attachmentsEncrypted) {
+    const kyc = asRecord(obj.kyc);
+    const piiEncrypted = asString(kyc?.piiEncrypted);
+    const attachmentsEncrypted = asString(kyc?.attachmentsEncrypted);
+    if (kyc && (piiEncrypted || attachmentsEncrypted)) {
       const key = this.safeGetEncryptionKey();
       if (key) {
         const decrypted = decryptObject<{
@@ -741,23 +772,23 @@ export class UsersService {
           documentType?: string;
           documentCountry?: string;
           documentLast4?: string;
-        }>(obj.kyc.piiEncrypted, key);
-        const attachments = decryptObject<unknown[]>(obj.kyc.attachmentsEncrypted, key);
+        }>(piiEncrypted, key);
+        const attachments = decryptObject<unknown[]>(attachmentsEncrypted, key);
         if (decrypted) {
-          (obj.kyc as any).dateOfBirth = decrypted.dateOfBirth
+          kyc.dateOfBirth = decrypted.dateOfBirth
             ? new Date(decrypted.dateOfBirth)
             : undefined;
-          (obj.kyc as any).homeAddress = decrypted.homeAddress;
-          (obj.kyc as any).documentType = decrypted.documentType;
-          (obj.kyc as any).documentCountry = decrypted.documentCountry;
-          (obj.kyc as any).documentLast4 = decrypted.documentLast4;
+          kyc.homeAddress = decrypted.homeAddress;
+          kyc.documentType = decrypted.documentType;
+          kyc.documentCountry = decrypted.documentCountry;
+          kyc.documentLast4 = decrypted.documentLast4;
         }
         if (attachments) {
-          (obj.kyc as any).attachments = attachments;
+          kyc.attachments = attachments;
         }
       }
-      delete (obj.kyc as any).piiEncrypted;
-      delete (obj.kyc as any).attachmentsEncrypted;
+      delete kyc.piiEncrypted;
+      delete kyc.attachmentsEncrypted;
     }
     return obj;
   }

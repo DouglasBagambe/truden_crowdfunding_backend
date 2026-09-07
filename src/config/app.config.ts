@@ -1,21 +1,28 @@
+const isProduction = process.env.NODE_ENV === 'production';
+const developmentOnly = <T>(value: T): T | undefined =>
+  isProduction ? undefined : value;
+
 export default () => ({
   port: parseInt(process.env.PORT || '3000', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
   database: {
-    uri: process.env.MONGO_URI || 'mongodb://localhost:27017/crowdfunding_db',
+    uri:
+      process.env.MONGO_URI ||
+      developmentOnly('mongodb://127.0.0.1:27017/keibo_development'),
   },
   jwt: {
-    secret: process.env.JWT_SECRET || 'default-secret-key',
+    secret: process.env.JWT_SECRET,
     expiresIn: process.env.JWT_EXPIRY || '15m',
-    refreshSecret: process.env.REFRESH_TOKEN_SECRET || 'default-refresh-secret',
+    refreshSecret: process.env.REFRESH_TOKEN_SECRET,
     refreshExpiresIn: process.env.REFRESH_TOKEN_EXPIRY || '7d',
   },
   blockchain: {
-    rpcUrl:
-      process.env.RPC_URL ||
-      'https://base-sepolia.blockpi.network/v1/rpc/public',
-    chainId: parseInt(process.env.CHAIN_ID ?? '84532', 10) || 84532,
-    chainName: process.env.CHAIN_NAME || 'Base Sepolia',
+    enabled: process.env.BLOCKCHAIN_FEATURES_ENABLED === 'true',
+    rpcUrl: process.env.RPC_URL,
+    chainId: process.env.CHAIN_ID
+      ? parseInt(process.env.CHAIN_ID, 10)
+      : undefined,
+    chainName: process.env.CHAIN_NAME,
     contracts: {
       escrow: process.env.ESCROW_CONTRACT_ADDRESS,
       nft: process.env.NFT_CONTRACT_ADDRESS,
@@ -23,9 +30,12 @@ export default () => ({
       dealRoom: process.env.DEALROOM_CONTRACT_ADDRESS,
       treasury: process.env.TREASURY_CONTRACT_ADDRESS,
     },
-    adminPrivateKey: process.env.ADMIN_PRIVATE_KEY,
+    signerProvider: process.env.PLATFORM_SIGNER_PROVIDER || 'disabled',
   },
   cors: {
-    origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000', 'http://localhost:3001'],
+    origin:
+      process.env.CORS_ORIGIN?.split(',').map((origin) => origin.trim()) ||
+      developmentOnly(['http://localhost:3000', 'http://localhost:3001']) ||
+      [],
   },
 });

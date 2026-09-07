@@ -4,24 +4,49 @@ import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import appConfig from './config/app.config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
+import express from 'express';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 
 type AppConfig = ReturnType<typeof appConfig>;
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-  const configService = app.get<ConfigService<AppConfig>>(ConfigService);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
+  const configService = app.get<ConfigService>(ConfigService);
 
   const corsConfig = configService.get<AppConfig['cors']>('cors');
-  const corsOrigin = corsConfig?.origin ?? ['http://localhost:3000', 'http://localhost:3001'];
+  const corsOrigin = corsConfig?.origin ?? [];
   app.enableCors({
     origin: corsOrigin,
     credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
+    maxAge: 600,
   });
 
-  // Increase payload limits for image/video uploads
-  const express = require('express');
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ limit: '50mb', extended: true }));
+  const trustProxy = configService.get<string>('TRUST_PROXY')?.trim();
+  if (trustProxy) {
+    app.set('trust proxy', trustProxy);
+  }
+  app.use(cookieParser());
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'none'"],
+          frameAncestors: ["'none'"],
+          baseUri: ["'none'"],
+          formAction: ["'self'"],
+        },
+      },
+      referrerPolicy: { policy: 'no-referrer' },
+    }),
+  );
+  app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ limit: '2mb', extended: true }));
 
   // Global validation pipe with combined options
   app.useGlobalPipes(
@@ -34,8 +59,8 @@ async function bootstrap() {
   );
 
   const config = new DocumentBuilder()
-    .setTitle('E-NGO Management API')
-    .setDescription('API documentation for CrowdFunding')
+    .setTitle('KEIBO API')
+    .setDescription('KEIBO campaign and funding API')
     .setVersion('1.0')
     .addBearerAuth(
       {
@@ -50,14 +75,16 @@ async function bootstrap() {
     )
     .build();
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup(`api/docs`, app, document, {
-    swaggerOptions: {
-      persistAuthorization: true,
-      tagsSorter: 'alpha',
-      operationsSorter: 'alpha',
-    },
-  });
+  if (configService.get<string>('NODE_ENV') !== 'production') {
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup(`api/docs`, app, document, {
+      swaggerOptions: {
+        persistAuthorization: false,
+        tagsSorter: 'alpha',
+        operationsSorter: 'alpha',
+      },
+    });
+  }
 
   app.setGlobalPrefix('api');
 
@@ -76,18 +103,16 @@ async function bootstrap() {
   console.log(
     `Investments endpoints available at: http://localhost:${port}/api/investments`,
   );
-  console.log(
-    `NFT endpoints available at: http://localhost:${port}/api/nfts`,
-  );
+  console.log(`NFT endpoints available at: http://localhost:${port}/api/nfts`);
   console.log(
     `Treasury endpoints available at: http://localhost:${port}/api/treasury`,
   );
-  console.log(
-    `KYC endpoints available at: http://localhost:${port}/api/kyc`,
-  );
+  console.log(`KYC endpoints available at: http://localhost:${port}/api/kyc`);
 }
 
-bootstrap().catch((error) => {
-  console.error('Failed to start application:', error);
+bootstrap().catch((error: unknown) => {
+  const message =
+    error instanceof Error ? error.message : 'Unknown startup error';
+  console.error(`Failed to start application: ${message}`);
   process.exit(1);
 });

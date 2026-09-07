@@ -18,6 +18,12 @@ import { RolesGuard } from './common/guards/roles.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { MarketplaceModule } from './modules/marketplace/marketplace.module';
 import appConfig from './config/app.config';
+import { validateEnvironment } from './config/validate-env';
+import { CsrfGuard } from './common/guards/csrf.guard';
+import { RateLimitGuard } from './common/guards/rate-limit.guard';
+import { AuditModule } from './modules/audit/audit.module';
+import { CommonModule } from './common/common.module';
+import { FinancialModule } from './modules/financial/financial.module';
 
 @Module({
   imports: [
@@ -25,6 +31,7 @@ import appConfig from './config/app.config';
       isGlobal: true,
       load: [appConfig],
       envFilePath: '.env',
+      validate: validateEnvironment,
     }),
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
@@ -43,6 +50,8 @@ import appConfig from './config/app.config';
       },
     }),
     EventEmitterModule.forRoot(),
+    AuditModule,
+    CommonModule,
     AuthModule,
     RolesModule,
     UsersModule,
@@ -54,6 +63,7 @@ import appConfig from './config/app.config';
     StatisticsModule,
     PaymentsModule,
     MarketplaceModule,
+    FinancialModule,
   ],
   providers: [
     {
@@ -68,6 +78,14 @@ import appConfig from './config/app.config';
       provide: APP_GUARD,
       useClass: PermissionsGuard,
     },
+    {
+      provide: APP_GUARD,
+      useClass: CsrfGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: RateLimitGuard,
+    },
   ],
 })
-export class AppModule { }
+export class AppModule {}

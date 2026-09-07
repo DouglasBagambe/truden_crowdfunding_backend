@@ -2,7 +2,6 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   createPublicClient,
-  createWalletClient,
   http,
   type Abi,
   type Address,
@@ -10,7 +9,7 @@ import {
   type Hash,
   type TransactionReceipt,
 } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import { PlatformSignerService } from '../../../common/services/platform-signer.service';
 
 /**
  * ABI subset matching InvestmentNFT.sol (ERC-1155)
@@ -197,32 +196,28 @@ export const INVESTMENT_NFT_ABI = [
   },
 ] as const satisfies Abi;
 
-type Hex = `0x${string}`;
-
 @Injectable()
 export class ViemNftClient {
-  private readonly publicClient;
-  private readonly walletClient;
-  readonly nftAddress: Address;
-  readonly chainId: number;
-  readonly rpcUrl: string;
+  private readonly publicClient?: ReturnType<typeof createPublicClient>;
+  readonly nftAddress?: Address;
+  readonly chainId?: number;
+  readonly rpcUrl?: string;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly signer: PlatformSignerService,
+  ) {
     const blockchain = this.configService.get<{
+      enabled?: boolean;
       rpcUrl?: string;
       chainId?: number;
       contracts?: { nft?: string };
-      adminPrivateKey?: string;
     }>('blockchain');
+
+    if (!blockchain?.enabled) return;
 
     if (!blockchain?.rpcUrl || !blockchain.chainId) {
       throw new BadRequestException('Blockchain RPC configuration is missing');
-    }
-
-    if (!blockchain.adminPrivateKey) {
-      throw new BadRequestException(
-        'Blockchain admin private key is not configured',
-      );
     }
 
     if (!blockchain.contracts?.nft) {
@@ -239,9 +234,6 @@ export class ViemNftClient {
       },
     };
 
-    const rawKey = blockchain.adminPrivateKey.trim();
-    const normalizedKey = (rawKey.startsWith('0x') ? rawKey : `0x${rawKey}`) as Hex;
-    const account = privateKeyToAccount(normalizedKey);
     this.chainId = blockchain.chainId;
     this.rpcUrl = blockchain.rpcUrl;
 
@@ -250,19 +242,12 @@ export class ViemNftClient {
       transport: http(blockchain.rpcUrl),
     });
 
-    this.walletClient = createWalletClient({
-      chain,
-      transport: http(blockchain.rpcUrl),
-      account,
-    });
-
     this.nftAddress = blockchain.contracts.nft as Address;
   }
 
   getDiagnostics() {
     return {
       chainId: this.chainId,
-      rpcUrl: this.rpcUrl,
       nftAddress: this.nftAddress,
     };
   }
@@ -274,8 +259,9 @@ export class ViemNftClient {
     targetAmountWei: bigint;
     paymentToken: Address;
   }): Promise<{ hash: Hash; receipt: TransactionReceipt }> {
-    const hash: Hash = await this.walletClient.writeContract({
-      address: this.nftAddress,
+    const { publicClient, address } = this.requireEnabled();
+    const hash = await this.signer.writeContract({
+      address,
       abi: INVESTMENT_NFT_ABI,
       functionName: 'createProjectNFT',
       args: [
@@ -285,7 +271,7 @@ export class ViemNftClient {
         params.paymentToken,
       ],
     });
-    const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
     return { hash, receipt };
   }
 
@@ -295,34 +281,40 @@ export class ViemNftClient {
     investorWallet: Address;
     amountWei: bigint;
   }): Promise<{ hash: Hash; receipt: TransactionReceipt }> {
-    const hash: Hash = await this.walletClient.writeContract({
-      address: this.nftAddress,
+    const { publicClient, address } = this.requireEnabled();
+    const hash = await this.signer.writeContract({
+      address,
       abi: INVESTMENT_NFT_ABI,
       functionName: 'mintInvestmentTokens',
       args: [params.projectOnchainId, params.investorWallet, params.amountWei],
     });
-    const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
     return { hash, receipt };
   }
 
   /** Read the ERC-1155 token balance for a user on a specific project */
-  async getBalance(walletAddress: Address, projectOnchainId: bigint): Promise<bigint> {
-    return this.publicClient.readContract({
-      address: this.nftAddress,
+  async getBalance(
+    walletAddress: Address,
+    projectOnchainId: bigint,
+  ): Promise<bigint> {
+    const { publicClient, address } = this.requireEnabled();
+    return publicClient.readContract({
+      address,
       abi: INVESTMENT_NFT_ABI,
       functionName: 'balanceOf',
       args: [walletAddress, projectOnchainId],
-    }) as Promise<bigint>;
+    });
   }
 
   /** Read total supply minted for a project token */
   async getTotalSupply(projectOnchainId: bigint): Promise<bigint> {
-    return this.publicClient.readContract({
-      address: this.nftAddress,
+    const { publicClient, address } = this.requireEnabled();
+    return publicClient.readContract({
+      address,
       abi: INVESTMENT_NFT_ABI,
       functionName: 'totalSupply',
       args: [projectOnchainId],
-    }) as Promise<bigint>;
+    });
   }
 
   /** Read a specific listing from the contract */
@@ -333,12 +325,13 @@ export class ViemNftClient {
     price: bigint;
     active: boolean;
   }> {
-    const result = await this.publicClient.readContract({
-      address: this.nftAddress,
+    const { publicClient, address } = this.requireEnabled();
+    const result = (await publicClient.readContract({
+      address,
       abi: INVESTMENT_NFT_ABI,
       functionName: 'getListing',
       args: [listingId],
-    }) as readonly [Address, bigint, bigint, bigint, boolean];
+    })) as readonly [Address, bigint, bigint, bigint, boolean];
     return {
       seller: result[0],
       tokenId: result[1],
@@ -350,12 +343,13 @@ export class ViemNftClient {
 
   /** Read the total number of listings ever created */
   async getListingCounter(): Promise<bigint> {
-    return this.publicClient.readContract({
-      address: this.nftAddress,
+    const { publicClient, address } = this.requireEnabled();
+    return publicClient.readContract({
+      address,
       abi: INVESTMENT_NFT_ABI,
       functionName: 'listingCounter',
       args: [],
-    }) as Promise<bigint>;
+    });
   }
 
   getAbi(): Abi {
@@ -363,6 +357,15 @@ export class ViemNftClient {
   }
 
   getPublicClient() {
-    return this.publicClient;
+    return this.requireEnabled().publicClient;
+  }
+
+  private requireEnabled() {
+    if (!this.publicClient || !this.nftAddress) {
+      throw new BadRequestException(
+        'Blockchain NFT operations are disabled pending production approval',
+      );
+    }
+    return { publicClient: this.publicClient, address: this.nftAddress };
   }
 }

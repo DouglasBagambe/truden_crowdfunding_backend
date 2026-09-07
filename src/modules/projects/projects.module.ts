@@ -40,8 +40,10 @@ import {
 import { CharityDonationsRepository } from './repositories/charity-donations.repository';
 import { ViemNftClient } from '../nfts/helpers/viem-nft-client';
 
-import { Investment, InvestmentSchema } from '../investments/schemas/investment.schema';
-import { InvestmentStatus } from '../investments/interfaces/investment.interface';
+import {
+  Investment,
+  InvestmentSchema,
+} from '../investments/schemas/investment.schema';
 
 @Module({
   imports: [
@@ -88,10 +90,11 @@ import { InvestmentStatus } from '../investments/interfaces/investment.interface
     ViemNftClient,
   ],
   exports: [
+    MongooseModule,
     ProjectsService,
     AgreementTemplatesService,
     AttachmentRequirementsService,
     AttachmentFilesRepository,
   ],
 })
-export class ProjectsModule { }
+export class ProjectsModule {}
