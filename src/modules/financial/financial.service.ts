@@ -130,11 +130,15 @@ export class FinancialService {
           event.provider,
           event.providerEventId,
           event.eventType,
-          JSON.stringify({
-            ...event,
-            amountMinor: amountMinor.toString(),
-            currency,
-          }),
+          JSON.stringify(
+            {
+              ...event,
+              amountMinor: amountMinor.toString(),
+              currency,
+            },
+            (_key: string, value: unknown) =>
+              typeof value === 'bigint' ? value.toString() : value,
+          ),
           randomUUID(),
         ],
       );

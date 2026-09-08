@@ -103,7 +103,15 @@ export class FinancialOutboxService implements OnModuleDestroy {
   private async getRedis(): Promise<RedisClientType> {
     const url = this.config.get<string>('REDIS_URL');
     if (!url) throw new Error('REDIS_URL is required for financial outbox');
-    if (!this.redis) this.redis = createClient({ url });
+    if (!this.redis) {
+      this.redis = createClient({
+        url,
+        socket: {
+          connectTimeout: 1_000,
+          reconnectStrategy: false,
+        },
+      });
+    }
     if (!this.redis.isOpen) await this.redis.connect();
     return this.redis;
   }
