@@ -78,6 +78,10 @@ export class AuthCookieService {
         this.configService.get<string>('COOKIE_SECURE') === 'true' ||
         this.configService.get<string>('NODE_ENV') === 'production',
       sameSite,
+      // Vercel and Render are different sites. Partition the cross-site cookie
+      // so modern browsers can retain it without allowing it to track users
+      // across unrelated top-level sites.
+      partitioned: sameSite === 'none',
       ...(domain ? { domain } : {}),
     };
   }
