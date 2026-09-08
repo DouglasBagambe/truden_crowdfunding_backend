@@ -48,7 +48,7 @@ export class KycProfile {
   })
   status!: KycApplicationStatus;
 
-  @Prop({ trim: true })
+  @Prop({ type: String, enum: ['BASIC', 'ENHANCED'], trim: true })
   level?: KycLevel;
 
   @Prop({ trim: true })
