@@ -18,12 +18,9 @@ export class RateLimitService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly configService: ConfigService) {}
 
   async onModuleInit(): Promise<void> {
-    const environment =
-      this.configService.get<string>('NODE_ENV') || 'development';
     const redisUrl = this.configService.get<string>('REDIS_URL')?.trim();
-    const requireRedis =
-      environment === 'production' ||
-      this.configService.get<string>('RATE_LIMIT_STORE') === 'redis';
+const requireRedis =
+  this.configService.get<string>('RATE_LIMIT_STORE') === 'redis';
 
     if (!requireRedis) return;
     if (!redisUrl) {
@@ -62,12 +59,6 @@ export class RateLimitService implements OnModuleInit, OnModuleDestroy {
           'Request protection infrastructure is unavailable',
         );
       }
-    }
-
-    if (this.configService.get<string>('NODE_ENV') === 'production') {
-      throw new ServiceUnavailableException(
-        'Request protection infrastructure is unavailable',
-      );
     }
 
     const now = Date.now();
