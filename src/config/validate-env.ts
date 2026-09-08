@@ -78,7 +78,9 @@ export function validateEnvironment(
   secureSecret(env, 'CSRF_SECRET');
   required(env, 'JWT_ISSUER');
   required(env, 'JWT_AUDIENCE');
-    if (stringValue(env.FINANCIAL_WORKERS_ENABLED).trim().toLowerCase() === 'true') {
+  if (
+    stringValue(env.FINANCIAL_WORKERS_ENABLED).trim().toLowerCase() === 'true'
+  ) {
     required(env, 'REDIS_URL');
     required(env, 'FINANCIAL_DATABASE_URL');
   }
@@ -106,9 +108,9 @@ export function validateEnvironment(
     );
   }
   const sameSite = required(env, 'COOKIE_SAME_SITE').toLowerCase();
-  if (!['lax', 'strict'].includes(sameSite)) {
+  if (!['lax', 'strict', 'none'].includes(sameSite)) {
     throw new Error(
-      'Invalid production configuration: COOKIE_SAME_SITE must be lax or strict',
+      'Invalid production configuration: COOKIE_SAME_SITE must be lax, strict or none',
     );
   }
 
