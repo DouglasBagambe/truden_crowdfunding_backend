@@ -63,12 +63,15 @@ export class AuthCookieService {
   }
 
   private baseOptions(): CookieOptions {
-    const sameSite =
-      (
-        this.configService.get<string>('COOKIE_SAME_SITE') || 'lax'
-      ).toLowerCase() === 'strict'
+    const configuredSameSite = (
+      this.configService.get<string>('COOKIE_SAME_SITE') || 'lax'
+    ).toLowerCase();
+    const sameSite: CookieOptions['sameSite'] =
+      configuredSameSite === 'strict'
         ? 'strict'
-        : 'lax';
+        : configuredSameSite === 'none'
+          ? 'none'
+          : 'lax';
     const domain = this.configService.get<string>('COOKIE_DOMAIN')?.trim();
     return {
       secure:
