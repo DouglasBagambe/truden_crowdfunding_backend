@@ -21,6 +21,7 @@ export interface InvestmentViewProject {
   projectType?: string;
   type?: string;
   creatorId?: string;
+  imageUrl?: string | null;
 }
 
 export interface InvestmentViewNft {
