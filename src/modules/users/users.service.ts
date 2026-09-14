@@ -39,6 +39,7 @@ import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { hasBackendRoiAccess } from '../../common/utils/roi-access.util';
 import {
   WalletOwnership,
   WalletOwnershipDocument,
@@ -137,7 +138,10 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
-    return this.sanitizeUser(user);
+    return {
+      ...this.sanitizeUser(user),
+      capabilities: this.getCapabilities(user),
+    };
   }
 
   async listUsers(query: QueryUsersDto) {
@@ -791,6 +795,31 @@ export class UsersService {
       delete kyc.attachmentsEncrypted;
     }
     return obj;
+  }
+
+  private getCapabilities(user: UserDocument) {
+    const roles = user.roles ?? [];
+    const canCreateProjects =
+      user.isActive !== false &&
+      user.isBlocked !== true &&
+      roles.some((role) =>
+        [UserRole.INNOVATOR, UserRole.ADMIN, UserRole.SUPERADMIN].includes(
+          role,
+        ),
+      );
+    const kycStatus = user.kyc?.status ?? user.kycStatus;
+    const creatorVerification = user.creatorVerification?.status;
+    const roiEligible =
+      canCreateProjects &&
+      kycStatus === KYCStatus.VERIFIED &&
+      creatorVerification === CreatorVerificationStatus.VERIFIED &&
+      hasBackendRoiAccess(String(user.id), this.configService);
+
+    return {
+      createCharity: canCreateProjects,
+      createRoi: roiEligible,
+      viewRoi: hasBackendRoiAccess(String(user.id), this.configService),
+    };
   }
 
   private parseAvatar(base64?: string) {

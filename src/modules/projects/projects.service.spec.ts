@@ -132,7 +132,11 @@ describe('ProjectsService — existing CRUD', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('creates ROI project with defaults and persists agreements/media fields', async () => {
-    const { service, projectsRepo, milestonesRepo } = createService();
+    const { service, projectsRepo, milestonesRepo, usersRepo, configService } = createService();
+    usersRepo.findById.mockResolvedValue(creatorWithWallet());
+    configService.get.mockImplementation((key: string) =>
+      key === 'ROI_ALLOWED_USER_IDS' ? mockCreatorId : undefined,
+    );
     const dto = {
       projectType: ProjectType.ROI,
       name: 'Tech Academy',
@@ -229,6 +233,35 @@ describe('ProjectsService — existing CRUD', () => {
         targetAmount: 10, currency: 'KES',
       } as any),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('denies ROI creation when the backend policy does not allow the creator', async () => {
+    const { service } = createService();
+    await expect(
+      service.createProject(mockCreatorId, {
+        type: ProjectType.ROI, name: 'X', summary: 'S', story: 'S',
+        country: 'KE', beneficiary: 'P', paymentMethod: 'mpesa',
+        industry: 'technology', targetAmount: 10, currency: 'KES',
+      } as any),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('denies ROI creation when KYC or creator verification is incomplete', async () => {
+    const { service, usersRepo, configService } = createService();
+    usersRepo.findById.mockResolvedValue({
+      ...creatorWithWallet(),
+      kyc: { status: KYCStatus.PENDING },
+    });
+    configService.get.mockImplementation((key: string) =>
+      key === 'ROI_ALLOWED_USER_IDS' ? mockCreatorId : undefined,
+    );
+    await expect(
+      service.createProject(mockCreatorId, {
+        type: ProjectType.ROI, name: 'X', summary: 'S', story: 'S',
+        country: 'KE', beneficiary: 'P', paymentMethod: 'mpesa',
+        industry: 'technology', targetAmount: 10, currency: 'KES',
+      } as any),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('prevents updating project not owned by user', async () => {

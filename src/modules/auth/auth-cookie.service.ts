@@ -16,7 +16,9 @@ export class AuthCookieService {
     response.cookie('keibo_access', tokens.accessToken, {
       ...this.baseOptions(),
       httpOnly: true,
-      path: '/api',
+      // The frontend middleware must receive the access cookie before it
+      // renders a protected route. API requests still receive this cookie.
+      path: '/',
       maxAge: this.durationMs(this.configService.get('JWT_EXPIRY') || '15m'),
     });
     response.cookie('keibo_refresh', tokens.refreshToken, {
@@ -53,7 +55,7 @@ export class AuthCookieService {
   clearSession(response: Response): void {
     response.clearCookie('keibo_access', {
       ...this.baseOptions(),
-      path: '/api',
+      path: '/',
     });
     response.clearCookie('keibo_refresh', {
       ...this.baseOptions(),

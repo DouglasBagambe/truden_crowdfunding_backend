@@ -145,6 +145,14 @@ export class ProjectsService {
       { ...dto, type: projectType },
       { requireType: true },
     );
+    if (projectType === ProjectType.ROI) {
+      if (!hasBackendRoiAccess(creatorId, this.configService)) {
+        throw new ForbiddenException(
+          'ROI project creation is not enabled for this account',
+        );
+      }
+      await this.ensureCreatorEligible(creatorId);
+    }
     const agreementsPayload: AgreementRuleDto[] =
       await this.resolveAgreementsWithTemplates(projectType, {
         agreements: dto.agreements,

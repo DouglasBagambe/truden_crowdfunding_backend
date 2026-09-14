@@ -35,6 +35,7 @@ export class ProjectsController {
 
   @Post()
   @UseGuards(EmailVerifiedGuard)
+  @Roles(UserRole.INNOVATOR, UserRole.ADMIN)
   createProject(
     @CurrentUser('sub') creatorId: string,
     @Body() dto: CreateProjectDto,
