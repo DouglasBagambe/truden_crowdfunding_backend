@@ -122,7 +122,7 @@ export class PaymentsController {
       const isCharity = projectType === 'CHARITY';
       const user =
         !isCharity && userId
-          ? await this.usersService.getUserById(userId)
+          ? await this.usersService.getPaymentEligibility(userId)
           : null;
 
       if (!userId) {

@@ -144,6 +144,18 @@ export class UsersService {
     };
   }
 
+  async getPaymentEligibility(id: string) {
+    const user = await this.usersRepository.findById(id);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return {
+      emailVerifiedAt: user.emailVerifiedAt,
+      kycStatus: user.kycStatus,
+    };
+  }
+
   async listUsers(query: QueryUsersDto) {
     const filter = buildUserQuery(query);
     const [users, total] = await Promise.all([
