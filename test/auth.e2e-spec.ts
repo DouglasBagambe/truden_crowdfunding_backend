@@ -188,7 +188,9 @@ describe('Auth integration (e2e)', () => {
     expect(
       cookies.some(
         (value) =>
-          value.startsWith('keibo_access=') && value.includes('HttpOnly'),
+          /^keibo_access=[^;]+;/.test(value) &&
+          value.includes('HttpOnly') &&
+          value.includes('Path=/;'),
       ),
     ).toBe(true);
     expect(
@@ -305,9 +307,12 @@ describe('Auth integration (e2e)', () => {
       .set('X-CSRF-Token', csrfToken)
       .expect(200);
     const cookies = logout.headers['set-cookie'] as unknown as string[];
-    expect(cookies.some((value) => value.startsWith('keibo_access=;'))).toBe(
-      true,
-    );
+    expect(
+      cookies.some(
+        (value) =>
+          value.startsWith('keibo_access=;') && value.includes('Path=/;'),
+      ),
+    ).toBe(true);
     await agent.get('/api/auth/profile').expect(401);
   });
 });

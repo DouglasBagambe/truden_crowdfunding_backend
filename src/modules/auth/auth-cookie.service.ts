@@ -13,6 +13,12 @@ export class AuthCookieService {
   constructor(private readonly configService: ConfigService) {}
 
   setSession(response: Response, tokens: SessionTokens): string {
+    // Remove the legacy API-scoped access cookie before issuing the
+    // route-visible cookie. Browsers may otherwise retain both values.
+    response.clearCookie('keibo_access', {
+      ...this.baseOptions(),
+      path: '/api',
+    });
     response.cookie('keibo_access', tokens.accessToken, {
       ...this.baseOptions(),
       httpOnly: true,
@@ -56,6 +62,10 @@ export class AuthCookieService {
     response.clearCookie('keibo_access', {
       ...this.baseOptions(),
       path: '/',
+    });
+    response.clearCookie('keibo_access', {
+      ...this.baseOptions(),
+      path: '/api',
     });
     response.clearCookie('keibo_refresh', {
       ...this.baseOptions(),

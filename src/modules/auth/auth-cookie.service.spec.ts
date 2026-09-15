@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import type { Response } from 'express';
 import { AuthCookieService } from './auth-cookie.service';
 
 describe('AuthCookieService', () => {
@@ -17,10 +18,12 @@ describe('AuthCookieService', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('makes the access cookie available to protected frontend routes', () => {
+    const cookie = jest.fn();
+    const clearCookie = jest.fn();
     const response = {
-      cookie: jest.fn(),
-      clearCookie: jest.fn(),
-    } as any;
+      cookie,
+      clearCookie,
+    } as unknown as Response;
     const service = new AuthCookieService(config);
 
     service.setSession(response, {
@@ -28,30 +31,39 @@ describe('AuthCookieService', () => {
       refreshToken: 'refresh',
     });
 
-    expect(response.cookie).toHaveBeenCalledWith(
+    expect(clearCookie).toHaveBeenCalledWith(
+      'keibo_access',
+      expect.objectContaining({ path: '/api' }),
+    );
+    expect(cookie).toHaveBeenCalledWith(
       'keibo_access',
       'access',
       expect.objectContaining({ httpOnly: true, path: '/', sameSite: 'lax' }),
     );
-    expect(response.cookie).toHaveBeenCalledWith(
+    expect(cookie).toHaveBeenCalledWith(
       'keibo_refresh',
       'refresh',
       expect.objectContaining({ httpOnly: true, path: '/api/auth' }),
     );
   });
 
-  it('clears the access cookie using the same route-visible path', () => {
+  it('clears access cookies at both the route-visible and legacy API paths', () => {
+    const clearCookie = jest.fn();
     const response = {
       cookie: jest.fn(),
-      clearCookie: jest.fn(),
-    } as any;
+      clearCookie,
+    } as unknown as Response;
     const service = new AuthCookieService(config);
 
     service.clearSession(response);
 
-    expect(response.clearCookie).toHaveBeenCalledWith(
+    expect(clearCookie).toHaveBeenCalledWith(
       'keibo_access',
       expect.objectContaining({ path: '/' }),
+    );
+    expect(clearCookie).toHaveBeenCalledWith(
+      'keibo_access',
+      expect.objectContaining({ path: '/api' }),
     );
   });
 });
