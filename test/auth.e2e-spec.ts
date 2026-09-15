@@ -313,6 +313,12 @@ describe('Auth integration (e2e)', () => {
           value.startsWith('keibo_access=;') && value.includes('Path=/;'),
       ),
     ).toBe(true);
+    expect(
+      cookies.some(
+        (value) =>
+          value.startsWith('keibo_access=;') && value.includes('Path=/api;'),
+      ),
+    ).toBe(true);
     await agent.get('/api/auth/profile').expect(401);
   });
 });
