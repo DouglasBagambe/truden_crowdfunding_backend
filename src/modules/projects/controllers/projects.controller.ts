@@ -29,7 +29,7 @@ type MulterFile = Express.Multer.File;
 @ApiTags('Projects')
 @Controller('projects')
 export class ProjectsController {
-  constructor(private readonly projectsService: ProjectsService) { }
+  constructor(private readonly projectsService: ProjectsService) {}
 
   // ── Static / non-parameterized routes FIRST ──────────────────────────────
 
@@ -51,7 +51,10 @@ export class ProjectsController {
   @Public()
   @UseGuards(OptionalJwtAuthGuard)
   @Get()
-  listProjects(@Query() query: QueryProjectsDto, @CurrentUser('sub') userId?: string) {
+  listProjects(
+    @Query() query: QueryProjectsDto,
+    @CurrentUser('sub') userId?: string,
+  ) {
     return this.projectsService.listPublicProjects(query, userId);
   }
 
@@ -111,12 +114,13 @@ export class ProjectsController {
   }
 
   @Public()
-
-
   @Public()
   @Get(':id/donors')
   listDonors(@Param('id') id: string, @Query('limit') limit?: string) {
-    return this.projectsService.listCharityDonationsPublic(id, Number(limit) || 50);
+    return this.projectsService.listCharityDonationsPublic(
+      id,
+      Number(limit) || 50,
+    );
   }
 
   @Roles(UserRole.INNOVATOR, UserRole.ADMIN)

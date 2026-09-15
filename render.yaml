@@ -33,12 +33,12 @@ services:
       - key: FINANCIAL_DATABASE_URL
         fromDatabase:
           name: keibo-staging-ledger
-          property: "connectionString"
+          property: 'connectionString'
       - key: REDIS_URL
         fromService:
           type: keyvalue
           name: keibo-staging-queue
-          property: "connectionString"
+          property: 'connectionString'
       - key: JWT_SECRET
         generateValue: true
       - key: REFRESH_TOKEN_SECRET
@@ -58,9 +58,9 @@ services:
       - key: CORS_ORIGIN
         value: https://keibo-staging-web.onrender.com
       - key: TRUST_PROXY
-        value: "1"
+        value: '1'
       - key: COOKIE_SECURE
-        value: "true"
+        value: 'true'
       - key: COOKIE_SAME_SITE
         value: lax
       - key: SIWE_DOMAIN
@@ -68,29 +68,29 @@ services:
       - key: SIWE_URI
         value: https://keibo-staging-web.onrender.com
       - key: SIWE_CHAIN_IDS
-        value: "11155111"
+        value: '11155111'
       - key: AUTH_EMAIL_BYPASS
-        value: "false"
+        value: 'false'
       - key: KYC_BYPASS
-        value: "false"
+        value: 'false'
       - key: INVESTMENTS_TEST_MODE
-        value: "false"
+        value: 'false'
       - key: BLOCKCHAIN_FEATURES_ENABLED
-        value: "false"
+        value: 'false'
       - key: ENABLE_NFT_MARKETPLACE
-        value: "false"
+        value: 'false'
       - key: ROI_DISABLE_NFT_MINTING
-        value: "true"
+        value: 'true'
       - key: KYC_PROVIDER
         value: didit
       - key: KYC_PROVIDER_MODE
         value: live
       - key: DIDIT_SANDBOX
-        value: "false"
+        value: 'false'
       - key: PLATFORM_SIGNER_PROVIDER
         value: disabled
       - key: FINANCIAL_WORKERS_ENABLED
-        value: "false"
+        value: 'false'
 
   - type: worker
     name: keibo-staging-financial-worker
@@ -110,12 +110,12 @@ services:
       - key: FINANCIAL_DATABASE_URL
         fromDatabase:
           name: keibo-staging-ledger
-          property: "connectionString"
+          property: 'connectionString'
       - key: REDIS_URL
         fromService:
           type: keyvalue
           name: keibo-staging-queue
-          property: "connectionString"
+          property: 'connectionString'
       - key: JWT_SECRET
         generateValue: true
       - key: REFRESH_TOKEN_SECRET
@@ -135,9 +135,9 @@ services:
       - key: CORS_ORIGIN
         value: https://keibo-staging-web.onrender.com
       - key: TRUST_PROXY
-        value: "1"
+        value: '1'
       - key: COOKIE_SECURE
-        value: "true"
+        value: 'true'
       - key: COOKIE_SAME_SITE
         value: lax
       - key: SIWE_DOMAIN
@@ -145,26 +145,26 @@ services:
       - key: SIWE_URI
         value: https://keibo-staging-web.onrender.com
       - key: SIWE_CHAIN_IDS
-        value: "11155111"
+        value: '11155111'
       - key: AUTH_EMAIL_BYPASS
-        value: "false"
+        value: 'false'
       - key: KYC_BYPASS
-        value: "false"
+        value: 'false'
       - key: INVESTMENTS_TEST_MODE
-        value: "false"
+        value: 'false'
       - key: BLOCKCHAIN_FEATURES_ENABLED
-        value: "false"
+        value: 'false'
       - key: ENABLE_NFT_MARKETPLACE
-        value: "false"
+        value: 'false'
       - key: ROI_DISABLE_NFT_MINTING
-        value: "true"
+        value: 'true'
       - key: KYC_PROVIDER
         value: didit
       - key: KYC_PROVIDER_MODE
         value: live
       - key: DIDIT_SANDBOX
-        value: "false"
+        value: 'false'
       - key: PLATFORM_SIGNER_PROVIDER
         value: disabled
       - key: FINANCIAL_WORKERS_ENABLED
-        value: "true"
+        value: 'true'

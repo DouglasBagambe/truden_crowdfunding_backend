@@ -132,7 +132,8 @@ describe('ProjectsService — existing CRUD', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('creates ROI project with defaults and persists agreements/media fields', async () => {
-    const { service, projectsRepo, milestonesRepo, usersRepo, configService } = createService();
+    const { service, projectsRepo, milestonesRepo, usersRepo, configService } =
+      createService();
     usersRepo.findById.mockResolvedValue(creatorWithWallet());
     configService.get.mockImplementation((key: string) =>
       key === 'ROI_ALLOWED_USER_IDS' ? mockCreatorId : undefined,
@@ -163,7 +164,9 @@ describe('ProjectsService — existing CRUD', () => {
 
     projectsRepo.create.mockResolvedValue({ id: mockProjectId });
     const result = { project: { id: mockProjectId }, milestones: [] };
-    jest.spyOn(service, 'getProjectWithMilestones').mockResolvedValue(result as any);
+    jest
+      .spyOn(service, 'getProjectWithMilestones')
+      .mockResolvedValue(result as any);
 
     const response = await service.createProject(mockCreatorId, dto as any);
 
@@ -200,16 +203,26 @@ describe('ProjectsService — existing CRUD', () => {
 
     projectsRepo.create.mockResolvedValue({ id: mockProjectId });
     const result = { project: { id: mockProjectId }, milestones: [] };
-    jest.spyOn(service, 'getProjectWithMilestones').mockResolvedValue(result as any);
+    jest
+      .spyOn(service, 'getProjectWithMilestones')
+      .mockResolvedValue(result as any);
 
     await service.createProject(mockCreatorId, dto as any);
 
     expect(projectsRepo.create).toHaveBeenCalledWith(
-      expect.objectContaining({ projectType: ProjectType.CHARITY, category: 'school' }),
+      expect.objectContaining({
+        projectType: ProjectType.CHARITY,
+        category: 'school',
+      }),
     );
     expect(milestonesRepo.createMany).toHaveBeenCalledWith(
       mockProjectId,
-      expect.arrayContaining([expect.objectContaining({ title: 'Phase 1', status: MilestoneStatus.PLANNED })]),
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: 'Phase 1',
+          status: MilestoneStatus.PLANNED,
+        }),
+      ]),
     );
   });
 
@@ -217,9 +230,15 @@ describe('ProjectsService — existing CRUD', () => {
     const { service } = createService();
     await expect(
       service.createProject(mockCreatorId, {
-        type: ProjectType.CHARITY, name: 'X', summary: 'S', story: 'S',
-        country: 'KE', beneficiary: 'P', paymentMethod: 'mpesa',
-        targetAmount: 10, currency: 'KES',
+        type: ProjectType.CHARITY,
+        name: 'X',
+        summary: 'S',
+        story: 'S',
+        country: 'KE',
+        beneficiary: 'P',
+        paymentMethod: 'mpesa',
+        targetAmount: 10,
+        currency: 'KES',
       } as any),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
@@ -228,9 +247,15 @@ describe('ProjectsService — existing CRUD', () => {
     const { service } = createService();
     await expect(
       service.createProject(mockCreatorId, {
-        type: ProjectType.ROI, name: 'X', summary: 'S', story: 'S',
-        country: 'KE', beneficiary: 'P', paymentMethod: 'mpesa',
-        targetAmount: 10, currency: 'KES',
+        type: ProjectType.ROI,
+        name: 'X',
+        summary: 'S',
+        story: 'S',
+        country: 'KE',
+        beneficiary: 'P',
+        paymentMethod: 'mpesa',
+        targetAmount: 10,
+        currency: 'KES',
       } as any),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
@@ -239,9 +264,16 @@ describe('ProjectsService — existing CRUD', () => {
     const { service } = createService();
     await expect(
       service.createProject(mockCreatorId, {
-        type: ProjectType.ROI, name: 'X', summary: 'S', story: 'S',
-        country: 'KE', beneficiary: 'P', paymentMethod: 'mpesa',
-        industry: 'technology', targetAmount: 10, currency: 'KES',
+        type: ProjectType.ROI,
+        name: 'X',
+        summary: 'S',
+        story: 'S',
+        country: 'KE',
+        beneficiary: 'P',
+        paymentMethod: 'mpesa',
+        industry: 'technology',
+        targetAmount: 10,
+        currency: 'KES',
       } as any),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
@@ -257,9 +289,16 @@ describe('ProjectsService — existing CRUD', () => {
     );
     await expect(
       service.createProject(mockCreatorId, {
-        type: ProjectType.ROI, name: 'X', summary: 'S', story: 'S',
-        country: 'KE', beneficiary: 'P', paymentMethod: 'mpesa',
-        industry: 'technology', targetAmount: 10, currency: 'KES',
+        type: ProjectType.ROI,
+        name: 'X',
+        summary: 'S',
+        story: 'S',
+        country: 'KE',
+        beneficiary: 'P',
+        paymentMethod: 'mpesa',
+        industry: 'technology',
+        targetAmount: 10,
+        currency: 'KES',
       } as any),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
@@ -272,7 +311,9 @@ describe('ProjectsService — existing CRUD', () => {
       status: ProjectStatus.DRAFT,
     });
     await expect(
-      service.updateProject(mockProjectId, '507f1f77bcf86cd799439014', { summary: 'new' } as any),
+      service.updateProject(mockProjectId, '507f1f77bcf86cd799439014', {
+        summary: 'new',
+      } as any),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
@@ -282,7 +323,9 @@ describe('ProjectsService — existing CRUD', () => {
       status: ProjectStatus.REJECTED,
       projectType: ProjectType.CHARITY,
     });
-    await expect(service.getProjectPublic(mockProjectId)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      service.getProjectPublic(mockProjectId),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });
 
@@ -299,16 +342,26 @@ describe('ProjectsService — ROI approval provisioning', () => {
     const project = roiProjectStub();
     projectsRepo.findById.mockResolvedValue(project);
     usersRepo.findById.mockResolvedValue(creatorWithWallet());
-    viemNftClient.createProjectNFT.mockResolvedValue({ hash: '0xhash', receipt: {} });
-    projectsRepo.updateById.mockResolvedValue({ ...project, status: ProjectStatus.FUNDING });
+    viemNftClient.createProjectNFT.mockResolvedValue({
+      hash: '0xhash',
+      receipt: {},
+    });
+    projectsRepo.updateById.mockResolvedValue({
+      ...project,
+      status: ProjectStatus.FUNDING,
+    });
 
-    await service.decide(mockProjectId, { finalStatus: ProjectStatus.APPROVED } as any);
+    await service.decide(mockProjectId, {
+      finalStatus: ProjectStatus.APPROVED,
+    } as any);
 
     // Verifies PENDING was written before provisioning attempt
     expect(projectsRepo.updateById).toHaveBeenCalledWith(
       mockProjectId,
       expect.objectContaining({
-        $set: expect.objectContaining({ onchainProvisioningStatus: OnchainProvisioningStatus.PENDING }),
+        $set: expect.objectContaining({
+          onchainProvisioningStatus: OnchainProvisioningStatus.PENDING,
+        }),
       }),
     );
 
@@ -318,7 +371,10 @@ describe('ProjectsService — ROI approval provisioning', () => {
     );
 
     // Final status write must include FUNDING
-    const lastCall = projectsRepo.updateById.mock.calls[projectsRepo.updateById.mock.calls.length - 1];
+    const lastCall =
+      projectsRepo.updateById.mock.calls[
+        projectsRepo.updateById.mock.calls.length - 1
+      ];
     expect(lastCall[1].$set).toMatchObject({ status: ProjectStatus.FUNDING });
   });
 
@@ -331,7 +387,9 @@ describe('ProjectsService — ROI approval provisioning', () => {
     projectsRepo.updateById.mockResolvedValue({});
 
     await expect(
-      service.decide(mockProjectId, { finalStatus: ProjectStatus.APPROVED } as any),
+      service.decide(mockProjectId, {
+        finalStatus: ProjectStatus.APPROVED,
+      } as any),
     ).rejects.toBeInstanceOf(BadRequestException);
 
     // FAILED state must have been written
@@ -365,13 +423,17 @@ describe('ProjectsService — ROI approval provisioning', () => {
     usersRepo.findById.mockResolvedValue({ email: 'a@b.com' });
     projectsRepo.updateById.mockResolvedValue({});
 
-    await service.decide(mockProjectId, { finalStatus: ProjectStatus.APPROVED } as any);
+    await service.decide(mockProjectId, {
+      finalStatus: ProjectStatus.APPROVED,
+    } as any);
 
     // createProjectNFT must NOT be called for charity
     expect(viemNftClient.createProjectNFT).not.toHaveBeenCalled();
     expect(projectsRepo.updateById).toHaveBeenCalledWith(
       mockProjectId,
-      expect.objectContaining({ $set: expect.objectContaining({ status: ProjectStatus.APPROVED }) }),
+      expect.objectContaining({
+        $set: expect.objectContaining({ status: ProjectStatus.APPROVED }),
+      }),
     );
   });
 });
@@ -387,7 +449,10 @@ describe('ProjectsService — ensureProjectProvisionedOnChain', () => {
     const { service, projectsRepo, viemNftClient } = createService();
 
     projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({ projectOnchainId: '123456789', onchainProvisioningStatus: OnchainProvisioningStatus.READY }),
+      roiProjectStub({
+        projectOnchainId: '123456789',
+        onchainProvisioningStatus: OnchainProvisioningStatus.READY,
+      }),
     );
     projectsRepo.updateById.mockResolvedValue({});
 
@@ -401,7 +466,11 @@ describe('ProjectsService — ensureProjectProvisionedOnChain', () => {
     const { service, projectsRepo, usersRepo } = createService();
 
     projectsRepo.findById.mockResolvedValue(roiProjectStub());
-    usersRepo.findById.mockResolvedValue({ ...creatorWithWallet(), primaryWallet: undefined, linkedWallets: [] });
+    usersRepo.findById.mockResolvedValue({
+      ...creatorWithWallet(),
+      primaryWallet: undefined,
+      linkedWallets: [],
+    });
 
     await expect(
       service.ensureProjectProvisionedOnChain(mockProjectId),
@@ -434,7 +503,10 @@ describe('ProjectsService — ROI checkout provisioning gate', () => {
     const { service, projectsRepo, configService } = createService();
 
     projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({ status: ProjectStatus.FUNDING, projectOnchainId: undefined }),
+      roiProjectStub({
+        status: ProjectStatus.FUNDING,
+        projectOnchainId: undefined,
+      }),
     );
     configService.get.mockImplementation((key: string) => {
       if (key === 'ROI_REQUIRE_ONCHAIN_PROVISIONING') return 'true';
@@ -471,14 +543,18 @@ describe('ProjectsService — ROI checkout provisioning gate', () => {
     const { service, projectsRepo, configService } = createService();
 
     projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({ status: ProjectStatus.FUNDING, projectOnchainId: undefined }),
+      roiProjectStub({
+        status: ProjectStatus.FUNDING,
+        projectOnchainId: undefined,
+      }),
     );
     configService.get.mockImplementation((key: string) => {
       if (key === 'ROI_REQUIRE_ONCHAIN_PROVISIONING') return 'false';
       return undefined;
     });
 
-    const result = await service.ensureProjectIsOpenForInvestment(mockProjectId);
+    const result =
+      await service.ensureProjectIsOpenForInvestment(mockProjectId);
     expect(result).toBeDefined();
   });
 
@@ -486,14 +562,18 @@ describe('ProjectsService — ROI checkout provisioning gate', () => {
     const { service, projectsRepo, configService } = createService();
 
     projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({ status: ProjectStatus.FUNDING, projectOnchainId: '987654321' }),
+      roiProjectStub({
+        status: ProjectStatus.FUNDING,
+        projectOnchainId: '987654321',
+      }),
     );
     configService.get.mockImplementation((key: string) => {
       if (key === 'ROI_REQUIRE_ONCHAIN_PROVISIONING') return 'true';
       return undefined;
     });
 
-    const result = await service.ensureProjectIsOpenForInvestment(mockProjectId);
+    const result =
+      await service.ensureProjectIsOpenForInvestment(mockProjectId);
     expect(result).toBeDefined();
   });
 
@@ -501,7 +581,10 @@ describe('ProjectsService — ROI checkout provisioning gate', () => {
     const { service, projectsRepo, configService } = createService();
 
     projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({ status: ProjectStatus.APPROVED, projectOnchainId: undefined }),
+      roiProjectStub({
+        status: ProjectStatus.APPROVED,
+        projectOnchainId: undefined,
+      }),
     );
     configService.get.mockImplementation((key: string) => {
       if (key === 'ROI_REQUIRE_ONCHAIN_PROVISIONING') return 'true';
@@ -517,14 +600,18 @@ describe('ProjectsService — ROI checkout provisioning gate', () => {
     const { service, projectsRepo, configService } = createService();
 
     projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({ status: ProjectStatus.APPROVED, projectOnchainId: undefined }),
+      roiProjectStub({
+        status: ProjectStatus.APPROVED,
+        projectOnchainId: undefined,
+      }),
     );
     configService.get.mockImplementation((key: string) => {
       if (key === 'ROI_REQUIRE_ONCHAIN_PROVISIONING') return 'false';
       return undefined;
     });
 
-    const result = await service.ensureProjectIsOpenForInvestment(mockProjectId);
+    const result =
+      await service.ensureProjectIsOpenForInvestment(mockProjectId);
     expect(result).toBeDefined();
   });
 });
@@ -539,9 +626,14 @@ describe('ProjectsService — repairRoiProjectProvisioning', () => {
   it('repairs a legacy APPROVED ROI project: provisions + promotes to FUNDING', async () => {
     const { service, projectsRepo, usersRepo, viemNftClient } = createService();
 
-    projectsRepo.findById.mockResolvedValue(roiProjectStub({ status: ProjectStatus.APPROVED }));
+    projectsRepo.findById.mockResolvedValue(
+      roiProjectStub({ status: ProjectStatus.APPROVED }),
+    );
     usersRepo.findById.mockResolvedValue(creatorWithWallet());
-    viemNftClient.createProjectNFT.mockResolvedValue({ hash: '0xhash', receipt: {} });
+    viemNftClient.createProjectNFT.mockResolvedValue({
+      hash: '0xhash',
+      receipt: {},
+    });
     projectsRepo.updateById.mockResolvedValue({});
 
     const result = await service.repairRoiProjectProvisioning(mockProjectId);
@@ -562,7 +654,10 @@ describe('ProjectsService — repairRoiProjectProvisioning', () => {
     const { service, projectsRepo, viemNftClient } = createService();
 
     projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({ projectOnchainId: '99887766', onchainProvisioningStatus: OnchainProvisioningStatus.READY }),
+      roiProjectStub({
+        projectOnchainId: '99887766',
+        onchainProvisioningStatus: OnchainProvisioningStatus.READY,
+      }),
     );
     projectsRepo.updateById.mockResolvedValue({});
 
@@ -577,7 +672,9 @@ describe('ProjectsService — repairRoiProjectProvisioning', () => {
 
     projectsRepo.findById.mockResolvedValue(roiProjectStub());
     usersRepo.findById.mockResolvedValue(creatorWithWallet());
-    viemNftClient.createProjectNFT.mockRejectedValue(new Error('Nonce too low'));
+    viemNftClient.createProjectNFT.mockRejectedValue(
+      new Error('Nonce too low'),
+    );
     projectsRepo.updateById.mockResolvedValue({});
 
     const result = await service.repairRoiProjectProvisioning(mockProjectId);
@@ -620,16 +717,24 @@ describe('ProjectsService — backfillRoiProvisioning', () => {
     });
 
     // query returns both candidates (repo query is called once for batch scan)
-    projectsRepo.query.mockResolvedValue([alreadyProvisioned, needsProvisioning]);
+    projectsRepo.query.mockResolvedValue([
+      alreadyProvisioned,
+      needsProvisioning,
+    ]);
 
     // For the repair of the unprovisioned project:
     projectsRepo.findById.mockImplementation((id: string) => {
-      if (id === '507f1f77bcf86cd799439020') return Promise.resolve(alreadyProvisioned);
-      if (id === '507f1f77bcf86cd799439021') return Promise.resolve(needsProvisioning);
+      if (id === '507f1f77bcf86cd799439020')
+        return Promise.resolve(alreadyProvisioned);
+      if (id === '507f1f77bcf86cd799439021')
+        return Promise.resolve(needsProvisioning);
       return Promise.resolve(null);
     });
     usersRepo.findById.mockResolvedValue(creatorWithWallet());
-    viemNftClient.createProjectNFT.mockResolvedValue({ hash: '0xhash', receipt: {} });
+    viemNftClient.createProjectNFT.mockResolvedValue({
+      hash: '0xhash',
+      receipt: {},
+    });
     projectsRepo.updateById.mockResolvedValue({});
 
     const report = await service.backfillRoiProvisioning();
@@ -653,7 +758,9 @@ describe('ProjectsService — backfillRoiProvisioning', () => {
     projectsRepo.query.mockResolvedValue([failingProject]);
     projectsRepo.findById.mockResolvedValue(failingProject);
     usersRepo.findById.mockResolvedValue(creatorWithWallet());
-    viemNftClient.createProjectNFT.mockRejectedValue(new Error('Contract reverted'));
+    viemNftClient.createProjectNFT.mockRejectedValue(
+      new Error('Contract reverted'),
+    );
     projectsRepo.updateById.mockResolvedValue({});
 
     const report = await service.backfillRoiProvisioning();
