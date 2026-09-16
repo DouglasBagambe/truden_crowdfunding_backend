@@ -412,7 +412,7 @@ describe('ProjectsService — ROI approval provisioning', () => {
     await expect(
       service.decide(mockProjectId, {
         finalStatus: ProjectStatus.APPROVED,
-      } as any),
+      } as unknown as ProjectDecisionDto),
     ).rejects.toBeInstanceOf(BadRequestException);
 
     // FAILED state must have been written
@@ -450,7 +450,7 @@ describe('ProjectsService — ROI approval provisioning', () => {
 
     await service.decide(mockProjectId, {
       finalStatus: ProjectStatus.APPROVED,
-    } as any);
+    } as unknown as ProjectDecisionDto);
 
     // createProjectNFT must NOT be called for charity
     expect(viemNftClient.createProjectNFT).not.toHaveBeenCalled();
