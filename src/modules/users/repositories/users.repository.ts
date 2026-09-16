@@ -118,6 +118,12 @@ export class UsersRepository {
       .exec();
   }
 
+  addRole(userId: string, role: UserRole): Promise<UserDocument | null> {
+    return this.userModel
+      .findByIdAndUpdate(userId, { $addToSet: { roles: role } }, { new: true })
+      .exec();
+  }
+
   updateKycStatus(
     userId: string,
     kycStatus: KYCStatus,

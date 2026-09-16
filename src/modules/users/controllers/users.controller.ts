@@ -46,6 +46,11 @@ export class UsersController {
     return this.usersService.getUserById(userId);
   }
 
+  @Post('me/creator-enrollment')
+  enrollAsCharityCreator(@CurrentUser('sub') userId: string) {
+    return this.usersService.enrollAsCharityCreator(userId);
+  }
+
   @Get()
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.MANAGE_USERS)

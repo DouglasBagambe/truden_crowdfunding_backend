@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   BadRequestException,
@@ -556,6 +557,31 @@ export class UsersService {
       metadata: { role: dto.role },
     });
     return this.sanitizeUser(user);
+  }
+
+  async enrollAsCharityCreator(userId: string) {
+    const current = await this.usersRepository.findById(userId);
+    if (!current) throw new NotFoundException('User not found');
+    if (current.isBlocked === true || current.isActive === false) {
+      throw new ForbiddenException('Your account is not active');
+    }
+    if (!current.emailVerifiedAt) {
+      throw new ForbiddenException(
+        'Verify your email before becoming a Charity Creator',
+      );
+    }
+
+    const user = await this.usersRepository.addRole(userId, UserRole.INNOVATOR);
+    if (!user) throw new NotFoundException('User not found');
+    await this.auditService.log({
+      action: 'creator.charity.enrolled',
+      actorId: userId,
+      actorRoles: current.roles ?? [],
+      targetType: 'user',
+      targetId: String(user.id),
+      metadata: { role: UserRole.INNOVATOR },
+    });
+    return this.getUserById(userId);
   }
 
   async updateKycStatus(
