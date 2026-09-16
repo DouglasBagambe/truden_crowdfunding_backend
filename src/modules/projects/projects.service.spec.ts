@@ -6,6 +6,9 @@ import {
 import { ProjectsService } from './projects.service';
 import { ProjectStatus } from '../../common/enums/project-status.enum';
 import { ProjectType } from '../../common/enums/project-type.enum';
+import { CreateProjectDto } from './dto/create-project.dto';
+import { UpdateProjectDto } from './dto/update-project.dto';
+import { ProjectDecisionDto } from './dto/decision.dto';
 import { MilestoneStatus } from '../../common/enums/milestone-status.enum';
 import { KYCStatus } from '../../common/enums/role.enum';
 import { CreatorVerificationStatus } from '../../common/enums/creator-verification-status.enum';
@@ -14,7 +17,12 @@ import { OnchainProvisioningStatus } from './schemas/project.schema';
 const mockProjectId = '507f1f77bcf86cd799439011';
 const mockCreatorId = '507f1f77bcf86cd799439012';
 
-type ProjectsServiceDependencies = ConstructorParameters<typeof ProjectsService>;
+type ProjectsServiceDependencies = ConstructorParameters<
+  typeof ProjectsService
+>;
+type ProjectWithMilestones = Awaited<
+  ReturnType<ProjectsService['getProjectWithMilestones']>
+>;
 type ProjectUpdate = {
   $set?: {
     status?: ProjectStatus;
@@ -23,8 +31,9 @@ type ProjectUpdate = {
   };
 };
 
-const getProjectUpdateCalls = (calls: unknown): Array<[string, ProjectUpdate]> =>
-  calls as Array<[string, ProjectUpdate]>;
+const getProjectUpdateCalls = (
+  calls: unknown,
+): Array<[string, ProjectUpdate]> => calls as Array<[string, ProjectUpdate]>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test factory
@@ -177,9 +186,12 @@ describe('ProjectsService — existing CRUD', () => {
     const result = { project: { id: mockProjectId }, milestones: [] };
     jest
       .spyOn(service, 'getProjectWithMilestones')
-      .mockResolvedValue(result as any);
+      .mockResolvedValue(result as unknown as ProjectWithMilestones);
 
-    const response = await service.createProject(mockCreatorId, dto as any);
+    const response = await service.createProject(
+      mockCreatorId,
+      dto as unknown as CreateProjectDto,
+    );
 
     expect(projectsRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -216,9 +228,12 @@ describe('ProjectsService — existing CRUD', () => {
     const result = { project: { id: mockProjectId }, milestones: [] };
     jest
       .spyOn(service, 'getProjectWithMilestones')
-      .mockResolvedValue(result as any);
+      .mockResolvedValue(result as unknown as ProjectWithMilestones);
 
-    await service.createProject(mockCreatorId, dto as any);
+    await service.createProject(
+      mockCreatorId,
+      dto as unknown as CreateProjectDto,
+    );
 
     expect(projectsRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -250,7 +265,7 @@ describe('ProjectsService — existing CRUD', () => {
         paymentMethod: 'mpesa',
         targetAmount: 10,
         currency: 'KES',
-      } as any),
+      } as unknown as CreateProjectDto),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -267,7 +282,7 @@ describe('ProjectsService — existing CRUD', () => {
         paymentMethod: 'mpesa',
         targetAmount: 10,
         currency: 'KES',
-      } as any),
+      } as unknown as CreateProjectDto),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -285,7 +300,7 @@ describe('ProjectsService — existing CRUD', () => {
         industry: 'technology',
         targetAmount: 10,
         currency: 'KES',
-      } as any),
+      } as unknown as CreateProjectDto),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
@@ -310,7 +325,7 @@ describe('ProjectsService — existing CRUD', () => {
         industry: 'technology',
         targetAmount: 10,
         currency: 'KES',
-      } as any),
+      } as unknown as CreateProjectDto),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
@@ -324,7 +339,7 @@ describe('ProjectsService — existing CRUD', () => {
     await expect(
       service.updateProject(mockProjectId, '507f1f77bcf86cd799439014', {
         summary: 'new',
-      } as any),
+      } as unknown as UpdateProjectDto),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
@@ -364,7 +379,7 @@ describe('ProjectsService — ROI approval provisioning', () => {
 
     await service.decide(mockProjectId, {
       finalStatus: ProjectStatus.APPROVED,
-    } as any);
+    } as unknown as ProjectDecisionDto);
 
     // Verifies PENDING was written before provisioning attempt
     expect(
@@ -656,8 +671,7 @@ describe('ProjectsService — repairRoiProjectProvisioning', () => {
     expect(
       getProjectUpdateCalls(projectsRepo.updateById.mock.calls).some(
         ([id, update]) =>
-          id === mockProjectId &&
-          update.$set?.status === ProjectStatus.FUNDING,
+          id === mockProjectId && update.$set?.status === ProjectStatus.FUNDING,
       ),
     ).toBe(true);
   });
@@ -694,15 +708,15 @@ describe('ProjectsService — repairRoiProjectProvisioning', () => {
     expect(result.result).toBe('FAILED');
     expect(result.error).toContain('Nonce too low');
 
-    expect(projectsRepo.updateById).toHaveBeenCalledWith(
-      mockProjectId,
-      expect.objectContaining({
-        $set: expect.objectContaining({
-          onchainProvisioningStatus: OnchainProvisioningStatus.FAILED,
-          onchainProvisioningError: expect.stringContaining('Nonce too low'),
-        }),
-      }),
-    );
+    expect(
+      getProjectUpdateCalls(projectsRepo.updateById.mock.calls).some(
+        ([id, update]) =>
+          id === mockProjectId &&
+          update.$set?.onchainProvisioningStatus ===
+            OnchainProvisioningStatus.FAILED &&
+          update.$set.onchainProvisioningError?.includes('Nonce too low'),
+      ),
+    ).toBe(true);
   });
 });
 
