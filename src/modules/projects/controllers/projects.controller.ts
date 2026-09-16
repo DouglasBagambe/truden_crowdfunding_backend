@@ -19,7 +19,6 @@ import { CreateProjectDto } from '../dto/create-project.dto';
 import { UpdateProjectDto } from '../dto/update-project.dto';
 import { QueryProjectsDto } from '../dto/query-projects.dto';
 import { UploadAttachmentDto } from '../dto/upload-attachment.dto';
-import { CreateCharityDonationDto } from '../dto/create-charity-donation.dto';
 import { ProjectsService } from '../projects.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { EmailVerifiedGuard } from '../../../common/guards/email-verified.guard';

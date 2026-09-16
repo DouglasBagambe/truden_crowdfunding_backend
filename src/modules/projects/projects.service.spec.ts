@@ -7,13 +7,24 @@ import { ProjectsService } from './projects.service';
 import { ProjectStatus } from '../../common/enums/project-status.enum';
 import { ProjectType } from '../../common/enums/project-type.enum';
 import { MilestoneStatus } from '../../common/enums/milestone-status.enum';
-import { CreateVerificationLogDto } from './dto/create-verification-log.dto';
 import { KYCStatus } from '../../common/enums/role.enum';
 import { CreatorVerificationStatus } from '../../common/enums/creator-verification-status.enum';
 import { OnchainProvisioningStatus } from './schemas/project.schema';
 
 const mockProjectId = '507f1f77bcf86cd799439011';
 const mockCreatorId = '507f1f77bcf86cd799439012';
+
+type ProjectsServiceDependencies = ConstructorParameters<typeof ProjectsService>;
+type ProjectUpdate = {
+  $set?: {
+    status?: ProjectStatus;
+    onchainProvisioningStatus?: OnchainProvisioningStatus;
+    onchainProvisioningError?: string;
+  };
+};
+
+const getProjectUpdateCalls = (calls: unknown): Array<[string, ProjectUpdate]> =>
+  calls as Array<[string, ProjectUpdate]>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test factory
@@ -69,16 +80,16 @@ const createService = () => {
   };
 
   const service = new ProjectsService(
-    projectsRepo as any,
-    milestonesRepo as any,
-    charityDonationsRepo as any,
-    usersRepo as any,
-    configService as any,
-    agreementTemplatesService as any,
-    attachmentRequirementsService as any,
-    attachmentFilesRepo as any,
-    viemNftClient as any,
-    investmentModel as any,
+    projectsRepo as unknown as ProjectsServiceDependencies[0],
+    milestonesRepo as unknown as ProjectsServiceDependencies[1],
+    charityDonationsRepo as unknown as ProjectsServiceDependencies[2],
+    usersRepo as unknown as ProjectsServiceDependencies[3],
+    configService as unknown as ProjectsServiceDependencies[4],
+    agreementTemplatesService as unknown as ProjectsServiceDependencies[5],
+    attachmentRequirementsService as unknown as ProjectsServiceDependencies[6],
+    attachmentFilesRepo as unknown as ProjectsServiceDependencies[7],
+    viemNftClient as unknown as ProjectsServiceDependencies[8],
+    investmentModel as unknown as ProjectsServiceDependencies[9],
   );
 
   return {
@@ -356,14 +367,14 @@ describe('ProjectsService — ROI approval provisioning', () => {
     } as any);
 
     // Verifies PENDING was written before provisioning attempt
-    expect(projectsRepo.updateById).toHaveBeenCalledWith(
-      mockProjectId,
-      expect.objectContaining({
-        $set: expect.objectContaining({
-          onchainProvisioningStatus: OnchainProvisioningStatus.PENDING,
-        }),
-      }),
-    );
+    expect(
+      getProjectUpdateCalls(projectsRepo.updateById.mock.calls).some(
+        ([id, update]) =>
+          id === mockProjectId &&
+          update.$set?.onchainProvisioningStatus ===
+            OnchainProvisioningStatus.PENDING,
+      ),
+    ).toBe(true);
 
     // Verifies createProjectNFT was called
     expect(viemNftClient.createProjectNFT).toHaveBeenCalledWith(
@@ -371,11 +382,8 @@ describe('ProjectsService — ROI approval provisioning', () => {
     );
 
     // Final status write must include FUNDING
-    const lastCall =
-      projectsRepo.updateById.mock.calls[
-        projectsRepo.updateById.mock.calls.length - 1
-      ];
-    expect(lastCall[1].$set).toMatchObject({ status: ProjectStatus.FUNDING });
+    const updates = getProjectUpdateCalls(projectsRepo.updateById.mock.calls);
+    expect(updates.at(-1)?.[1].$set?.status).toBe(ProjectStatus.FUNDING);
   });
 
   it('ROI approval failure: persists FAILED state, does NOT set FUNDING, re-throws', async () => {
@@ -393,19 +401,21 @@ describe('ProjectsService — ROI approval provisioning', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     // FAILED state must have been written
-    expect(projectsRepo.updateById).toHaveBeenCalledWith(
-      mockProjectId,
-      expect.objectContaining({
-        $set: expect.objectContaining({
-          onchainProvisioningStatus: OnchainProvisioningStatus.FAILED,
-          onchainProvisioningError: expect.stringContaining('RPC timeout'),
-        }),
-      }),
-    );
+    expect(
+      getProjectUpdateCalls(projectsRepo.updateById.mock.calls).some(
+        ([id, update]) =>
+          id === mockProjectId &&
+          update.$set?.onchainProvisioningStatus ===
+            OnchainProvisioningStatus.FAILED &&
+          update.$set.onchainProvisioningError?.includes('RPC timeout'),
+      ),
+    ).toBe(true);
 
     // FUNDING must NOT have been set
-    for (const call of projectsRepo.updateById.mock.calls) {
-      expect(call[1]?.$set?.status).not.toBe(ProjectStatus.FUNDING);
+    for (const [, update] of getProjectUpdateCalls(
+      projectsRepo.updateById.mock.calls,
+    )) {
+      expect(update.$set?.status).not.toBe(ProjectStatus.FUNDING);
     }
   });
 
@@ -429,12 +439,13 @@ describe('ProjectsService — ROI approval provisioning', () => {
 
     // createProjectNFT must NOT be called for charity
     expect(viemNftClient.createProjectNFT).not.toHaveBeenCalled();
-    expect(projectsRepo.updateById).toHaveBeenCalledWith(
-      mockProjectId,
-      expect.objectContaining({
-        $set: expect.objectContaining({ status: ProjectStatus.APPROVED }),
-      }),
-    );
+    expect(
+      getProjectUpdateCalls(projectsRepo.updateById.mock.calls).some(
+        ([id, update]) =>
+          id === mockProjectId &&
+          update.$set?.status === ProjectStatus.APPROVED,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -642,12 +653,13 @@ describe('ProjectsService — repairRoiProjectProvisioning', () => {
     expect(result.projectOnchainId).toBeDefined();
 
     // The project was APPROVED so it should have been promoted to FUNDING
-    expect(projectsRepo.updateById).toHaveBeenCalledWith(
-      mockProjectId,
-      expect.objectContaining({
-        $set: expect.objectContaining({ status: ProjectStatus.FUNDING }),
-      }),
-    );
+    expect(
+      getProjectUpdateCalls(projectsRepo.updateById.mock.calls).some(
+        ([id, update]) =>
+          id === mockProjectId &&
+          update.$set?.status === ProjectStatus.FUNDING,
+      ),
+    ).toBe(true);
   });
 
   it('returns ALREADY_PROVISIONED without calling contract when id already set', async () => {
