@@ -2,16 +2,18 @@ import { ConfigService } from '@nestjs/config';
 import { ServiceUnavailableException } from '@nestjs/common';
 import { RateLimitService } from './rate-limit.service';
 
-const configFor = (environment: string) =>
+const configFor = (environment: string, values: Record<string, string> = {}) =>
   ({
     get: jest.fn((name: string) =>
-      name === 'NODE_ENV' ? environment : undefined,
+      name === 'NODE_ENV' ? environment : values[name],
     ),
   }) as unknown as ConfigService;
 
 describe('RateLimitService', () => {
   it('allows requests up to the in-memory development limit and then locks out', async () => {
-    const service = new RateLimitService(configFor('test'));
+    const service = new RateLimitService(
+      configFor('test', { RATE_LIMIT_STORE: 'memory' }),
+    );
     expect(
       (await service.consume('login', 'identity', 2, 60_000)).allowed,
     ).toBe(true);

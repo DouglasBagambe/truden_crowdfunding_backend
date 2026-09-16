@@ -19,8 +19,7 @@ export class RateLimitService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     const redisUrl = this.configService.get<string>('REDIS_URL')?.trim();
-const requireRedis =
-  this.configService.get<string>('RATE_LIMIT_STORE') === 'redis';
+    const requireRedis = this.requiresDistributedStore();
 
     if (!requireRedis) return;
     if (!redisUrl) {
@@ -61,6 +60,12 @@ const requireRedis =
       }
     }
 
+    if (this.requiresDistributedStore()) {
+      throw new ServiceUnavailableException(
+        'Request protection infrastructure is unavailable',
+      );
+    }
+
     const now = Date.now();
     const current = this.memory.get(redisKey);
     if (!current || current.expiresAt <= now) {
@@ -79,5 +84,17 @@ const requireRedis =
 
   async onModuleDestroy(): Promise<void> {
     if (this.client?.isOpen) await this.client.quit();
+  }
+
+  private requiresDistributedStore(): boolean {
+    const configuredStore = this.configService
+      .get<string>('RATE_LIMIT_STORE')
+      ?.trim()
+      .toLowerCase();
+
+    if (configuredStore === 'redis') return true;
+    if (configuredStore === 'memory') return false;
+
+    return this.configService.get<string>('NODE_ENV') === 'production';
   }
 }
