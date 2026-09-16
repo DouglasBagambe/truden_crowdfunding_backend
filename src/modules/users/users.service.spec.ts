@@ -3,6 +3,8 @@ import { UserRole, KYCStatus } from '../../common/enums/role.enum';
 import { CreatorVerificationStatus } from '../../common/enums/creator-verification-status.enum';
 import { UsersService } from './users.service';
 
+type UsersServiceDependencies = ConstructorParameters<typeof UsersService>;
+
 describe('UsersService canonical profile capabilities', () => {
   const userId = '507f1f77bcf86cd799439012';
   const repository = { findById: jest.fn() };
@@ -14,14 +16,13 @@ describe('UsersService canonical profile capabilities', () => {
 
   const createService = () =>
     new UsersService(
-      {} as any,
-      repository as any,
-      { emit: jest.fn() } as any,
-      {} as any,
-      config,
-      { log: jest.fn() } as any,
-      {} as any,
-      {} as any,
+      {} as UsersServiceDependencies[0],
+      repository as unknown as UsersServiceDependencies[1],
+      { emit: jest.fn() } as unknown as UsersServiceDependencies[2],
+      {} as UsersServiceDependencies[3],
+      config as unknown as UsersServiceDependencies[4],
+      { log: jest.fn() } as unknown as UsersServiceDependencies[5],
+      {} as UsersServiceDependencies[6],
     );
 
   beforeEach(() => jest.clearAllMocks());
