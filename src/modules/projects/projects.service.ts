@@ -25,7 +25,10 @@ import { ProjectsRepository } from './repositories/projects.repository';
 import { MilestonesRepository } from './repositories/milestones.repository';
 import { CharityDonationsRepository } from './repositories/charity-donations.repository';
 import type { ProjectDocument } from './schemas/project.schema';
-import { ProjectStatus } from '../../common/enums/project-status.enum';
+import {
+  isContributionEligibleProjectStatus,
+  ProjectStatus,
+} from '../../common/enums/project-status.enum';
 import { MilestoneStatus } from '../../common/enums/milestone-status.enum';
 import { ProjectType } from '../../common/enums/project-type.enum';
 import { AgreementRuleDto } from './dto/agreement-rule.dto';
@@ -892,11 +895,10 @@ export class ProjectsService {
       );
     }
 
-    const isPublic = PUBLIC_STATUSES.some(
-      (status) => status === project.status,
-    );
-    if (!isPublic) {
-      throw new BadRequestException('Project is not available for donations');
+    if (!isContributionEligibleProjectStatus(project.status)) {
+      throw new BadRequestException(
+        'Project is not approved to receive contributions',
+      );
     }
 
     return project;

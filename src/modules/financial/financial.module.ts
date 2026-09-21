@@ -13,9 +13,11 @@ import { FinancialProjectionService } from './projections/financial-projection.s
 import { FinancialOutboxService } from './financial-outbox.service';
 import { FinancialProjectionWorker } from './projections/financial-projection.worker';
 import { FinancialWorkersService } from './financial-workers.service';
+import { ProjectsModule } from '../projects/projects.module';
 
 @Module({
   imports: [
+    ProjectsModule,
     MongooseModule.forFeature([
       { name: FinancialProjection.name, schema: FinancialProjectionSchema },
     ]),

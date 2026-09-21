@@ -8,6 +8,7 @@ import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
 import { FinancialDatabase } from './financial.database';
 import { FINANCIAL_SCHEMA_SQL } from './financial.schema';
+import { ProjectsService } from '../projects/projects.service';
 import type {
   LedgerLine,
   PaymentIntentInput,
@@ -55,7 +56,10 @@ function assertCurrency(currency: string): string {
 export class FinancialService {
   private readonly logger = new Logger(FinancialService.name);
 
-  constructor(private readonly database: FinancialDatabase) {}
+  constructor(
+    private readonly database: FinancialDatabase,
+    private readonly projectsService: ProjectsService,
+  ) {}
 
   async initializeSchema(): Promise<void> {
     await this.database.query(FINANCIAL_SCHEMA_SQL);
@@ -64,6 +68,7 @@ export class FinancialService {
   async createPaymentIntent(input: PaymentIntentInput) {
     const currency = assertCurrency(input.currency);
     const amountMinor = asMinor(input.amountMinor);
+    await this.projectsService.ensureProjectCanReceiveDonation(input.projectId);
     if (!input.idempotencyKey || input.idempotencyKey.length > 200) {
       throw new BadRequestException('A valid Idempotency-Key is required');
     }
@@ -409,6 +414,9 @@ export class FinancialService {
       if (payment.state === 'settled') return;
       if (payment.state !== 'captured')
         throw new Error(`Cannot settle payment from ${payment.state}`);
+      await this.projectsService.ensureProjectCanReceiveDonation(
+        payment.project_id,
+      );
       const journal = await this.postJournalInTransaction(client, {
         idempotencyKey: `settlement:${event.provider}:${event.providerEventId}`,
         correlationId: randomUUID(),
@@ -505,6 +513,9 @@ export class FinancialService {
       throw new Error(`Cannot capture payment from ${payment.state}`);
     if (payment.provider_fee_minor && providerFee !== evidenceProviderFee)
       throw new Error('Provider fee evidence changed for payment intent');
+    await this.projectsService.ensureProjectCanReceiveDonation(
+      payment.project_id,
+    );
     const escrowAccount = `liability:campaign_escrow:${payment.project_id}:${payment.currency}`;
     await this.lockLedgerAccount(client, escrowAccount);
     const captureLines: LedgerLine[] = [

@@ -4,6 +4,7 @@ import { createClient } from 'redis';
 import { FinancialDatabase } from '../src/modules/financial/financial.database';
 import { FinancialService } from '../src/modules/financial/financial.service';
 import { FinancialOutboxService } from '../src/modules/financial/financial-outbox.service';
+import type { ProjectsService } from '../src/modules/projects/projects.service';
 
 describe('financial PostgreSQL integration', () => {
   const databaseUrl = process.env.FINANCIAL_DATABASE_URL;
@@ -22,7 +23,10 @@ describe('financial PostgreSQL integration', () => {
       )[key] as T | undefined,
   } as ConfigService;
   const database = new FinancialDatabase(config);
-  const financial = new FinancialService(database);
+  const projectsService = {
+    ensureProjectCanReceiveDonation: jest.fn().mockResolvedValue(undefined),
+  } as unknown as ProjectsService;
+  const financial = new FinancialService(database, projectsService);
   const outbox = new FinancialOutboxService(database, config);
   const redis = createClient({ url: redisUrl });
 

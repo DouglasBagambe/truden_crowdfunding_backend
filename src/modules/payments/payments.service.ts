@@ -35,6 +35,7 @@ import { DpoService } from './dpo.service';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { ProjectsService } from '../projects/projects.service';
+import { isContributionEligibleProjectStatus } from '../../common/enums/project-status.enum';
 import { Project, ProjectDocument } from '../projects/schemas/project.schema';
 import {
   CharityDonation,
@@ -667,6 +668,11 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
    * Initialize a payment for investment
    */
   async initializePayment(dto: InitializePaymentDto, userId: string) {
+    const { projectType } = await this.resolveCheckoutProject(dto.projectId);
+    if (projectType === 'CHARITY') {
+      await this.projectsService.ensureProjectCanReceiveDonation(dto.projectId);
+    }
+
     // Generate unique transaction reference
     const txRef = `INV-${Date.now()}-${randomUUID()}`;
 
@@ -948,6 +954,11 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         if (projectType !== 'CHARITY') {
           throw new BadRequestException(
             'Only charity payments can use charity settlement',
+          );
+        }
+        if (!isContributionEligibleProjectStatus(project.status)) {
+          throw new BadRequestException(
+            'Project is not approved to receive contributions',
           );
         }
 

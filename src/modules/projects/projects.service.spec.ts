@@ -642,6 +642,35 @@ describe('ProjectsService — ROI checkout provisioning gate', () => {
   });
 });
 
+describe('ProjectsService — contribution eligibility', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('denies pending-review charity projects before contributions are accepted', async () => {
+    const { service, projectsRepo } = createService();
+    projectsRepo.findById.mockResolvedValue({
+      projectType: ProjectType.CHARITY,
+      status: ProjectStatus.PENDING_REVIEW,
+    });
+
+    await expect(
+      service.ensureProjectCanReceiveDonation(mockProjectId),
+    ).rejects.toThrow('not approved to receive contributions');
+  });
+
+  it('allows approved charity projects to receive contributions', async () => {
+    const { service, projectsRepo } = createService();
+    const project = {
+      projectType: ProjectType.CHARITY,
+      status: ProjectStatus.APPROVED,
+    };
+    projectsRepo.findById.mockResolvedValue(project);
+
+    await expect(
+      service.ensureProjectCanReceiveDonation(mockProjectId),
+    ).resolves.toBe(project);
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Suite: repairRoiProjectProvisioning (single repair)
 // ─────────────────────────────────────────────────────────────────────────────
