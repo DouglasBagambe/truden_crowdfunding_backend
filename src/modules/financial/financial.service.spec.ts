@@ -43,13 +43,16 @@ describe('FinancialService contribution eligibility', () => {
   it('creates an intent only after an eligible campaign is confirmed', async () => {
     const { service, database, projectsService } = createService();
     projectsService.ensureProjectCanReceiveDonation.mockResolvedValue({});
-    database.transaction.mockImplementation(async (callback) =>
-      callback({
-        query: jest.fn().mockResolvedValue({
-          rowCount: 0,
-          rows: [{ id: 'intent-1', state: 'pending' }],
+    database.transaction.mockImplementation(
+      (
+        callback: (client: { query: jest.Mock }) => Promise<unknown>,
+      ): Promise<unknown> =>
+        callback({
+          query: jest.fn().mockResolvedValue({
+            rowCount: 0,
+            rows: [{ id: 'intent-1', state: 'pending' }],
+          }),
         }),
-      }),
     );
 
     await expect(

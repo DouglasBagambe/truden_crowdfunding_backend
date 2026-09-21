@@ -7,7 +7,7 @@ async function migrateFinancialSchema(): Promise<void> {
   const config = new ConfigService();
   const database = new FinancialDatabase(config);
   const projectsService = {
-    ensureProjectCanReceiveDonation: async () => undefined,
+    ensureProjectCanReceiveDonation: () => Promise.resolve(undefined),
   } as unknown as ProjectsService;
   const financial = new FinancialService(database, projectsService);
 
