@@ -73,4 +73,12 @@ describe('validateEnvironment', () => {
       }),
     ).toThrow('PLATFORM_SIGNER_PROVIDER');
   });
+
+  it('requires the financial ledger database even when workers are disabled', () => {
+    expect(() => {
+      const env = productionEnvironment();
+      delete env.FINANCIAL_DATABASE_URL;
+      validateEnvironment(env);
+    }).toThrow('FINANCIAL_DATABASE_URL is required');
+  });
 });

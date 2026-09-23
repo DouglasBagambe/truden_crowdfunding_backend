@@ -78,11 +78,13 @@ export function validateEnvironment(
   secureSecret(env, 'CSRF_SECRET');
   required(env, 'JWT_ISSUER');
   required(env, 'JWT_AUDIENCE');
+  // Public payment-intent and checkout paths persist to the financial ledger
+  // even when the separate background worker is intentionally disabled.
+  required(env, 'FINANCIAL_DATABASE_URL');
   if (
     stringValue(env.FINANCIAL_WORKERS_ENABLED).trim().toLowerCase() === 'true'
   ) {
     required(env, 'REDIS_URL');
-    required(env, 'FINANCIAL_DATABASE_URL');
   }
 
   const frontendUrl = required(env, 'FRONTEND_URL');
