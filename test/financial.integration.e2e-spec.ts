@@ -31,7 +31,11 @@ describe('financial PostgreSQL integration', () => {
       payoutPercentage: 50,
     }),
   } as unknown as ProjectsService;
-  const financial = new FinancialService(database, projectsService);
+  const financial = new FinancialService(
+    database,
+    projectsService,
+    undefined as never,
+  );
   const outbox = new FinancialOutboxService(database, config);
   const redis = createClient({ url: redisUrl });
 

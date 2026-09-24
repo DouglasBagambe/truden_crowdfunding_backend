@@ -9,7 +9,11 @@ async function migrateFinancialSchema(): Promise<void> {
   const projectsService = {
     ensureProjectCanReceiveDonation: () => Promise.resolve(undefined),
   } as unknown as ProjectsService;
-  const financial = new FinancialService(database, projectsService);
+  const financial = new FinancialService(
+    database,
+    projectsService,
+    undefined as never,
+  );
 
   try {
     await financial.initializeSchema();

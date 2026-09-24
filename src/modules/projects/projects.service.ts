@@ -559,6 +559,21 @@ export class ProjectsService {
     };
   }
 
+  async assertProjectOnchainId(
+    projectId: string,
+    expectedOnchainId: string,
+  ): Promise<void> {
+    const project = await this.projectsRepo.findById(projectId);
+    if (
+      !project ||
+      String(project.projectOnchainId || '') !== expectedOnchainId
+    ) {
+      throw new ConflictException(
+        'Project does not match the supplied KEIBO campaign',
+      );
+    }
+  }
+
   async getMilestonesPublic(projectId: string) {
     this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);

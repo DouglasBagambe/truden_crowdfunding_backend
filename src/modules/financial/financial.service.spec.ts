@@ -10,14 +10,24 @@ describe('FinancialService contribution eligibility', () => {
     const projectsService = {
       ensureProjectCanReceiveDonation: jest.fn(),
       getCharityMilestoneReleaseEligibility: jest.fn(),
+      assertProjectOnchainId: jest.fn(),
+    };
+    const escrowWeb3 = {
+      getRuntimeConfig: jest.fn().mockReturnValue({
+        chainId: 11155111,
+        escrow: '0x0000000000000000000000000000000000000001',
+      }),
+      verifyDepositTx: jest.fn(),
     };
     return {
       service: new FinancialService(
         database as never,
         projectsService as never,
+        escrowWeb3 as never,
       ),
       database,
       projectsService,
+      escrowWeb3,
     };
   };
 
@@ -219,5 +229,55 @@ describe('FinancialService contribution eligibility', () => {
       }),
     ).rejects.toThrow('Milestone is not approved for release');
     expect(database.transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a replayed chain transaction before it can post a second journal', async () => {
+    const { service, database, projectsService, escrowWeb3 } = createService();
+    const chainHash = `0x${'a'.repeat(64)}`;
+    database.query.mockResolvedValue({
+      rowCount: 1,
+      rows: [
+        {
+          project_id: 'project-1',
+          contributor_id: 'investor-1',
+          amount_minor: '1000000',
+          currency: 'USDC',
+        },
+      ],
+    });
+    projectsService.assertProjectOnchainId.mockResolvedValue(undefined);
+    escrowWeb3.verifyDepositTx.mockResolvedValue(true);
+    database.transaction.mockImplementation(
+      (callback: (client: { query: jest.Mock }) => Promise<unknown>) =>
+        callback({
+          query: jest
+            .fn()
+            .mockResolvedValueOnce({
+              rowCount: 1,
+              rows: [
+                {
+                  id: 'intent-1',
+                  project_id: 'project-1',
+                  contributor_id: 'investor-1',
+                  amount_minor: '1000000',
+                  currency: 'USDC',
+                  state: 'pending',
+                },
+              ],
+            })
+            .mockRejectedValueOnce({ code: '23505' }),
+        }),
+    );
+
+    await expect(
+      service.settleVerifiedOnchainContribution({
+        paymentIntentId: 'intent-1',
+        contributorId: 'investor-1',
+        projectOnchainId: '42',
+        investorWallet: '0x0000000000000000000000000000000000000002',
+        transactionHash: chainHash,
+        correlationId: 'correlation-1',
+      }),
+    ).rejects.toThrow('already been reserved');
   });
 });

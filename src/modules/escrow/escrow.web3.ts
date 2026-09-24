@@ -113,6 +113,10 @@ export class EscrowWeb3Service {
     private readonly platformSigner: PlatformSignerService,
   ) {}
 
+  getRuntimeConfig() {
+    return this.keiboConfig.getRequired();
+  }
+
   async getCampaign(projectOnchainId: string) {
     const { client, config } = await this.readyClient();
     const campaign = (await client.readContract({

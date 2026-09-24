@@ -9,6 +9,8 @@ import type { PoolClient } from 'pg';
 import { FinancialDatabase } from './financial.database';
 import { FINANCIAL_SCHEMA_SQL } from './financial.schema';
 import { ProjectsService } from '../projects/projects.service';
+import { EscrowWeb3Service } from '../escrow/escrow.web3';
+import type { Address, Hash } from 'viem';
 import type {
   LedgerLine,
   PaymentIntentInput,
@@ -73,6 +75,7 @@ export class FinancialService {
   constructor(
     private readonly database: FinancialDatabase,
     private readonly projectsService: ProjectsService,
+    private readonly escrowWeb3: EscrowWeb3Service,
   ) {}
 
   async initializeSchema(): Promise<void> {
@@ -133,6 +136,143 @@ export class FinancialService {
         { projectId: input.projectId },
       );
       return { ...result.rows[0], replayed: false };
+    });
+  }
+
+  /**
+   * Settles a payment intent only after a KEIBO escrow receipt is independently
+   * verified. The unique evidence row is reserved in the same serializable
+   * transaction as the journal and intent update, so a chain transaction can
+   * never fund more than one local payment intent.
+   */
+  async settleVerifiedOnchainContribution(params: {
+    paymentIntentId: string;
+    contributorId: string;
+    projectOnchainId: string;
+    investorWallet: Address;
+    transactionHash: Hash;
+    correlationId: string;
+  }) {
+    const config = this.escrowWeb3.getRuntimeConfig();
+    const intent = await this.database.query<{
+      project_id: string;
+      contributor_id: string;
+      amount_minor: string;
+      currency: string;
+    }>(
+      `SELECT project_id, contributor_id, amount_minor, currency
+       FROM financial_payment_intents WHERE id = $1`,
+      [params.paymentIntentId],
+    );
+    if (
+      !intent.rowCount ||
+      intent.rows[0].contributor_id !== params.contributorId
+    ) {
+      throw new ConflictException(
+        'Payment intent was not found for this contributor',
+      );
+    }
+    const payment = intent.rows[0];
+    if (payment.currency !== 'USDC') {
+      throw new ConflictException(
+        'KEIBO on-chain contribution settlement requires USDC',
+      );
+    }
+    await this.projectsService.assertProjectOnchainId(
+      payment.project_id,
+      params.projectOnchainId,
+    );
+    const verified = await this.escrowWeb3.verifyDepositTx({
+      hash: params.transactionHash,
+      projectOnchainId: params.projectOnchainId,
+      investor: params.investorWallet,
+      amount: BigInt(payment.amount_minor),
+    });
+    if (!verified) {
+      throw new ConflictException(
+        'Transaction receipt does not match this payment intent',
+      );
+    }
+
+    return this.database.transaction(async (client) => {
+      const locked = await client.query<{
+        id: string;
+        project_id: string;
+        contributor_id: string;
+        amount_minor: string;
+        currency: string;
+        state: string;
+      }>(
+        `SELECT id, project_id, contributor_id, amount_minor, currency, state
+         FROM financial_payment_intents WHERE id = $1 FOR UPDATE`,
+        [params.paymentIntentId],
+      );
+      if (
+        !locked.rowCount ||
+        locked.rows[0].contributor_id !== params.contributorId
+      ) {
+        throw new ConflictException(
+          'Payment intent was not found for this contributor',
+        );
+      }
+      const current = locked.rows[0];
+      if (!['pending', 'authorized'].includes(current.state)) {
+        throw new ConflictException(
+          `Cannot settle on-chain payment from ${current.state}`,
+        );
+      }
+      const evidence = await client
+        .query(
+          `INSERT INTO financial_chain_evidence
+          (chain_id, contract_address, transaction_hash, event_identity, payment_intent_id)
+         VALUES ($1, $2, $3, $4, $5)`,
+          [
+            config.chainId,
+            config.escrow.toLowerCase(),
+            params.transactionHash.toLowerCase(),
+            `Contributed:${params.transactionHash.toLowerCase()}:${params.projectOnchainId}:${params.investorWallet.toLowerCase()}:${current.amount_minor}`,
+            current.id,
+          ],
+        )
+        .catch((error: { code?: string }) => {
+          if (error.code === '23505') {
+            throw new ConflictException(
+              'On-chain transaction evidence has already been reserved',
+            );
+          }
+          throw error;
+        });
+      void evidence;
+      const escrowAccount = `liability:campaign_escrow:${current.project_id}:${current.currency}`;
+      await this.lockLedgerAccount(client, escrowAccount);
+      const journal = await this.postJournalInTransaction(client, {
+        idempotencyKey: `chain-contribution:${config.chainId}:${params.transactionHash.toLowerCase()}`,
+        correlationId: params.correlationId,
+        description: 'Verified KEIBO escrow contribution',
+        lines: [
+          {
+            account: `asset:keibo_escrow:${config.chainId}:${current.currency}`,
+            debitMinor: BigInt(current.amount_minor),
+            creditMinor: 0n,
+          },
+          {
+            account: escrowAccount,
+            debitMinor: 0n,
+            creditMinor: BigInt(current.amount_minor),
+          },
+        ],
+      });
+      await client.query(
+        `UPDATE financial_payment_intents
+         SET state = 'settled', provider = 'keibo_escrow', provider_fee_minor = 0,
+             capture_journal_id = $2, updated_at = now() WHERE id = $1`,
+        [current.id, journal.id],
+      );
+      return {
+        paymentIntentId: current.id,
+        ledgerJournalId: journal.id,
+        transactionHash: params.transactionHash,
+      };
     });
   }
 

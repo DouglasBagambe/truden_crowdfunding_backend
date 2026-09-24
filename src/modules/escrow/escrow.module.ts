@@ -29,6 +29,6 @@ import { ProjectsModule } from '../projects/projects.module';
   ],
   controllers: [EscrowController],
   providers: [EscrowService, EscrowRepository, EscrowWeb3Service, RolesGuard],
-  exports: [EscrowService],
+  exports: [EscrowService, EscrowWeb3Service],
 })
 export class EscrowModule {}

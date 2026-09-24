@@ -14,10 +14,12 @@ import { FinancialOutboxService } from './financial-outbox.service';
 import { FinancialProjectionWorker } from './projections/financial-projection.worker';
 import { FinancialWorkersService } from './financial-workers.service';
 import { ProjectsModule } from '../projects/projects.module';
+import { EscrowModule } from '../escrow/escrow.module';
 
 @Module({
   imports: [
     ProjectsModule,
+    EscrowModule,
     MongooseModule.forFeature([
       { name: FinancialProjection.name, schema: FinancialProjectionSchema },
     ]),

@@ -49,6 +49,14 @@ CREATE TABLE IF NOT EXISTS financial_campaign_releases (
   payout_status text NOT NULL DEFAULT 'not_started' CHECK (payout_status IN ('not_started', 'submitted', 'paid', 'failed')),
   created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(project_id, milestone_id)
 );
+CREATE TABLE IF NOT EXISTS financial_chain_evidence (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), chain_id bigint NOT NULL CHECK (chain_id > 0),
+  contract_address text NOT NULL, transaction_hash text NOT NULL, event_identity text NOT NULL,
+  payment_intent_id uuid REFERENCES financial_payment_intents(id), release_id uuid REFERENCES financial_campaign_releases(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK ((payment_intent_id IS NOT NULL) <> (release_id IS NOT NULL)),
+  UNIQUE(chain_id, transaction_hash), UNIQUE(chain_id, contract_address, event_identity)
+);
 CREATE OR REPLACE FUNCTION reject_financial_ledger_mutation() RETURNS trigger AS $$
 BEGIN RAISE EXCEPTION 'financial journals and postings are immutable'; END;
 $$ LANGUAGE plpgsql;
