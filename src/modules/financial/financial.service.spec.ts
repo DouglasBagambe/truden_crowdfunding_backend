@@ -5,9 +5,11 @@ describe('FinancialService contribution eligibility', () => {
   const createService = () => {
     const database = {
       transaction: jest.fn(),
+      query: jest.fn(),
     };
     const projectsService = {
       ensureProjectCanReceiveDonation: jest.fn(),
+      getCharityMilestoneReleaseEligibility: jest.fn(),
     };
     return {
       service: new FinancialService(
@@ -122,4 +124,100 @@ describe('FinancialService contribution eligibility', () => {
       expect(client.query).toHaveBeenCalledTimes(1);
     },
   );
+
+  it('replays an identical charity release without re-entering campaign state', async () => {
+    const { service, database, projectsService } = createService();
+    database.query.mockResolvedValue({
+      rows: [
+        {
+          id: 'release-1',
+          project_id: 'project-1',
+          milestone_id: 'milestone-1',
+          creator_id: 'creator-1',
+          requested_by: 'creator-1',
+          currency: 'UGX',
+          gross_amount_minor: '10000',
+          owner_proceeds_minor: '9500',
+          success_fee_minor: '500',
+          ledger_journal_id: 'journal-1',
+          payout_status: 'not_started',
+        },
+      ],
+    });
+
+    await expect(
+      service.releaseApprovedCharityMilestone({
+        projectId: 'project-1',
+        milestoneId: 'milestone-1',
+        requesterId: 'creator-1',
+        isAdmin: false,
+        idempotencyKey: 'release-key-1',
+        correlationId: 'correlation-1',
+      }),
+    ).resolves.toMatchObject({
+      id: 'release-1',
+      replayed: true,
+      externalPayoutStatus: 'not_started',
+    });
+    expect(
+      projectsService.getCharityMilestoneReleaseEligibility,
+    ).not.toHaveBeenCalled();
+    expect(database.transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a mutated release payload for an existing idempotency key', async () => {
+    const { service, database, projectsService } = createService();
+    database.query.mockResolvedValue({
+      rows: [
+        {
+          id: 'release-1',
+          project_id: 'project-1',
+          milestone_id: 'milestone-1',
+          creator_id: 'creator-1',
+          requested_by: 'creator-1',
+          currency: 'UGX',
+          gross_amount_minor: '10000',
+          owner_proceeds_minor: '9500',
+          success_fee_minor: '500',
+          ledger_journal_id: 'journal-1',
+          payout_status: 'not_started',
+        },
+      ],
+    });
+
+    await expect(
+      service.releaseApprovedCharityMilestone({
+        projectId: 'project-1',
+        milestoneId: 'different-milestone',
+        requesterId: 'creator-1',
+        isAdmin: false,
+        idempotencyKey: 'release-key-1',
+        correlationId: 'correlation-1',
+      }),
+    ).rejects.toThrow('different campaign release');
+    expect(
+      projectsService.getCharityMilestoneReleaseEligibility,
+    ).not.toHaveBeenCalled();
+    expect(database.transaction).not.toHaveBeenCalled();
+  });
+
+  it('fails before a financial transaction when campaign authorization rejects release', async () => {
+    const { service, database, projectsService } = createService();
+    database.query.mockResolvedValue({ rows: [] });
+    projectsService.getCharityMilestoneReleaseEligibility.mockRejectedValue(
+      new BadRequestException('Milestone is not approved for release'),
+    );
+
+    await expect(
+      service.releaseApprovedCharityMilestone({
+        projectId: 'project-1',
+        milestoneId: 'milestone-1',
+        requesterId: 'attacker-1',
+        isAdmin: false,
+        idempotencyKey: 'release-key-1',
+        correlationId: 'correlation-1',
+      }),
+    ).rejects.toThrow('Milestone is not approved for release');
+    expect(database.transaction).not.toHaveBeenCalled();
+  });
 });

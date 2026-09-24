@@ -39,6 +39,16 @@ CREATE TABLE IF NOT EXISTS financial_reconciliations (
   provider_total_minor bigint NOT NULL, ledger_total_minor bigint NOT NULL, difference_minor bigint NOT NULL,
   evidence_reference text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS financial_campaign_releases (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id text NOT NULL, milestone_id text NOT NULL,
+  creator_id text NOT NULL, requested_by text NOT NULL, currency char(3) NOT NULL,
+  gross_amount_minor bigint NOT NULL CHECK (gross_amount_minor > 0),
+  owner_proceeds_minor bigint NOT NULL CHECK (owner_proceeds_minor > 0),
+  success_fee_minor bigint NOT NULL CHECK (success_fee_minor >= 0),
+  ledger_journal_id uuid NOT NULL REFERENCES financial_journals(id), idempotency_key text NOT NULL UNIQUE,
+  payout_status text NOT NULL DEFAULT 'not_started' CHECK (payout_status IN ('not_started', 'submitted', 'paid', 'failed')),
+  created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(project_id, milestone_id)
+);
 CREATE OR REPLACE FUNCTION reject_financial_ledger_mutation() RETURNS trigger AS $$
 BEGIN RAISE EXCEPTION 'financial journals and postings are immutable'; END;
 $$ LANGUAGE plpgsql;

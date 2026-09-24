@@ -1792,6 +1792,69 @@ export class ProjectsService {
     return this.getProjectWithMilestones(projectId);
   }
 
+  async getCharityMilestoneReleaseEligibility(params: {
+    projectId: string;
+    milestoneId: string;
+    requesterId: string;
+    isAdmin: boolean;
+  }): Promise<{
+    creatorId: string;
+    currency: string;
+    payoutPercentage: number;
+  }> {
+    this.ensureValidObjectId(params.projectId);
+    this.ensureValidObjectId(params.milestoneId);
+
+    const [project, milestone] = await Promise.all([
+      this.projectsRepo.findById(params.projectId),
+      this.milestonesRepo.findByIdForProject(
+        params.projectId,
+        params.milestoneId,
+      ),
+    ]);
+    if (!project) throw new NotFoundException('Project not found');
+    if (!milestone) throw new NotFoundException('Milestone not found');
+    if (
+      this.normalizeProjectType(this.readProjectType(project)) !==
+      ProjectType.CHARITY
+    ) {
+      throw new BadRequestException(
+        'Only charity campaign milestones can be released',
+      );
+    }
+
+    const creatorId = this.extractObjectIdString(
+      project.creatorId,
+      'creatorId',
+    );
+    if (!params.isAdmin && creatorId !== params.requesterId) {
+      throw new ForbiddenException(
+        'Only the campaign creator can request release',
+      );
+    }
+    await this.ensureCreatorEligible(creatorId);
+    if (project.status !== ProjectStatus.APPROVED) {
+      throw new BadRequestException('Campaign is not approved for release');
+    }
+    if (milestone.status !== MilestoneStatus.APPROVED) {
+      throw new BadRequestException('Milestone is not approved for release');
+    }
+
+    const payoutPercentage = milestone.payoutPercentage;
+    if (
+      payoutPercentage === undefined ||
+      !Number.isSafeInteger(payoutPercentage) ||
+      payoutPercentage <= 0 ||
+      payoutPercentage > 100
+    ) {
+      throw new BadRequestException(
+        'Milestone must have an approved whole-percent payout allocation',
+      );
+    }
+
+    return { creatorId, currency: project.currency, payoutPercentage };
+  }
+
   private async ensureCreatorEligible(ownerId: string) {
     const kycBypass =
       String(process.env.KYC_BYPASS ?? '').toLowerCase() === 'true';

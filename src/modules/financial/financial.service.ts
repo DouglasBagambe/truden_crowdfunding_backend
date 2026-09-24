@@ -21,6 +21,20 @@ import {
 
 const RETRY_SCHEDULE_SECONDS = [60, 300, 1800, 7200, 86400];
 
+type CampaignReleaseRow = {
+  id: string;
+  project_id: string;
+  milestone_id: string;
+  creator_id: string;
+  requested_by: string;
+  currency: string;
+  gross_amount_minor: string;
+  owner_proceeds_minor: string;
+  success_fee_minor: string;
+  ledger_journal_id: string;
+  payout_status: 'not_started' | 'submitted' | 'paid' | 'failed';
+};
+
 function asMinor(value: string | number | bigint): bigint {
   try {
     const parsed = BigInt(value);
@@ -352,6 +366,181 @@ export class FinancialService {
       }
       return journal;
     });
+  }
+
+  async releaseApprovedCharityMilestone(params: {
+    projectId: string;
+    milestoneId: string;
+    requesterId: string;
+    isAdmin: boolean;
+    idempotencyKey: string;
+    correlationId: string;
+  }) {
+    if (!params.idempotencyKey || params.idempotencyKey.length > 200) {
+      throw new BadRequestException('A valid Idempotency-Key is required');
+    }
+
+    const prior = await this.getCampaignReleaseByIdempotency(
+      params.idempotencyKey,
+    );
+    if (prior) {
+      this.assertReleaseReplayMatches(prior, params);
+      return { ...this.serializeCampaignRelease(prior), replayed: true };
+    }
+
+    const eligibility =
+      await this.projectsService.getCharityMilestoneReleaseEligibility({
+        projectId: params.projectId,
+        milestoneId: params.milestoneId,
+        requesterId: params.requesterId,
+        isAdmin: params.isAdmin,
+      });
+    const currency = assertCurrency(eligibility.currency);
+
+    return this.database.transaction(async (client) => {
+      const replay = await client.query<CampaignReleaseRow>(
+        `SELECT * FROM financial_campaign_releases
+         WHERE idempotency_key = $1 FOR UPDATE`,
+        [params.idempotencyKey],
+      );
+      if (replay.rowCount) {
+        const existing = replay.rows[0];
+        this.assertReleaseReplayMatches(existing, params);
+        return { ...this.serializeCampaignRelease(existing), replayed: true };
+      }
+
+      const milestoneRelease = await client.query<{ id: string }>(
+        `SELECT id FROM financial_campaign_releases
+         WHERE project_id = $1 AND milestone_id = $2 FOR UPDATE`,
+        [params.projectId, params.milestoneId],
+      );
+      if (milestoneRelease.rowCount) {
+        throw new ConflictException('Milestone has already been released');
+      }
+
+      const settled = await client.query<{ total: string }>(
+        `SELECT COALESCE(SUM(amount_minor - COALESCE(provider_fee_minor, 0)), 0)::text AS total
+         FROM financial_payment_intents
+         WHERE project_id = $1 AND currency = $2 AND state = 'settled'`,
+        [params.projectId, currency],
+      );
+      const settledMinor = BigInt(settled.rows[0]?.total ?? '0');
+      const grossAmountMinor =
+        (settledMinor * BigInt(eligibility.payoutPercentage)) / 100n;
+      if (grossAmountMinor <= 0n) {
+        throw new ConflictException('Campaign has no settled funds available');
+      }
+
+      const escrowAccount = `liability:campaign_escrow:${params.projectId}:${currency}`;
+      await this.lockLedgerAccount(client, escrowAccount);
+      await this.assertCreditBalance(client, escrowAccount, grossAmountMinor);
+      const fee = calculateCampaignSuccessFee(grossAmountMinor);
+      const journal = await this.postJournalInTransaction(client, {
+        idempotencyKey: `release:${params.idempotencyKey}`,
+        correlationId: params.correlationId,
+        description: 'Approved charity campaign milestone release',
+        lines: [
+          {
+            account: escrowAccount,
+            debitMinor: grossAmountMinor,
+            creditMinor: 0n,
+          },
+          {
+            account: `liability:campaign_owner_payable:${params.projectId}:${currency}`,
+            debitMinor: 0n,
+            creditMinor: fee.ownerProceedsMinor,
+          },
+          {
+            account: `revenue:campaign_success_fee:${currency}`,
+            debitMinor: 0n,
+            creditMinor: fee.keiboFeeMinor,
+          },
+        ],
+      });
+      if (journal.replayed) {
+        throw new ConflictException(
+          'Release journal already exists without release history',
+        );
+      }
+
+      const release = await client.query<CampaignReleaseRow>(
+        `INSERT INTO financial_campaign_releases
+          (project_id, milestone_id, creator_id, requested_by, currency, gross_amount_minor,
+           owner_proceeds_minor, success_fee_minor, ledger_journal_id, idempotency_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING *`,
+        [
+          params.projectId,
+          params.milestoneId,
+          eligibility.creatorId,
+          params.requesterId,
+          currency,
+          grossAmountMinor.toString(),
+          fee.ownerProceedsMinor.toString(),
+          fee.keiboFeeMinor.toString(),
+          journal.id,
+          params.idempotencyKey,
+        ],
+      );
+      await this.enqueue(
+        client,
+        'campaign.release.accounted',
+        release.rows[0].id,
+        params.correlationId,
+        {
+          projectId: params.projectId,
+          milestoneId: params.milestoneId,
+          ledgerJournalId: journal.id,
+          externalPayoutStatus: 'not_started',
+        },
+      );
+      return {
+        ...this.serializeCampaignRelease(release.rows[0]),
+        replayed: false,
+      };
+    });
+  }
+
+  private async getCampaignReleaseByIdempotency(idempotencyKey: string) {
+    const result = await this.database.query<CampaignReleaseRow>(
+      'SELECT * FROM financial_campaign_releases WHERE idempotency_key = $1',
+      [idempotencyKey],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private assertReleaseReplayMatches(
+    release: CampaignReleaseRow,
+    params: {
+      projectId: string;
+      milestoneId: string;
+      requesterId: string;
+    },
+  ) {
+    if (
+      release.project_id !== params.projectId ||
+      release.milestone_id !== params.milestoneId ||
+      release.requested_by !== params.requesterId
+    ) {
+      throw new ConflictException(
+        'Idempotency-Key was already used for a different campaign release',
+      );
+    }
+  }
+
+  private serializeCampaignRelease(release: CampaignReleaseRow) {
+    return {
+      id: release.id,
+      projectId: release.project_id,
+      milestoneId: release.milestone_id,
+      creatorId: release.creator_id,
+      currency: release.currency,
+      grossAmountMinor: release.gross_amount_minor,
+      ownerProceedsMinor: release.owner_proceeds_minor,
+      successFeeMinor: release.success_fee_minor,
+      ledgerJournalId: release.ledger_journal_id,
+      externalPayoutStatus: release.payout_status,
+    };
   }
 
   private async applyProviderEvent(

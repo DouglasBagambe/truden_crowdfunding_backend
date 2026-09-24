@@ -25,6 +25,11 @@ describe('financial PostgreSQL integration', () => {
   const database = new FinancialDatabase(config);
   const projectsService = {
     ensureProjectCanReceiveDonation: jest.fn().mockResolvedValue(undefined),
+    getCharityMilestoneReleaseEligibility: jest.fn().mockResolvedValue({
+      creatorId: 'creator-release',
+      currency: 'UGX',
+      payoutPercentage: 50,
+    }),
   } as unknown as ProjectsService;
   const financial = new FinancialService(database, projectsService);
   const outbox = new FinancialOutboxService(database, config);
@@ -36,7 +41,7 @@ describe('financial PostgreSQL integration', () => {
     await financial.initializeSchema();
     await financial.initializeSchema();
     await database.query(
-      'TRUNCATE financial_outbox, financial_inbox, financial_postings, financial_journals, financial_payment_intents, financial_reconciliations CASCADE',
+      'TRUNCATE financial_outbox, financial_inbox, financial_postings, financial_campaign_releases, financial_journals, financial_payment_intents, financial_reconciliations CASCADE',
     );
   });
 
@@ -256,6 +261,109 @@ describe('financial PostgreSQL integration', () => {
        FROM financial_postings WHERE account = 'revenue:campaign_success_fee:EUR'`,
     );
     expect(fee.rows[0].credit).toBe('500');
+  });
+
+  it('accounts one approved charity milestone exactly once and never marks it externally paid', async () => {
+    const correlationId = randomUUID();
+    const intent = await financial.createPaymentIntent({
+      projectId: 'project-charity-release',
+      contributorId: 'donor-charity-release',
+      amountMinor: 10_000n,
+      currency: 'UGX',
+      idempotencyKey: 'intent-charity-release',
+      correlationId,
+    });
+    await financial.acceptProviderEvent({
+      provider: 'test-provider',
+      providerEventId: 'capture-charity-release',
+      eventType: 'captured',
+      paymentIntentId: intent.id,
+      amountMinor: 10_000n,
+      currency: 'UGX',
+      providerFeeMinor: 0n,
+      receivedAt: new Date(),
+    });
+    expect(await financial.processNextInboxEvent()).toEqual({
+      processed: true,
+    });
+    await financial.acceptProviderEvent({
+      provider: 'test-provider',
+      providerEventId: 'settle-charity-release',
+      eventType: 'settled',
+      paymentIntentId: intent.id,
+      amountMinor: 10_000n,
+      currency: 'UGX',
+      providerFeeMinor: 0n,
+      receivedAt: new Date(),
+    });
+    expect(await financial.processNextInboxEvent()).toEqual({
+      processed: true,
+    });
+
+    const releases = await Promise.allSettled([
+      financial.releaseApprovedCharityMilestone({
+        projectId: 'project-charity-release',
+        milestoneId: 'milestone-charity-release',
+        requesterId: 'creator-release',
+        isAdmin: false,
+        idempotencyKey: 'charity-release-1',
+        correlationId,
+      }),
+      financial.releaseApprovedCharityMilestone({
+        projectId: 'project-charity-release',
+        milestoneId: 'milestone-charity-release',
+        requesterId: 'creator-release',
+        isAdmin: false,
+        idempotencyKey: 'charity-release-2',
+        correlationId,
+      }),
+    ]);
+    expect(
+      releases.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(
+      releases.filter((result) => result.status === 'rejected'),
+    ).toHaveLength(1);
+
+    const records = await database.query<{
+      count: string;
+      idempotency_key: string;
+      payout_status: string;
+    }>(
+      `SELECT COUNT(*)::text AS count, MIN(idempotency_key) AS idempotency_key,
+              MIN(payout_status) AS payout_status
+       FROM financial_campaign_releases WHERE project_id = 'project-charity-release'`,
+    );
+    expect(records.rows[0]).toMatchObject({
+      count: '1',
+      payout_status: 'not_started',
+    });
+
+    const release = await financial.releaseApprovedCharityMilestone({
+      projectId: 'project-charity-release',
+      milestoneId: 'milestone-charity-release',
+      requesterId: 'creator-release',
+      isAdmin: false,
+      idempotencyKey: records.rows[0].idempotency_key,
+      correlationId,
+    });
+    expect(release).toMatchObject({
+      replayed: true,
+      grossAmountMinor: '5000',
+      ownerProceedsMinor: '4750',
+      successFeeMinor: '250',
+      externalPayoutStatus: 'not_started',
+    });
+    await expect(
+      financial.releaseApprovedCharityMilestone({
+        projectId: 'project-charity-release',
+        milestoneId: 'different-milestone',
+        requesterId: 'creator-release',
+        isAdmin: false,
+        idempotencyKey: records.rows[0].idempotency_key,
+        correlationId,
+      }),
+    ).rejects.toThrow('different campaign release');
   });
 
   it('records explained reconciliation variances and denies cross-user intent reads', async () => {

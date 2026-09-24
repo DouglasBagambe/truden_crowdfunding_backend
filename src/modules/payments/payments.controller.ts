@@ -39,9 +39,12 @@ import { KYCStatus } from '../../common/enums/role.enum';
 import { UsersService } from '../users/users.service';
 import { Public } from '../../common/decorators/public.decorator';
 import { CsrfExempt } from '../../common/decorators/csrf-exempt.decorator';
+import { FinancialService } from '../financial/financial.service';
+import { ReleaseCharityMilestoneDto } from './dto/release-charity-milestone.dto';
+import { randomUUID } from 'crypto';
 
 type AuthenticatedRequest = ExpressRequest & {
-  user?: { userId?: string; sub?: string };
+  user?: { userId?: string; sub?: string; roles?: UserRole[]; role?: UserRole };
 };
 
 @ApiTags('Payments')
@@ -297,7 +300,7 @@ export class PaymentsController {
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth('JWT-auth')
 export class WalletController {
-  constructor(private readonly paymentsService: PaymentsService) {}
+  constructor(private readonly financialService: FinancialService) {}
 
   private unavailable(): never {
     throw new ServiceUnavailableException(
@@ -328,10 +331,35 @@ export class WalletController {
 
   @Post('withdraw')
   @UseGuards(EmailVerifiedGuard)
-  @ApiOperation({ summary: 'Withdraw from wallet' })
-  @ApiResponse({ status: 201, description: 'Withdrawal initiated' })
-  withdraw() {
-    return this.unavailable();
+  @ApiOperation({
+    summary: 'Account an approved charity campaign milestone release',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Internal release accounted; external payout remains pending',
+  })
+  withdraw(
+    @Body() dto: ReleaseCharityMilestoneDto,
+    @Headers('idempotency-key') idempotencyKey: string,
+    @RequestDecorator() req: AuthenticatedRequest,
+  ) {
+    const requesterId = req.user?.userId ?? req.user?.sub;
+    if (!requesterId)
+      throw new UnauthorizedException('Authentication required');
+    const roles = Array.isArray(req.user?.roles)
+      ? req.user.roles
+      : req.user?.role
+        ? [req.user.role]
+        : [];
+    return this.financialService.releaseApprovedCharityMilestone({
+      projectId: dto.projectId,
+      milestoneId: dto.milestoneId,
+      requesterId,
+      isAdmin:
+        roles.includes(UserRole.ADMIN) || roles.includes(UserRole.SUPERADMIN),
+      idempotencyKey,
+      correlationId: randomUUID(),
+    });
   }
 
   @Post('admin/withdrawals/:id/approve')

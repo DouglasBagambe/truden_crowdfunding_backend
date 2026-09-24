@@ -53,6 +53,7 @@ const createService = () => {
     createMany: jest.fn(),
     deleteByProject: jest.fn(),
     findByProject: jest.fn(),
+    findByIdForProject: jest.fn(),
   };
   const usersRepo = {
     findById: jest.fn(),
@@ -130,6 +131,77 @@ const roiProjectStub = (overrides: Record<string, unknown> = {}) => ({
   onchainProvisionedAt: undefined,
   toObject: jest.fn().mockReturnThis(),
   ...overrides,
+});
+
+describe('ProjectsService charity release eligibility', () => {
+  const charityProject = () =>
+    roiProjectStub({
+      projectType: ProjectType.CHARITY,
+      currency: 'UGX',
+      status: ProjectStatus.APPROVED,
+    });
+  const approvedMilestone = () => ({
+    _id: '507f1f77bcf86cd799439013',
+    projectId: mockProjectId,
+    status: MilestoneStatus.APPROVED,
+    payoutPercentage: 50,
+  });
+
+  it('permits only the active, verified campaign creator for an approved charity milestone', async () => {
+    const { service, projectsRepo, milestonesRepo, usersRepo } =
+      createService();
+    projectsRepo.findById.mockResolvedValue(charityProject());
+    milestonesRepo.findByIdForProject.mockResolvedValue(approvedMilestone());
+    usersRepo.findById.mockResolvedValue(creatorWithWallet());
+
+    await expect(
+      service.getCharityMilestoneReleaseEligibility({
+        projectId: mockProjectId,
+        milestoneId: '507f1f77bcf86cd799439013',
+        requesterId: mockCreatorId,
+        isAdmin: false,
+      }),
+    ).resolves.toEqual({
+      creatorId: mockCreatorId,
+      currency: 'UGX',
+      payoutPercentage: 50,
+    });
+  });
+
+  it('rejects an unauthorized requester before any ledger release can be created', async () => {
+    const { service, projectsRepo, milestonesRepo } = createService();
+    projectsRepo.findById.mockResolvedValue(charityProject());
+    milestonesRepo.findByIdForProject.mockResolvedValue(approvedMilestone());
+
+    await expect(
+      service.getCharityMilestoneReleaseEligibility({
+        projectId: mockProjectId,
+        milestoneId: '507f1f77bcf86cd799439013',
+        requesterId: '507f1f77bcf86cd799439014',
+        isAdmin: false,
+      }),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('rejects milestones without an approved whole-percent allocation', async () => {
+    const { service, projectsRepo, milestonesRepo, usersRepo } =
+      createService();
+    projectsRepo.findById.mockResolvedValue(charityProject());
+    milestonesRepo.findByIdForProject.mockResolvedValue({
+      ...approvedMilestone(),
+      payoutPercentage: 0,
+    });
+    usersRepo.findById.mockResolvedValue(creatorWithWallet());
+
+    await expect(
+      service.getCharityMilestoneReleaseEligibility({
+        projectId: mockProjectId,
+        milestoneId: '507f1f77bcf86cd799439013',
+        requesterId: mockCreatorId,
+        isAdmin: false,
+      }),
+    ).rejects.toThrow('payout allocation');
+  });
 });
 
 // Helper: a creator with a linked wallet

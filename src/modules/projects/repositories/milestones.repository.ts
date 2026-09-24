@@ -27,6 +27,16 @@ export class MilestonesRepository {
   }
 
   findByProject(projectId: string): Promise<MilestoneDocument[]> {
-    return this.milestoneModel.find({ projectId }).sort({ createdAt: 1 }).exec();
+    return this.milestoneModel
+      .find({ projectId })
+      .sort({ createdAt: 1 })
+      .exec();
+  }
+
+  findByIdForProject(
+    projectId: string,
+    milestoneId: string,
+  ): Promise<MilestoneDocument | null> {
+    return this.milestoneModel.findOne({ _id: milestoneId, projectId }).exec();
   }
 }
