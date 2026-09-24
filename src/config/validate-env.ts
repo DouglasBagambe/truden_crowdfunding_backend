@@ -160,7 +160,11 @@ export function validateEnvironment(
       'Invalid production configuration: PLATFORM_SIGNER_PROVIDER must remain disabled until an approved managed signer is integrated',
     );
   }
-  if (env.ADMIN_PRIVATE_KEY || env.BLOCKCHAIN_ADMIN_PRIVATE_KEY) {
+  if (
+    env.ADMIN_PRIVATE_KEY ||
+    env.BLOCKCHAIN_ADMIN_PRIVATE_KEY ||
+    env.UAT_PLATFORM_SIGNER_PRIVATE_KEY
+  ) {
     throw new Error(
       'Invalid production configuration: raw administrator signing keys are prohibited',
     );

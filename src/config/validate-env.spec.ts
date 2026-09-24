@@ -72,6 +72,12 @@ describe('validateEnvironment', () => {
         PLATFORM_SIGNER_PROVIDER: 'local',
       }),
     ).toThrow('PLATFORM_SIGNER_PROVIDER');
+    expect(() =>
+      validateEnvironment({
+        ...productionEnvironment(),
+        UAT_PLATFORM_SIGNER_PRIVATE_KEY: `0x${'1'.repeat(64)}`,
+      }),
+    ).toThrow('raw administrator signing keys');
   });
 
   it('requires the financial ledger database even when workers are disabled', () => {
