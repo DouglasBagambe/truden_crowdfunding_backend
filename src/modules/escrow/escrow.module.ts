@@ -13,7 +13,6 @@ import {
   MilestoneLockSchema,
 } from './schemas/escrow.schema';
 import { EscrowRepository } from './escrow.repository';
-import { EscrowWeb3Service } from './escrow.web3';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { ProjectsModule } from '../projects/projects.module';
 
@@ -28,7 +27,7 @@ import { ProjectsModule } from '../projects/projects.module';
     ProjectsModule,
   ],
   controllers: [EscrowController],
-  providers: [EscrowService, EscrowRepository, EscrowWeb3Service, RolesGuard],
-  exports: [EscrowService, EscrowWeb3Service],
+  providers: [EscrowService, EscrowRepository, RolesGuard],
+  exports: [EscrowService],
 })
 export class EscrowModule {}

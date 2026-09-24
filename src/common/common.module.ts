@@ -9,6 +9,7 @@ import { HealthController } from './controllers/health.controller';
 import { KeiboContractConfigService } from './services/keibo-contract-config.service';
 import { KeiboGovernanceService } from './services/keibo-governance.service';
 import { KeiboDealRoomEvidenceService } from './services/keibo-deal-room-evidence.service';
+import { EscrowWeb3Service } from '../modules/escrow/escrow.web3';
 
 @Global()
 @Module({
@@ -21,6 +22,7 @@ import { KeiboDealRoomEvidenceService } from './services/keibo-deal-room-evidenc
     KeiboContractConfigService,
     KeiboGovernanceService,
     KeiboDealRoomEvidenceService,
+    EscrowWeb3Service,
     RateLimitService,
     RateLimitGuard,
   ],
@@ -31,6 +33,7 @@ import { KeiboDealRoomEvidenceService } from './services/keibo-deal-room-evidenc
     KeiboContractConfigService,
     KeiboGovernanceService,
     KeiboDealRoomEvidenceService,
+    EscrowWeb3Service,
     RateLimitService,
     RateLimitGuard,
   ],
