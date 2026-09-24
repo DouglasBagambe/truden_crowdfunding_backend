@@ -37,6 +37,11 @@ export class MarketplaceService {
     ) { }
 
     private ensureMarketplaceEnabled() {
+        if (this.configService.get<string>('KEIBO_RECEIPT_CONTRACT_ADDRESS')) {
+            throw new ServiceUnavailableException(
+                'Resale is unavailable because KEIBO investment receipts are non-transferable.',
+            );
+        }
         const enabled =
             String(this.configService.get<string>('ENABLE_NFT_MARKETPLACE') ?? '').toLowerCase() === 'true';
 
