@@ -207,6 +207,11 @@ export class ViemNftClient {
     private readonly configService: ConfigService,
     private readonly signer: PlatformSignerService,
   ) {
+    // KeiboInvestmentReceipt has incompatible non-transferable semantics and
+    // ABI. Never bind this legacy transferable-NFT client to that runtime.
+    if (this.configService.get<string>('KEIBO_RECEIPT_CONTRACT_ADDRESS')) {
+      return;
+    }
     const blockchain = this.configService.get<{
       enabled?: boolean;
       rpcUrl?: string;

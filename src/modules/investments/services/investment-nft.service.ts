@@ -21,8 +21,7 @@ export class InvestmentNFTService {
   ) {}
 
   isInitialized(): boolean {
-    // ViemNftClient throws in constructor if not configured — so if it exists, it's ready
-    return !!this.viemNftClient;
+    return !!this.viemNftClient.nftAddress;
   }
 
   // ─── Minting ────────────────────────────────────────────────────────────────
