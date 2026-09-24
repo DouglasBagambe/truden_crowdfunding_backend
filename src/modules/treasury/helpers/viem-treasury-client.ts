@@ -81,6 +81,9 @@ export class ViemTreasuryClient {
     private readonly configService: ConfigService,
     private readonly signer: PlatformSignerService,
   ) {
+    if (this.configService.get<string>('KEIBO_RECEIPT_CONTRACT_ADDRESS')) {
+      return;
+    }
     const blockchain = this.configService.get<{
       enabled?: boolean;
       rpcUrl?: string;

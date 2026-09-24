@@ -28,6 +28,7 @@ import {
   TreasuryTransactionView,
 } from './interfaces/treasury-transaction.interface';
 import { ViemTreasuryClient } from './helpers/viem-treasury-client';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class TreasuryService {
@@ -38,6 +39,7 @@ export class TreasuryService {
     @InjectModel(TreasuryWallet.name)
     private readonly walletModel: Model<TreasuryWalletDocument>,
     private readonly viemTreasuryClient: ViemTreasuryClient,
+    private readonly configService: ConfigService,
   ) {}
 
   async recordFee(
@@ -105,6 +107,7 @@ export class TreasuryService {
     dto: CreateTreasuryTransactionDto,
     currentUser: JwtPayload,
   ): Promise<TreasuryTransactionView> {
+    this.ensureLegacyTreasuryDisabled();
     this.ensureAdmin(currentUser);
 
     const amountNumber = this.parseAmount(dto.amount, 'amount');
@@ -146,6 +149,7 @@ export class TreasuryService {
     dto: DistributeFundsDto,
     currentUser: JwtPayload,
   ): Promise<TreasuryTransactionView> {
+    this.ensureLegacyTreasuryDisabled();
     this.ensureAdmin(currentUser);
 
     if (!dto.recipients || dto.recipients.length === 0) {
@@ -388,6 +392,14 @@ export class TreasuryService {
     };
 
     return this.recordFee(dto);
+  }
+
+  private ensureLegacyTreasuryDisabled(): void {
+    if (this.configService.get<string>('KEIBO_RECEIPT_CONTRACT_ADDRESS')) {
+      throw new ForbiddenException(
+        'Legacy treasury distribution is disabled for KEIBO receipt runtime',
+      );
+    }
   }
 
   private ensureAdmin(currentUser: JwtPayload) {
