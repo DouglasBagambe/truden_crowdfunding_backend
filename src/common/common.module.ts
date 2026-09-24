@@ -8,6 +8,7 @@ import { RateLimitGuard } from './guards/rate-limit.guard';
 import { HealthController } from './controllers/health.controller';
 import { KeiboContractConfigService } from './services/keibo-contract-config.service';
 import { KeiboGovernanceService } from './services/keibo-governance.service';
+import { KeiboDealRoomEvidenceService } from './services/keibo-deal-room-evidence.service';
 
 @Global()
 @Module({
@@ -19,6 +20,7 @@ import { KeiboGovernanceService } from './services/keibo-governance.service';
     PlatformSignerService,
     KeiboContractConfigService,
     KeiboGovernanceService,
+    KeiboDealRoomEvidenceService,
     RateLimitService,
     RateLimitGuard,
   ],
@@ -28,6 +30,7 @@ import { KeiboGovernanceService } from './services/keibo-governance.service';
     PlatformSignerService,
     KeiboContractConfigService,
     KeiboGovernanceService,
+    KeiboDealRoomEvidenceService,
     RateLimitService,
     RateLimitGuard,
   ],
