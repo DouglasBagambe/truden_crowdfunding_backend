@@ -7,6 +7,7 @@ import { RateLimitService } from './services/rate-limit.service';
 import { RateLimitGuard } from './guards/rate-limit.guard';
 import { HealthController } from './controllers/health.controller';
 import { KeiboContractConfigService } from './services/keibo-contract-config.service';
+import { KeiboGovernanceService } from './services/keibo-governance.service';
 
 @Global()
 @Module({
@@ -17,6 +18,7 @@ import { KeiboContractConfigService } from './services/keibo-contract-config.ser
     CsrfGuard,
     PlatformSignerService,
     KeiboContractConfigService,
+    KeiboGovernanceService,
     RateLimitService,
     RateLimitGuard,
   ],
@@ -25,6 +27,7 @@ import { KeiboContractConfigService } from './services/keibo-contract-config.ser
     CsrfGuard,
     PlatformSignerService,
     KeiboContractConfigService,
+    KeiboGovernanceService,
     RateLimitService,
     RateLimitGuard,
   ],
