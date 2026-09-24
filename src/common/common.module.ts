@@ -6,6 +6,7 @@ import { PlatformSignerService } from './services/platform-signer.service';
 import { RateLimitService } from './services/rate-limit.service';
 import { RateLimitGuard } from './guards/rate-limit.guard';
 import { HealthController } from './controllers/health.controller';
+import { KeiboContractConfigService } from './services/keibo-contract-config.service';
 
 @Global()
 @Module({
@@ -15,6 +16,7 @@ import { HealthController } from './controllers/health.controller';
     AppEmailService,
     CsrfGuard,
     PlatformSignerService,
+    KeiboContractConfigService,
     RateLimitService,
     RateLimitGuard,
   ],
@@ -22,6 +24,7 @@ import { HealthController } from './controllers/health.controller';
     AppEmailService,
     CsrfGuard,
     PlatformSignerService,
+    KeiboContractConfigService,
     RateLimitService,
     RateLimitGuard,
   ],

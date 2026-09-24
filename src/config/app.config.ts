@@ -24,11 +24,18 @@ export default () => ({
       : undefined,
     chainName: process.env.CHAIN_NAME,
     contracts: {
+      // Legacy runtime addresses. They must never be used with the KEIBO ABIs.
       escrow: process.env.ESCROW_CONTRACT_ADDRESS,
       nft: process.env.NFT_CONTRACT_ADDRESS,
       voting: process.env.VOTING_CONTRACT_ADDRESS,
       dealRoom: process.env.DEALROOM_CONTRACT_ADDRESS,
       treasury: process.env.TREASURY_CONTRACT_ADDRESS,
+    },
+    keiboContracts: {
+      escrow: process.env.KEIBO_ESCROW_CONTRACT_ADDRESS,
+      governance: process.env.KEIBO_GOVERNANCE_CONTRACT_ADDRESS,
+      receipt: process.env.KEIBO_RECEIPT_CONTRACT_ADDRESS,
+      evidence: process.env.KEIBO_EVIDENCE_CONTRACT_ADDRESS,
     },
     signerProvider: process.env.PLATFORM_SIGNER_PROVIDER || 'disabled',
   },
