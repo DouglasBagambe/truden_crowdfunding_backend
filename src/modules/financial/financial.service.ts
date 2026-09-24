@@ -11,6 +11,7 @@ import { FINANCIAL_SCHEMA_SQL } from './financial.schema';
 import { ProjectsService } from '../projects/projects.service';
 import { EscrowWeb3Service } from '../escrow/escrow.web3';
 import type { Address, Hash } from 'viem';
+import { UsersRepository } from '../users/repositories/users.repository';
 import type {
   LedgerLine,
   PaymentIntentInput,
@@ -76,6 +77,7 @@ export class FinancialService {
     private readonly database: FinancialDatabase,
     private readonly projectsService: ProjectsService,
     private readonly escrowWeb3: EscrowWeb3Service,
+    private readonly usersRepository: UsersRepository,
   ) {}
 
   async initializeSchema(): Promise<void> {
@@ -173,6 +175,17 @@ export class FinancialService {
       );
     }
     const payment = intent.rows[0];
+    const user = await this.usersRepository.findById(params.contributorId);
+    const wallets = new Set(
+      [user?.primaryWallet, ...(user?.linkedWallets ?? [])]
+        .filter((wallet): wallet is string => typeof wallet === 'string')
+        .map((wallet) => wallet.toLowerCase()),
+    );
+    if (!wallets.has(params.investorWallet.toLowerCase())) {
+      throw new ConflictException(
+        'Wallet is not linked to the authenticated payment-intent owner',
+      );
+    }
     if (payment.currency !== 'USDC') {
       throw new ConflictException(
         'KEIBO on-chain contribution settlement requires USDC',

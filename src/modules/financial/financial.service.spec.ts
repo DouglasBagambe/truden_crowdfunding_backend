@@ -19,15 +19,18 @@ describe('FinancialService contribution eligibility', () => {
       }),
       verifyDepositTx: jest.fn(),
     };
+    const usersRepository = { findById: jest.fn() };
     return {
       service: new FinancialService(
         database as never,
         projectsService as never,
         escrowWeb3 as never,
+        usersRepository as never,
       ),
       database,
       projectsService,
       escrowWeb3,
+      usersRepository,
     };
   };
 
@@ -232,7 +235,8 @@ describe('FinancialService contribution eligibility', () => {
   });
 
   it('rejects a replayed chain transaction before it can post a second journal', async () => {
-    const { service, database, projectsService, escrowWeb3 } = createService();
+    const { service, database, projectsService, escrowWeb3, usersRepository } =
+      createService();
     const chainHash = `0x${'a'.repeat(64)}`;
     database.query.mockResolvedValue({
       rowCount: 1,
@@ -246,6 +250,10 @@ describe('FinancialService contribution eligibility', () => {
       ],
     });
     projectsService.assertProjectOnchainId.mockResolvedValue(undefined);
+    usersRepository.findById.mockResolvedValue({
+      primaryWallet: '0x0000000000000000000000000000000000000002',
+      linkedWallets: [],
+    });
     escrowWeb3.verifyDepositTx.mockResolvedValue(true);
     database.transaction.mockImplementation(
       (callback: (client: { query: jest.Mock }) => Promise<unknown>) =>
@@ -279,5 +287,36 @@ describe('FinancialService contribution eligibility', () => {
         correlationId: 'correlation-1',
       }),
     ).rejects.toThrow('already been reserved');
+  });
+
+  it('rejects a wallet that is not linked to the authenticated intent owner', async () => {
+    const { service, database, usersRepository, escrowWeb3 } = createService();
+    database.query.mockResolvedValue({
+      rowCount: 1,
+      rows: [
+        {
+          project_id: 'project-1',
+          contributor_id: 'investor-1',
+          amount_minor: '1000000',
+          currency: 'USDC',
+        },
+      ],
+    });
+    usersRepository.findById.mockResolvedValue({
+      primaryWallet: '0x0000000000000000000000000000000000000003',
+      linkedWallets: [],
+    });
+
+    await expect(
+      service.settleVerifiedOnchainContribution({
+        paymentIntentId: 'intent-1',
+        contributorId: 'investor-1',
+        projectOnchainId: '42',
+        investorWallet: '0x0000000000000000000000000000000000000002',
+        transactionHash: `0x${'a'.repeat(64)}`,
+        correlationId: 'correlation-1',
+      }),
+    ).rejects.toThrow('not linked');
+    expect(escrowWeb3.verifyDepositTx).not.toHaveBeenCalled();
   });
 });

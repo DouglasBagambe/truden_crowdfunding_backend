@@ -9,7 +9,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { IsString, Matches } from 'class-validator';
+import { IsEthereumAddress, IsString, Matches } from 'class-validator';
 import { Public } from '../../common/decorators/public.decorator';
 import { CsrfExempt } from '../../common/decorators/csrf-exempt.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -28,6 +28,12 @@ class ReconcileDto {
   @IsString() @Matches(/^[A-Za-z]{3}$/) currency!: string;
   @IsString() @Matches(/^\d+$/) providerTotalMinor!: string;
   @IsString() evidenceReference!: string;
+}
+class SubmitOnchainContributionDto {
+  @IsString() paymentIntentId!: string;
+  @IsString() @Matches(/^\d+$/) projectOnchainId!: string;
+  @IsEthereumAddress() investorWallet!: string;
+  @IsString() @Matches(/^0x[0-9a-fA-F]{64}$/) transactionHash!: string;
 }
 
 @Controller('financial')
@@ -64,6 +70,23 @@ export class FinancialController {
     const contributorId = request.user?.sub ?? request.user?.userId;
     if (!contributorId) throw new Error('Authenticated user is required');
     return this.financial.getPaymentIntent(id, contributorId);
+  }
+
+  @Post('onchain-contributions')
+  submitOnchainContribution(
+    @Body() dto: SubmitOnchainContributionDto,
+    @Request() request: { user: { sub?: string; userId?: string } },
+  ) {
+    const contributorId = request.user?.sub ?? request.user?.userId;
+    if (!contributorId) throw new Error('Authenticated user is required');
+    return this.financial.settleVerifiedOnchainContribution({
+      paymentIntentId: dto.paymentIntentId,
+      contributorId,
+      projectOnchainId: dto.projectOnchainId,
+      investorWallet: dto.investorWallet as `0x${string}`,
+      transactionHash: dto.transactionHash as `0x${string}`,
+      correlationId: randomUUID(),
+    });
   }
 
   @Public()

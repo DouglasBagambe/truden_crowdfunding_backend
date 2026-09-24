@@ -13,6 +13,7 @@ async function migrateFinancialSchema(): Promise<void> {
     database,
     projectsService,
     undefined as never,
+    undefined as never,
   );
 
   try {

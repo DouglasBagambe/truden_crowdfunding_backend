@@ -35,6 +35,7 @@ describe('financial PostgreSQL integration', () => {
     database,
     projectsService,
     undefined as never,
+    undefined as never,
   );
   const outbox = new FinancialOutboxService(database, config);
   const redis = createClient({ url: redisUrl });
