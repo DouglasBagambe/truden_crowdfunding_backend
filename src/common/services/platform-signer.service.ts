@@ -25,6 +25,7 @@ export interface PlatformWriteRequest {
 export class PlatformSignerService {
   readonly provider: string;
   private readonly walletClient?: ReturnType<typeof createWalletClient>;
+  private readonly expectedChainId?: number;
 
   constructor(private readonly configService: ConfigService) {
     this.provider =
@@ -49,6 +50,7 @@ export class PlatformSignerService {
       .get<string>('UAT_PLATFORM_SIGNER_PRIVATE_KEY')
       ?.trim();
     const rpcUrl = this.configService.get<string>('RPC_URL')?.trim();
+    const expectedChainId = Number(this.configService.get<string>('CHAIN_ID'));
     if (!privateKey || !/^0x[0-9a-fA-F]{64}$/.test(privateKey)) {
       throw new Error(
         'UAT_PLATFORM_SIGNER_PRIVATE_KEY must be a valid test-only private key',
@@ -57,18 +59,26 @@ export class PlatformSignerService {
     if (!rpcUrl) {
       throw new Error('RPC_URL is required for the local UAT signer');
     }
+    if (!Number.isSafeInteger(expectedChainId) || expectedChainId <= 0) {
+      throw new Error('CHAIN_ID is required for the local UAT signer');
+    }
+    this.expectedChainId = expectedChainId;
     this.walletClient = createWalletClient({
       account: privateKeyToAccount(privateKey as Hex),
       transport: http(rpcUrl),
     });
   }
 
-  writeContract(request: PlatformWriteRequest): Promise<Hash> {
+  async writeContract(request: PlatformWriteRequest): Promise<Hash> {
     if (!this.walletClient) {
-      return Promise.reject(
-        new ServiceUnavailableException(
-          'Privileged blockchain signing is disabled pending managed-signer approval',
-        ),
+      throw new ServiceUnavailableException(
+        'Privileged blockchain signing is disabled pending managed-signer approval',
+      );
+    }
+    const actualChainId = await this.walletClient.getChainId();
+    if (actualChainId !== this.expectedChainId) {
+      throw new ServiceUnavailableException(
+        'Signer RPC chain ID does not match CHAIN_ID',
       );
     }
     return this.walletClient.writeContract({

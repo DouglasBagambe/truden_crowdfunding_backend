@@ -23,6 +23,7 @@ describe('PlatformSignerService', () => {
         PLATFORM_SIGNER_PROVIDER: 'local',
         UAT_PLATFORM_SIGNER_PRIVATE_KEY: `0x${'1'.repeat(64)}`,
         RPC_URL: 'http://127.0.0.1:8545',
+        CHAIN_ID: '31337',
       }) as never,
     );
     expect(signer.provider).toBe('local');
@@ -37,8 +38,42 @@ describe('PlatformSignerService', () => {
             PLATFORM_SIGNER_PROVIDER: 'local',
             UAT_PLATFORM_SIGNER_PRIVATE_KEY: `0x${'1'.repeat(64)}`,
             RPC_URL: 'https://rpc.example.test',
+            CHAIN_ID: '11155111',
           }) as never,
         ),
     ).toThrow('prohibited in production');
+  });
+
+  it.each([
+    [
+      'missing key',
+      {
+        NODE_ENV: 'test',
+        PLATFORM_SIGNER_PROVIDER: 'local',
+        RPC_URL: 'http://127.0.0.1:8545',
+        CHAIN_ID: '31337',
+      },
+      'UAT_PLATFORM_SIGNER_PRIVATE_KEY',
+    ],
+    [
+      'malformed key',
+      {
+        NODE_ENV: 'test',
+        PLATFORM_SIGNER_PROVIDER: 'local',
+        UAT_PLATFORM_SIGNER_PRIVATE_KEY: 'bad',
+        RPC_URL: 'http://127.0.0.1:8545',
+        CHAIN_ID: '31337',
+      },
+      'UAT_PLATFORM_SIGNER_PRIVATE_KEY',
+    ],
+    [
+      'unsupported provider',
+      { PLATFORM_SIGNER_PROVIDER: 'hsm' },
+      'Unsupported PLATFORM_SIGNER_PROVIDER',
+    ],
+  ])('rejects %s', (_name, values, message) => {
+    expect(() => new PlatformSignerService(config(values) as never)).toThrow(
+      message,
+    );
   });
 });
