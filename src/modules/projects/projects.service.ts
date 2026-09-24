@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -148,6 +149,9 @@ export class ProjectsService {
       { ...dto, type: projectType },
       { requireType: true },
     );
+    if (projectType === ProjectType.CHARITY && dto.milestones?.length) {
+      this.assertCharityMilestoneSchedule(dto.milestones);
+    }
     if (projectType === ProjectType.ROI) {
       if (!hasBackendRoiAccess(creatorId, this.configService)) {
         throw new ForbiddenException(
@@ -389,6 +393,14 @@ export class ProjectsService {
     await this.projectsRepo.updateById(projectId, { $set: setPayload });
 
     if (dto.milestones) {
+      if (currentType === ProjectType.CHARITY) {
+        if (project.status === ProjectStatus.APPROVED) {
+          throw new ConflictException(
+            'Approved charity campaign milestones cannot be changed',
+          );
+        }
+        this.assertCharityMilestoneSchedule(dto.milestones);
+      }
       await this.milestonesRepo.deleteByProject(projectId);
       if (dto.milestones.length > 0) {
         const milestonesPayload = dto.milestones.map((m) => ({
@@ -1805,12 +1817,13 @@ export class ProjectsService {
     this.ensureValidObjectId(params.projectId);
     this.ensureValidObjectId(params.milestoneId);
 
-    const [project, milestone] = await Promise.all([
+    const [project, milestone, milestones] = await Promise.all([
       this.projectsRepo.findById(params.projectId),
       this.milestonesRepo.findByIdForProject(
         params.projectId,
         params.milestoneId,
       ),
+      this.milestonesRepo.findByProject(params.projectId),
     ]);
     if (!project) throw new NotFoundException('Project not found');
     if (!milestone) throw new NotFoundException('Milestone not found');
@@ -1840,6 +1853,8 @@ export class ProjectsService {
       throw new BadRequestException('Milestone is not approved for release');
     }
 
+    this.assertCharityMilestoneSchedule(milestones);
+
     const payoutPercentage = milestone.payoutPercentage;
     if (
       payoutPercentage === undefined ||
@@ -1853,6 +1868,35 @@ export class ProjectsService {
     }
 
     return { creatorId, currency: project.currency, payoutPercentage };
+  }
+
+  private assertCharityMilestoneSchedule(
+    milestones: Array<{ payoutPercentage?: number }>,
+  ) {
+    if (milestones.length === 0) {
+      throw new BadRequestException(
+        'Charity campaign releases require at least one milestone',
+      );
+    }
+    const total = milestones.reduce((sum, milestone) => {
+      const percentage = milestone.payoutPercentage;
+      if (
+        percentage === undefined ||
+        !Number.isSafeInteger(percentage) ||
+        percentage <= 0 ||
+        percentage > 100
+      ) {
+        throw new BadRequestException(
+          'Charity milestone payout percentages must be whole values from 1 to 100',
+        );
+      }
+      return sum + percentage;
+    }, 0);
+    if (total !== 100) {
+      throw new BadRequestException(
+        'Charity milestone payout percentages must total exactly 100',
+      );
+    }
   }
 
   private async ensureCreatorEligible(ownerId: string) {

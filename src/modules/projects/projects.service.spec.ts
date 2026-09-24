@@ -144,7 +144,7 @@ describe('ProjectsService charity release eligibility', () => {
     _id: '507f1f77bcf86cd799439013',
     projectId: mockProjectId,
     status: MilestoneStatus.APPROVED,
-    payoutPercentage: 50,
+    payoutPercentage: 100,
   });
 
   it('permits only the active, verified campaign creator for an approved charity milestone', async () => {
@@ -152,6 +152,7 @@ describe('ProjectsService charity release eligibility', () => {
       createService();
     projectsRepo.findById.mockResolvedValue(charityProject());
     milestonesRepo.findByIdForProject.mockResolvedValue(approvedMilestone());
+    milestonesRepo.findByProject.mockResolvedValue([approvedMilestone()]);
     usersRepo.findById.mockResolvedValue(creatorWithWallet());
 
     await expect(
@@ -164,7 +165,7 @@ describe('ProjectsService charity release eligibility', () => {
     ).resolves.toEqual({
       creatorId: mockCreatorId,
       currency: 'UGX',
-      payoutPercentage: 50,
+      payoutPercentage: 100,
     });
   });
 
@@ -172,6 +173,7 @@ describe('ProjectsService charity release eligibility', () => {
     const { service, projectsRepo, milestonesRepo } = createService();
     projectsRepo.findById.mockResolvedValue(charityProject());
     milestonesRepo.findByIdForProject.mockResolvedValue(approvedMilestone());
+    milestonesRepo.findByProject.mockResolvedValue([approvedMilestone()]);
 
     await expect(
       service.getCharityMilestoneReleaseEligibility({
@@ -191,6 +193,9 @@ describe('ProjectsService charity release eligibility', () => {
       ...approvedMilestone(),
       payoutPercentage: 0,
     });
+    milestonesRepo.findByProject.mockResolvedValue([
+      { ...approvedMilestone(), payoutPercentage: 0 },
+    ]);
     usersRepo.findById.mockResolvedValue(creatorWithWallet());
 
     await expect(
@@ -200,7 +205,32 @@ describe('ProjectsService charity release eligibility', () => {
         requesterId: mockCreatorId,
         isAdmin: false,
       }),
-    ).rejects.toThrow('payout allocation');
+    ).rejects.toThrow('whole values from 1 to 100');
+  });
+
+  it('rejects a charity payout schedule whose allocations do not total 100 percent', async () => {
+    const { service, projectsRepo, milestonesRepo, usersRepo } =
+      createService();
+    projectsRepo.findById.mockResolvedValue(charityProject());
+    milestonesRepo.findByIdForProject.mockResolvedValue(approvedMilestone());
+    milestonesRepo.findByProject.mockResolvedValue([
+      approvedMilestone(),
+      {
+        ...approvedMilestone(),
+        _id: '507f1f77bcf86cd799439014',
+        payoutPercentage: 60,
+      },
+    ]);
+    usersRepo.findById.mockResolvedValue(creatorWithWallet());
+
+    await expect(
+      service.getCharityMilestoneReleaseEligibility({
+        projectId: mockProjectId,
+        milestoneId: '507f1f77bcf86cd799439013',
+        requesterId: mockCreatorId,
+        isAdmin: false,
+      }),
+    ).rejects.toThrow('total exactly 100');
   });
 });
 

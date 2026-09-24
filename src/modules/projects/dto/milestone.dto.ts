@@ -1,5 +1,13 @@
 import { Transform } from 'class-transformer';
-import { IsDate, IsOptional, IsString, Length } from 'class-validator';
+import {
+  IsDate,
+  IsInt,
+  IsOptional,
+  IsString,
+  Length,
+  Max,
+  Min,
+} from 'class-validator';
 import {
   ApiProperty,
   ApiPropertyOptional,
@@ -14,8 +22,13 @@ export class MilestoneDto {
   @Length(2, 128)
   title!: string;
 
-  @ApiPropertyOptional({ description: 'Milestone description (optional — defaults to title if omitted)' })
-  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
+  @ApiPropertyOptional({
+    description:
+      'Milestone description (optional — defaults to title if omitted)',
+  })
+  @Transform(({ value }) =>
+    typeof value === 'string' && value.trim() === '' ? undefined : value,
+  )
   @IsOptional()
   @IsString()
   @Length(4, 2000)
@@ -35,6 +48,9 @@ export class MilestoneDto {
     default: 0,
   })
   @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100)
   payoutPercentage?: number = 0;
 
   @ApiPropertyOptional({
