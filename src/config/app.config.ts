@@ -37,6 +37,7 @@ export default () => ({
       receipt: process.env.KEIBO_RECEIPT_CONTRACT_ADDRESS,
       evidence: process.env.KEIBO_EVIDENCE_CONTRACT_ADDRESS,
     },
+    eligibilitySigner: process.env.KEIBO_ELIGIBILITY_SIGNER_ADDRESS,
     signerProvider: process.env.PLATFORM_SIGNER_PROVIDER || 'disabled',
   },
   cors: {

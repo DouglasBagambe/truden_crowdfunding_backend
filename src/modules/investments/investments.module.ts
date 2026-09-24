@@ -6,6 +6,7 @@ import { InvestmentsController } from './controllers/investments.controller';
 import { InvestmentsService } from './services/investments.service';
 import { InvestmentNFTService } from './services/investment-nft.service';
 import { PaymentInvestmentListener } from './listeners/payment-investment.listener';
+import { KeiboInvestmentReceiptService } from './services/keibo-investment-receipt.service';
 import { Investment, InvestmentSchema } from './schemas/investment.schema';
 import { AuthModule } from '../auth/auth.module';
 import { ProjectsModule } from '../projects/projects.module';
@@ -37,8 +38,9 @@ import {
     InvestmentsService,
     InvestmentNFTService,
     PaymentInvestmentListener,
+    KeiboInvestmentReceiptService,
     RolesGuard,
   ],
   exports: [InvestmentsService, InvestmentNFTService],
 })
-export class InvestmentsModule { }
+export class InvestmentsModule {}

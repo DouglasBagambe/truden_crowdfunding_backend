@@ -1,7 +1,6 @@
 import { KeiboContractConfigService } from './keibo-contract-config.service';
 
-const address = (suffix: string) =>
-  `0x${suffix.padStart(40, '0')}`;
+const address = (suffix: string) => `0x${suffix.padStart(40, '0')}`;
 
 const values = (overrides: Record<string, unknown> = {}) => ({
   BLOCKCHAIN_FEATURES_ENABLED: 'true',
@@ -11,6 +10,7 @@ const values = (overrides: Record<string, unknown> = {}) => ({
   KEIBO_GOVERNANCE_CONTRACT_ADDRESS: address('2'),
   KEIBO_RECEIPT_CONTRACT_ADDRESS: address('3'),
   KEIBO_EVIDENCE_CONTRACT_ADDRESS: address('4'),
+  KEIBO_ELIGIBILITY_SIGNER_ADDRESS: address('5'),
   ...overrides,
 });
 
@@ -20,7 +20,9 @@ const config = (entries: Record<string, unknown>) => ({
 
 describe('KeiboContractConfigService', () => {
   it('accepts only an explicit complete KEIBO configuration', () => {
-    const result = new KeiboContractConfigService(config(values()) as never).getRequired();
+    const result = new KeiboContractConfigService(
+      config(values()) as never,
+    ).getRequired();
 
     expect(result.chainId).toBe(11155111);
     expect(result.escrow).toBe(address('1'));
@@ -36,11 +38,34 @@ describe('KeiboContractConfigService', () => {
   });
 
   it.each([
-    ['missing address', { KEIBO_ESCROW_CONTRACT_ADDRESS: '' }, 'KEIBO_ESCROW_CONTRACT_ADDRESS is required'],
-    ['legacy address cannot substitute', { KEIBO_ESCROW_CONTRACT_ADDRESS: undefined, ESCROW_CONTRACT_ADDRESS: address('9') }, 'KEIBO_ESCROW_CONTRACT_ADDRESS is required'],
-    ['invalid address', { KEIBO_RECEIPT_CONTRACT_ADDRESS: 'not-an-address' }, 'KEIBO_RECEIPT_CONTRACT_ADDRESS must be a non-zero address'],
-    ['zero address', { KEIBO_EVIDENCE_CONTRACT_ADDRESS: address('0') }, 'KEIBO_EVIDENCE_CONTRACT_ADDRESS must be a non-zero address'],
-    ['invalid rpc', { RPC_URL: 'file:///tmp/rpc' }, 'RPC_URL must be a valid HTTP(S) URL'],
+    [
+      'missing address',
+      { KEIBO_ESCROW_CONTRACT_ADDRESS: '' },
+      'KEIBO_ESCROW_CONTRACT_ADDRESS is required',
+    ],
+    [
+      'legacy address cannot substitute',
+      {
+        KEIBO_ESCROW_CONTRACT_ADDRESS: undefined,
+        ESCROW_CONTRACT_ADDRESS: address('9'),
+      },
+      'KEIBO_ESCROW_CONTRACT_ADDRESS is required',
+    ],
+    [
+      'invalid address',
+      { KEIBO_RECEIPT_CONTRACT_ADDRESS: 'not-an-address' },
+      'KEIBO_RECEIPT_CONTRACT_ADDRESS must be a non-zero address',
+    ],
+    [
+      'zero address',
+      { KEIBO_EVIDENCE_CONTRACT_ADDRESS: address('0') },
+      'KEIBO_EVIDENCE_CONTRACT_ADDRESS must be a non-zero address',
+    ],
+    [
+      'invalid rpc',
+      { RPC_URL: 'file:///tmp/rpc' },
+      'RPC_URL must be a valid HTTP(S) URL',
+    ],
     ['invalid chain', { CHAIN_ID: '0' }, 'CHAIN_ID must be a positive integer'],
   ])('%s', (_name, override, message) => {
     const service = new KeiboContractConfigService(

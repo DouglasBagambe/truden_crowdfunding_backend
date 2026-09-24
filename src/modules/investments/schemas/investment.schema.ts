@@ -10,6 +10,14 @@ export enum MintStatus {
   BYPASSED = 'BYPASSED', // Test-only: minting explicitly skipped via env flag
 }
 
+export enum ReceiptStatus {
+  PENDING = 'PENDING',
+  SUBMITTED = 'SUBMITTED',
+  ISSUED = 'ISSUED',
+  FAILED = 'FAILED',
+  REVOKED = 'REVOKED',
+}
+
 @Schema({ timestamps: true })
 export class Investment {
   @Prop({
@@ -95,6 +103,20 @@ export class Investment {
   /** Whether the investment was created while provisioning bypass was active */
   @Prop({ type: Boolean, default: false })
   mintBypassedProvisioningCheck!: boolean;
+
+  /** KEIBO non-transferable receipt lifecycle; separate from legacy NFT state. */
+  @Prop({
+    type: String,
+    enum: Object.values(ReceiptStatus),
+    default: ReceiptStatus.PENDING,
+    index: true,
+  })
+  receiptStatus!: ReceiptStatus;
+
+  @Prop({ type: String, default: null }) receiptPolicyHash?: string | null;
+  @Prop({ type: String, default: null }) receiptNonce?: string | null;
+  @Prop({ type: String, default: null }) receiptTxHash?: string | null;
+  @Prop({ type: String, default: null }) receiptError?: string | null;
 
   /** Whether the investor has listed this position on the marketplace */
   @Prop({ type: Boolean, default: false })

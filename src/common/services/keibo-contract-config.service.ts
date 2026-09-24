@@ -9,6 +9,7 @@ export interface KeiboContractConfig {
   governance: Address;
   receipt: Address;
   evidence: Address;
+  eligibilitySigner: Address;
 }
 
 /**
@@ -24,7 +25,8 @@ export class KeiboContractConfigService {
     const configured = this.configService.get<unknown>(
       'BLOCKCHAIN_FEATURES_ENABLED',
     );
-    if (configured !== undefined) return configured === true || configured === 'true';
+    if (configured !== undefined)
+      return configured === true || configured === 'true';
     return this.configService.get<boolean>('blockchain.enabled') === true;
   }
 
@@ -40,13 +42,18 @@ export class KeiboContractConfigService {
     try {
       parsedUrl = new URL(rpcUrl);
     } catch {
-      throw new ServiceUnavailableException('RPC_URL must be a valid HTTP(S) URL');
+      throw new ServiceUnavailableException(
+        'RPC_URL must be a valid HTTP(S) URL',
+      );
     }
     if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-      throw new ServiceUnavailableException('RPC_URL must be a valid HTTP(S) URL');
+      throw new ServiceUnavailableException(
+        'RPC_URL must be a valid HTTP(S) URL',
+      );
     }
 
-    const rawChainId = this.configService.get<unknown>('CHAIN_ID') ??
+    const rawChainId =
+      this.configService.get<unknown>('CHAIN_ID') ??
       this.configService.get<unknown>('blockchain.chainId');
     const chainId =
       typeof rawChainId === 'number'
@@ -55,7 +62,9 @@ export class KeiboContractConfigService {
           ? Number(rawChainId)
           : Number.NaN;
     if (!Number.isSafeInteger(chainId) || chainId <= 0) {
-      throw new ServiceUnavailableException('CHAIN_ID must be a positive integer');
+      throw new ServiceUnavailableException(
+        'CHAIN_ID must be a positive integer',
+      );
     }
 
     return {
@@ -77,11 +86,16 @@ export class KeiboContractConfigService {
         'KEIBO_EVIDENCE_CONTRACT_ADDRESS',
         'blockchain.keiboContracts.evidence',
       ),
+      eligibilitySigner: this.requiredAddress(
+        'KEIBO_ELIGIBILITY_SIGNER_ADDRESS',
+        'blockchain.eligibilitySigner',
+      ),
     };
   }
 
   private requiredString(rawKey: string, configKey: string): string {
-    const value = this.configService.get<string>(rawKey)?.trim() ||
+    const value =
+      this.configService.get<string>(rawKey)?.trim() ||
       this.configService.get<string>(configKey)?.trim();
     if (!value) {
       throw new ServiceUnavailableException(`${rawKey} is required`);
@@ -92,7 +106,9 @@ export class KeiboContractConfigService {
   private requiredAddress(rawKey: string, configKey: string): Address {
     const value = this.requiredString(rawKey, configKey);
     if (!isAddress(value) || value.toLowerCase() === zeroAddress) {
-      throw new ServiceUnavailableException(`${rawKey} must be a non-zero address`);
+      throw new ServiceUnavailableException(
+        `${rawKey} must be a non-zero address`,
+      );
     }
     return value;
   }
