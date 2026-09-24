@@ -95,7 +95,13 @@ export class KeiboGovernanceService {
     role: Hex;
     account: Address;
   }): Promise<Hash> {
-    if (!this.bytes32(params.role) || !isAddress(params.account))
+    if (
+      !Number.isInteger(params.action) ||
+      params.action < 0 ||
+      params.action > 3 ||
+      !this.bytes32(params.role) ||
+      !isAddress(params.account)
+    )
       throw new ConflictException('Invalid bounded governance action');
     const { client, address } = await this.ready();
     const hash = await this.signer.writeContract({
