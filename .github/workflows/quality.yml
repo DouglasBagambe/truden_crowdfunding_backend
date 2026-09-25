@@ -74,12 +74,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build
+        run: npm run build
       - name: Apply financial migration
         run: npm run financial:migrate
       - name: Prove financial migration idempotency
         run: npm run financial:migrate
-      - name: Build
-        run: npm run build
       - name: Unit tests
         run: npm run test:unit -- --runInBand
       - name: Financial integration tests

@@ -22,7 +22,8 @@ RUN npm prune --omit=dev && npm cache clean --force
 # Runtime
 FROM node:22-alpine AS runner
 WORKDIR /app
-ENV NODE_ENV=production
+
+# NODE_ENV is set by the deployment; UAT requires a non-production value.
 
 COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/package*.json ./
