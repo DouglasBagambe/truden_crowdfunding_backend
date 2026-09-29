@@ -2,7 +2,10 @@ import { FinancialController } from '../../modules/financial/financial.controlle
 import { InvestmentsController } from '../../modules/investments/controllers/investments.controller';
 import { MarketplaceController } from '../../modules/marketplace/marketplace.controller';
 import { NftController } from '../../modules/nfts/nft.controller';
-import { WalletController } from '../../modules/payments/payments.controller';
+import {
+  PaymentsController,
+  WalletController,
+} from '../../modules/payments/payments.controller';
 import { TreasuryController } from '../../modules/treasury/treasury.controller';
 import {
   KEIBO_LEGACY_ROUTE_DISABLED,
@@ -205,6 +208,18 @@ describe('KEIBO legacy route isolation', () => {
         idempotencyKey: 'key',
       }),
     );
+  });
+
+  it('rejects the legacy Mongo-backed payout callback before it can mutate payment state', async () => {
+    const payments = { handlePayoutCallback: jest.fn() };
+    const controller = new PaymentsController(
+      payments as never,
+      {} as never,
+      keiboModeGuard(),
+    );
+
+    await blocked(() => controller.handlePayoutCallback({}, 'signature'));
+    expect(payments.handlePayoutCallback).not.toHaveBeenCalled();
   });
 
   it('keeps verified on-chain contribution settlement independent from legacy-route isolation', () => {

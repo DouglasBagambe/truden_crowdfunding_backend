@@ -55,6 +55,7 @@ export class PaymentsController {
   constructor(
     private readonly paymentsService: PaymentsService,
     private readonly usersService: UsersService,
+    private readonly legacyRouteGuard: KeiboLegacyRouteGuard,
   ) {}
 
   private getFrontendUrl(): string {
@@ -209,6 +210,7 @@ export class PaymentsController {
     @Body() payload: Record<string, unknown>,
     @Headers('verif-hash') signature?: string,
   ) {
+    this.legacyRouteGuard.rejectInKeiboMode();
     return this.paymentsService.handlePayoutCallback(payload, signature);
   }
 
