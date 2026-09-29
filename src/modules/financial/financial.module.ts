@@ -15,6 +15,7 @@ import { FinancialProjectionWorker } from './projections/financial-projection.wo
 import { FinancialWorkersService } from './financial-workers.service';
 import { FinancialJobsService } from './financial-jobs.service';
 import { FinancialPayoutService } from './financial-payout.service';
+import { FinancialPayoutWorker } from './financial-payout.worker';
 import { ProjectsModule } from '../projects/projects.module';
 import { UsersModule } from '../users/users.module';
 import { HttpModule } from '@nestjs/axios';
@@ -42,6 +43,7 @@ import { FlutterwaveV4PayoutAdapter } from './providers/flutterwave-v4-payout.ad
     FinancialWorkersService,
     FinancialJobsService,
     FinancialPayoutService,
+    FinancialPayoutWorker,
   ],
   exports: [
     FinancialService,

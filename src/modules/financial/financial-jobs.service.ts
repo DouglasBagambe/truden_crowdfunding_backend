@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { FinancialDatabase } from './financial.database';
 import type { PoolClient } from 'pg';
+import { FinancialPayoutWorker } from './financial-payout.worker';
 
 export type FinancialJobType = 'payout.dispatch.requested' | 'payout.reconcile.requested' | 'receipt.authorize.requested' | 'receipt.issue.requested' | 'receipt.finalize.requested' | 'receipt.revoke.requested' | 'receipt.reconcile.requested';
 type JobRow = { id: string; job_type: FinancialJobType; aggregate_id: string; payload: Record<string, unknown>; attempts: number; max_attempts: number };
@@ -11,7 +12,7 @@ const BACKOFF_SECONDS = [5, 30, 120, 600, 3600, 21600];
 export class FinancialJobsService {
   private readonly logger = new Logger(FinancialJobsService.name);
   readonly workerId = `financial-worker:${randomUUID()}`;
-  constructor(private readonly database: FinancialDatabase) {}
+  constructor(private readonly database: FinancialDatabase, private readonly payouts?: FinancialPayoutWorker) {}
   async enqueue(client: PoolClient, job: { type: FinancialJobType; aggregateType: string; aggregateId: string; deduplicationKey: string; payload: Record<string, unknown> }) {
     await client.query(`INSERT INTO financial_jobs (job_type,aggregate_type,aggregate_id,deduplication_key,payload) VALUES ($1,$2,$3,$4,$5::jsonb) ON CONFLICT (deduplication_key) DO NOTHING`, [job.type,job.aggregateType,job.aggregateId,job.deduplicationKey,JSON.stringify(job.payload)]);
   }
@@ -41,9 +42,8 @@ export class FinancialJobsService {
     }
   }
   private async handle(job: JobRow): Promise<void> {
-    // Handlers are deliberately registered only as their corresponding domain
-    // workflow becomes available. An unknown or prematurely queued operation
-    // is never treated as successful.
+    if (job.job_type === 'payout.dispatch.requested' && this.payouts) return this.payouts.dispatch(job.payload);
+    if (job.job_type === 'payout.reconcile.requested' && this.payouts) return this.payouts.reconcile(job.payload);
     throw Object.assign(new Error(`No durable handler registered for ${job.job_type}`), { code: 'JOB_HANDLER_UNAVAILABLE' });
   }
   private retryable(error: unknown) { const code = this.errorCode(error); return ['ETIMEDOUT','ECONNRESET','ECONNREFUSED','EAI_AGAIN','RPC_PENDING'].includes(code); }
