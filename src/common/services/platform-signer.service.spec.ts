@@ -16,7 +16,7 @@ describe('PlatformSignerService', () => {
     ).rejects.toThrow('signing is disabled');
   });
 
-  it('allows a local signer only outside production and never exposes its key', () => {
+  it('allows a local signer only in test and never exposes its key', () => {
     const signer = new PlatformSignerService(
       config({
         NODE_ENV: 'test',
@@ -29,19 +29,19 @@ describe('PlatformSignerService', () => {
     expect(signer.provider).toBe('local');
   });
 
-  it('rejects local signing in production', () => {
+  it.each(['production', 'development'])('rejects local signing in %s', (nodeEnv) => {
     expect(
       () =>
         new PlatformSignerService(
           config({
-            NODE_ENV: 'production',
+            NODE_ENV: nodeEnv,
             PLATFORM_SIGNER_PROVIDER: 'local',
             UAT_PLATFORM_SIGNER_PRIVATE_KEY: `0x${'1'.repeat(64)}`,
             RPC_URL: 'https://rpc.example.test',
             CHAIN_ID: '11155111',
           }) as never,
         ),
-    ).toThrow('prohibited in production');
+    ).toThrow('permitted only in NODE_ENV=test');
   });
 
   it.each([

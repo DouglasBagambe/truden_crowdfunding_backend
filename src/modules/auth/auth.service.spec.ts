@@ -213,6 +213,21 @@ describe('AuthService email verification (codes)', () => {
     } as Record<string, unknown>);
   });
 
+  it('fails closed when first-time verification email delivery is unavailable', async () => {
+    configService.get.mockImplementation(
+      ((key: string) => (key === 'NODE_ENV' ? 'development' : undefined)) as never,
+    );
+    await expect(
+      service['sendVerificationEmail'](email, code, true),
+    ).rejects.toThrow('Verification email delivery is unavailable');
+  });
+
+  it('does not report password-reset delivery when SendGrid is unavailable', async () => {
+    await expect(
+      service['sendPasswordResetEmail'](email, 'reset-token'),
+    ).resolves.toBe(false);
+  });
+
   it('does not bypass verification delivery on hosted development deployments', async () => {
     const user = mockUser();
     userModel.findOne.mockReturnValue(makeSelectableQuery(user));

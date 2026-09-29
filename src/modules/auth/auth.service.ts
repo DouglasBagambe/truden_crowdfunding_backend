@@ -138,6 +138,7 @@ export class AuthService {
         sendCount: 1,
         rateLimitReset: Date.now() + this.emailVerificationWindowMs,
         resetAttempts: true,
+        strictDelivery: true,
       });
     }
 
@@ -770,7 +771,11 @@ export class AuthService {
     );
 
     const resetToken = await this.createPasswordResetToken(user);
-    await this.sendPasswordResetEmail(user.email, resetToken);
+    const delivered = await this.sendPasswordResetEmail(user.email, resetToken);
+    if (!delivered) {
+      this.logger.warn('Password reset email delivery failed');
+      return { message: 'If an account exists, a reset email will be sent.' };
+    }
     await this.userModel
       .findByIdAndUpdate(user._id, {
         passwordResetSentAt: new Date(),
@@ -1477,15 +1482,15 @@ export class AuthService {
   private async sendPasswordResetEmail(
     email: string | undefined,
     token: string,
-  ) {
-    if (!email) return;
+  ): Promise<boolean> {
+    if (!email) return false;
     const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
     const from = this.configService.get<string>('EMAIL_FROM');
     if (!apiKey || !from) {
       this.logger.warn(
         'Skipping password reset email: SENDGRID_API_KEY or EMAIL_FROM missing',
       );
-      return;
+      return false;
     }
     sgMail.setApiKey(apiKey);
     const residency = this.configService.get<string>('SENDGRID_RESIDENCY');
@@ -1525,8 +1530,10 @@ export class AuthService {
         html,
       });
       this.logger.debug('Password reset email sent');
+      return true;
     } catch {
       this.logger.warn('Password reset email delivery failed');
+      return false;
     }
   }
 

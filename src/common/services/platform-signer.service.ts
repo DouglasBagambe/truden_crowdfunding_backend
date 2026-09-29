@@ -41,9 +41,9 @@ export class PlatformSignerService {
     const nodeEnv =
       this.configService.get<string>('NODE_ENV')?.trim().toLowerCase() ||
       'development';
-    if (nodeEnv === 'production') {
+    if (nodeEnv !== 'test') {
       throw new Error(
-        'PLATFORM_SIGNER_PROVIDER=local is prohibited in production',
+        'PLATFORM_SIGNER_PROVIDER=local is permitted only in NODE_ENV=test',
       );
     }
     const privateKey = this.configService
