@@ -228,6 +228,7 @@ describe('KEIBO legacy route isolation', () => {
       financial as never,
       {} as never,
       {} as never,
+      {} as never,
     );
 
     controller.submitOnchainContribution(

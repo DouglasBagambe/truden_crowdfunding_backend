@@ -17,6 +17,7 @@ import { UserRole } from '../../common/enums/role.enum';
 import { FinancialService } from './financial.service';
 import { FlutterwaveFinancialAdapter } from './providers/flutterwave-financial.adapter';
 import { FinancialOutboxService } from './financial-outbox.service';
+import { FinancialPayoutService } from './financial-payout.service';
 
 class CreatePaymentIntentDto {
   @IsString() projectId!: string;
@@ -35,6 +36,8 @@ class SubmitOnchainContributionDto {
   @IsEthereumAddress() investorWallet!: string;
   @IsString() @Matches(/^0x[0-9a-fA-F]{64}$/) transactionHash!: string;
 }
+class PayoutDestinationDto { @IsString() @Matches(/^(bank|mobile_money)$/) type!: 'bank'|'mobile_money'; @IsString() accountNumber!: string; @IsString() bankOrNetwork!: string; @IsString() accountName?:string; }
+class PayoutRequestDto { @IsString() destinationId!:string; }
 
 @Controller('financial')
 export class FinancialController {
@@ -42,6 +45,7 @@ export class FinancialController {
     private readonly financial: FinancialService,
     private readonly flutterwave: FlutterwaveFinancialAdapter,
     private readonly outbox: FinancialOutboxService,
+    private readonly payouts: FinancialPayoutService,
   ) {}
 
   @Post('payment-intents')
@@ -61,6 +65,12 @@ export class FinancialController {
       correlationId: randomUUID(),
     });
   }
+  @Post('payout-destinations') createDestination(@Body() dto:PayoutDestinationDto,@Headers('idempotency-key') key:string,@Request() req:{user:{sub?:string;userId?:string}}){const creatorId=req.user?.sub??req.user?.userId;if(!creatorId)throw new Error('Authenticated user is required');return this.payouts.createDestination({...dto,creatorId,idempotencyKey:key});}
+  @Get('payout-destinations') listDestinations(@Request() req:{user:{sub?:string;userId?:string}}){const creatorId=req.user?.sub??req.user?.userId;if(!creatorId)throw new Error('Authenticated user is required');return this.payouts.list(creatorId);}
+  @Post('payout-destinations/:id/disable') disableDestination(@Param('id')id:string,@Request()req:{user:{sub?:string;userId?:string}}){const creatorId=req.user?.sub??req.user?.userId;if(!creatorId)throw new Error('Authenticated user is required');return this.payouts.disable(creatorId,id);}
+  @Post('releases/:releaseId/payout') requestPayout(@Param('releaseId')releaseId:string,@Body()dto:PayoutRequestDto,@Headers('idempotency-key')key:string,@Request()req:{user:{sub?:string;userId?:string}}){const creatorId=req.user?.sub??req.user?.userId;if(!creatorId)throw new Error('Authenticated user is required');return this.payouts.request({creatorId,releaseId,destinationId:dto.destinationId,idempotencyKey:key});}
+  @Get('payouts') listPayouts(@Request()req:{user:{sub?:string;userId?:string}}){const creatorId=req.user?.sub??req.user?.userId;if(!creatorId)throw new Error('Authenticated user is required');return this.payouts.listPayouts(creatorId);}
+  @Get('payouts/:id') getPayout(@Param('id')id:string,@Request()req:{user:{sub?:string;userId?:string}}){const creatorId=req.user?.sub??req.user?.userId;if(!creatorId)throw new Error('Authenticated user is required');return this.payouts.getPayout(creatorId,id);}
 
   @Get('payment-intents/:id')
   getIntent(
