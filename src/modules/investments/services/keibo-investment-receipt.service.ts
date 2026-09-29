@@ -103,6 +103,21 @@ export class KeiboInvestmentReceiptService {
     eligibilitySignature: Hex;
     expectedNonce: bigint;
   }): Promise<Hash> {
+    const hash = await this.submitIssue(params);
+    const { client, runtime } = await this.ready();
+    await this.requireEvent(client, runtime.receipt, hash, 'ReceiptIssued');
+    return hash;
+  }
+
+  async submitIssue(params: {
+    investor: Address;
+    campaignId: string;
+    amount: bigint;
+    expiresAt: bigint;
+    policyHash: Hex;
+    eligibilitySignature: Hex;
+    expectedNonce: bigint;
+  }): Promise<Hash> {
     this.assertIssueInput(params);
     const { client, runtime } = await this.ready();
     const nonce = await client.readContract({
@@ -113,7 +128,7 @@ export class KeiboInvestmentReceiptService {
     });
     if (nonce !== params.expectedNonce)
       throw new ConflictException('Eligibility nonce is stale or replayed');
-    const hash = await this.signer.writeContract({
+    return this.signer.writeContract({
       address: runtime.receipt,
       abi: KEIBO_INVESTMENT_RECEIPT_ABI,
       functionName: 'issue',
@@ -126,8 +141,18 @@ export class KeiboInvestmentReceiptService {
         params.eligibilitySignature,
       ],
     });
-    await this.requireEvent(client, runtime.receipt, hash, 'ReceiptIssued');
-    return hash;
+  }
+
+  async getInvestorNonce(investor: Address): Promise<bigint> {
+    if (!isAddress(investor))
+      throw new ConflictException('Invalid receipt investor');
+    const { client, runtime } = await this.ready();
+    return client.readContract({
+      address: runtime.receipt,
+      abi: KEIBO_INVESTMENT_RECEIPT_ABI,
+      functionName: 'nonces',
+      args: [investor],
+    });
   }
 
   async revoke(params: {
@@ -143,8 +168,29 @@ export class KeiboInvestmentReceiptService {
       !this.bytes32(params.reasonHash)
     )
       throw new ConflictException('Invalid receipt revocation request');
-    const { client, runtime } = await this.ready();
-    const hash = await this.signer.writeContract({
+    const hash = await this.submitRevoke(params);
+    const receipt = await this.getTransactionReceipt(hash);
+    if (receipt.state !== 'SUCCESS')
+      throw new ConflictException('KEIBO receipt revocation has not succeeded');
+    this.inspectReceiptRevoked(receipt);
+    return hash;
+  }
+
+  async submitRevoke(params: {
+    investor: Address;
+    campaignId: string;
+    amount: bigint;
+    reasonHash: Hex;
+  }): Promise<Hash> {
+    if (
+      !isAddress(params.investor) ||
+      !/^\d+$/.test(params.campaignId) ||
+      params.amount <= 0n ||
+      !this.bytes32(params.reasonHash)
+    )
+      throw new ConflictException('Invalid receipt revocation request');
+    const { runtime } = await this.ready();
+    return this.signer.writeContract({
       address: runtime.receipt,
       abi: KEIBO_INVESTMENT_RECEIPT_ABI,
       functionName: 'revoke',
@@ -155,8 +201,125 @@ export class KeiboInvestmentReceiptService {
         params.reasonHash,
       ],
     });
-    await this.requireEvent(client, runtime.receipt, hash, 'ReceiptRevoked');
-    return hash;
+  }
+
+  async getTransactionReceipt(
+    hash: Hash,
+  ): Promise<
+    | { state: 'PENDING' }
+    | {
+        state: 'REVERTED' | 'SUCCESS';
+        transactionHash: Hash;
+        blockNumber: bigint;
+        transactionIndex: number;
+        logs: readonly {
+          address: Address;
+          data: Hex;
+          topics: readonly Hex[];
+          logIndex?: number;
+        }[];
+      }
+  > {
+    const { client } = await this.ready();
+    try {
+      const receipt = await client.getTransactionReceipt({ hash });
+      return {
+        state: receipt.status === 'success' ? 'SUCCESS' : 'REVERTED',
+        transactionHash: receipt.transactionHash,
+        blockNumber: receipt.blockNumber,
+        transactionIndex: receipt.transactionIndex,
+        logs: receipt.logs,
+      };
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        /not found|does not exist|unknown transaction/i.test(error.message)
+      )
+        return { state: 'PENDING' };
+      throw new ServiceUnavailableException(
+        'Unable to query KEIBO receipt transaction',
+      );
+    }
+  }
+
+  inspectReceiptIssued(
+    receipt: Exclude<
+      Awaited<
+        ReturnType<KeiboInvestmentReceiptService['getTransactionReceipt']>
+      >,
+      { state: 'PENDING' }
+    >,
+  ) {
+    return this.inspect(receipt, 'ReceiptIssued');
+  }
+  inspectReceiptRevoked(
+    receipt: Exclude<
+      Awaited<
+        ReturnType<KeiboInvestmentReceiptService['getTransactionReceipt']>
+      >,
+      { state: 'PENDING' }
+    >,
+  ) {
+    return this.inspect(receipt, 'ReceiptRevoked');
+  }
+
+  private inspect(
+    receipt: {
+      state: 'REVERTED' | 'SUCCESS';
+      transactionHash: Hash;
+      blockNumber: bigint;
+      logs: readonly {
+        address: Address;
+        data: Hex;
+        topics: readonly Hex[];
+        logIndex?: number;
+      }[];
+    },
+    eventName: 'ReceiptIssued' | 'ReceiptRevoked',
+  ) {
+    if (receipt.state !== 'SUCCESS')
+      throw new ConflictException(
+        'Cannot inspect reverted KEIBO receipt transaction',
+      );
+    const runtime = this.config.getRequired();
+    const matches = receipt.logs.flatMap((log) => {
+      if (log.address.toLowerCase() !== runtime.receipt.toLowerCase())
+        return [];
+      try {
+        const decoded = decodeEventLog({
+          abi: KEIBO_INVESTMENT_RECEIPT_ABI,
+          data: log.data,
+          topics: log.topics,
+        });
+        return decoded.eventName === eventName ? [{ decoded, log }] : [];
+      } catch {
+        return [];
+      }
+    });
+    if (matches.length !== 1)
+      throw new ConflictException(
+        `Expected exactly one ${eventName} receipt event`,
+      );
+    const { decoded, log } = matches[0];
+    const args = decoded.args as {
+      investor: Address;
+      campaignId: bigint;
+      amount: bigint;
+      policyHash?: Hex;
+      reasonHash?: Hex;
+    };
+    return {
+      investor: args.investor.toLowerCase() as Address,
+      campaignId: args.campaignId,
+      amount: args.amount,
+      policyHash: args.policyHash,
+      reasonHash: args.reasonHash,
+      transactionHash: receipt.transactionHash,
+      blockNumber: receipt.blockNumber,
+      logIndex: log.logIndex ?? 0,
+      contractAddress: runtime.receipt.toLowerCase() as Address,
+      eventIdentity: `${eventName}:${receipt.transactionHash.toLowerCase()}:${log.logIndex ?? 0}`,
+    };
   }
 
   private assertIssueInput(params: {

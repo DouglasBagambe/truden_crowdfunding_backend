@@ -88,4 +88,55 @@ export class PlatformSignerService {
       args: request.args,
     } as never) as Promise<Hash>;
   }
+
+  /** Narrow receipt-only typed signing boundary; controllers cannot sign arbitrary data. */
+  async signReceiptEligibility(input: {
+    chainId: number;
+    verifyingContract: Address;
+    investor: Address;
+    campaignId: bigint;
+    amount: bigint;
+    expiresAt: bigint;
+    policyHash: Hex;
+    nonce: bigint;
+  }): Promise<Hex> {
+    if (!this.walletClient || !this.walletClient.account) {
+      throw new ServiceUnavailableException(
+        'Receipt eligibility signing is disabled pending managed-signer approval',
+      );
+    }
+    if (input.chainId !== this.expectedChainId) {
+      throw new ServiceUnavailableException(
+        'Receipt chain ID does not match signer',
+      );
+    }
+    return this.walletClient.signTypedData({
+      account: this.walletClient.account,
+      domain: {
+        name: 'KEIBO Investment Eligibility',
+        version: '1',
+        chainId: input.chainId,
+        verifyingContract: input.verifyingContract,
+      },
+      primaryType: 'Eligibility',
+      types: {
+        Eligibility: [
+          { name: 'investor', type: 'address' },
+          { name: 'campaignId', type: 'uint256' },
+          { name: 'amount', type: 'uint256' },
+          { name: 'expiresAt', type: 'uint64' },
+          { name: 'policyHash', type: 'bytes32' },
+          { name: 'nonce', type: 'uint256' },
+        ],
+      },
+      message: {
+        investor: input.investor,
+        campaignId: input.campaignId,
+        amount: input.amount,
+        expiresAt: input.expiresAt,
+        policyHash: input.policyHash,
+        nonce: input.nonce,
+      },
+    });
+  }
 }

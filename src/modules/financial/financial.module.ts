@@ -20,6 +20,9 @@ import { ProjectsModule } from '../projects/projects.module';
 import { UsersModule } from '../users/users.module';
 import { HttpModule } from '@nestjs/axios';
 import { FlutterwaveV4PayoutAdapter } from './providers/flutterwave-v4-payout.adapter';
+import { FinancialReceiptService } from './financial-receipt.service';
+import { FinancialReceiptWorker } from './financial-receipt.worker';
+import { KeiboInvestmentReceiptService } from '../investments/services/keibo-investment-receipt.service';
 
 @Module({
   imports: [
@@ -44,6 +47,9 @@ import { FlutterwaveV4PayoutAdapter } from './providers/flutterwave-v4-payout.ad
     FinancialJobsService,
     FinancialPayoutService,
     FinancialPayoutWorker,
+    FinancialReceiptService,
+    FinancialReceiptWorker,
+    KeiboInvestmentReceiptService,
   ],
   exports: [
     FinancialService,
