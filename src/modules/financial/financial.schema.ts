@@ -57,6 +57,13 @@ CREATE TABLE IF NOT EXISTS financial_chain_evidence (
   CHECK ((payment_intent_id IS NOT NULL) <> (release_id IS NOT NULL)),
   UNIQUE(chain_id, transaction_hash), UNIQUE(chain_id, contract_address, event_identity)
 );
+CREATE TABLE IF NOT EXISTS financial_jobs (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), job_type text NOT NULL, aggregate_type text NOT NULL, aggregate_id text NOT NULL,
+ deduplication_key text NOT NULL UNIQUE, payload jsonb NOT NULL, status text NOT NULL CHECK(status IN ('pending','processing','succeeded','retry','dead_letter')) DEFAULT 'pending',
+ attempts integer NOT NULL DEFAULT 0 CHECK(attempts >= 0), max_attempts integer NOT NULL DEFAULT 6 CHECK(max_attempts > 0), available_at timestamptz NOT NULL DEFAULT now(), claimed_at timestamptz, claimed_by text,
+ last_error_code text, last_error_message_safe text, completed_at timestamptz, dead_lettered_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS financial_jobs_due_idx ON financial_jobs (status, available_at, created_at);
 CREATE OR REPLACE FUNCTION reject_financial_ledger_mutation() RETURNS trigger AS $$
 BEGIN RAISE EXCEPTION 'financial journals and postings are immutable'; END;
 $$ LANGUAGE plpgsql;

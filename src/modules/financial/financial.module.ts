@@ -13,6 +13,7 @@ import { FinancialProjectionService } from './projections/financial-projection.s
 import { FinancialOutboxService } from './financial-outbox.service';
 import { FinancialProjectionWorker } from './projections/financial-projection.worker';
 import { FinancialWorkersService } from './financial-workers.service';
+import { FinancialJobsService } from './financial-jobs.service';
 import { ProjectsModule } from '../projects/projects.module';
 import { UsersModule } from '../users/users.module';
 
@@ -34,6 +35,7 @@ import { UsersModule } from '../users/users.module';
     FinancialOutboxService,
     FinancialProjectionWorker,
     FinancialWorkersService,
+    FinancialJobsService,
   ],
   exports: [
     FinancialService,
@@ -41,6 +43,7 @@ import { UsersModule } from '../users/users.module';
     FinancialProjectionService,
     FinancialOutboxService,
     FinancialProjectionWorker,
+    FinancialJobsService,
   ],
 })
 export class FinancialModule {}
