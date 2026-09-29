@@ -46,7 +46,7 @@ export class FinancialJobsService {
     if (job.job_type === 'payout.reconcile.requested' && this.payouts) return this.payouts.reconcile(job.payload);
     throw Object.assign(new Error(`No durable handler registered for ${job.job_type}`), { code: 'JOB_HANDLER_UNAVAILABLE' });
   }
-  private retryable(error: unknown) { const code = this.errorCode(error); return ['ETIMEDOUT','ECONNRESET','ECONNREFUSED','EAI_AGAIN','RPC_PENDING'].includes(code); }
+  private retryable(error: unknown) { const code = this.errorCode(error); return ['ETIMEDOUT','ECONNRESET','ECONNREFUSED','EAI_AGAIN','RPC_PENDING','PROVIDER_RETRYABLE'].includes(code); }
   private errorCode(error: unknown) { return typeof (error as { code?: unknown })?.code === 'string' ? String((error as { code: string }).code) : 'JOB_HANDLER_ERROR'; }
   private safeMessage(error: unknown) { return (error instanceof Error ? error.message : 'Financial job failed').slice(0,500); }
 }
