@@ -203,9 +203,7 @@ export class KeiboInvestmentReceiptService {
     });
   }
 
-  async getTransactionReceipt(
-    hash: Hash,
-  ): Promise<
+  async getTransactionReceipt(hash: Hash): Promise<
     | { state: 'PENDING' }
     | {
         state: 'REVERTED' | 'SUCCESS';
@@ -285,11 +283,14 @@ export class KeiboInvestmentReceiptService {
     const matches = receipt.logs.flatMap((log) => {
       if (log.address.toLowerCase() !== runtime.receipt.toLowerCase())
         return [];
+      const [signature, ...eventTopics] = log.topics;
+      if (!signature) return [];
+      const topics: [Hex, ...Hex[]] = [signature, ...eventTopics];
       try {
         const decoded = decodeEventLog({
           abi: KEIBO_INVESTMENT_RECEIPT_ABI,
           data: log.data,
-          topics: log.topics,
+          topics,
         });
         return decoded.eventName === eventName ? [{ decoded, log }] : [];
       } catch {
