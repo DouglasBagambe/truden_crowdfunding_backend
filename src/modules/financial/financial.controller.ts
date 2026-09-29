@@ -7,6 +7,7 @@ import {
   Post,
   Request,
   ServiceUnavailableException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { IsEthereumAddress, IsString, Matches } from 'class-validator';
@@ -70,7 +71,7 @@ export class FinancialController {
   @Public() @CsrfExempt() @Post('payouts/flutterwave/callback')
   async flutterwavePayoutCallback(@Body() body: Record<string, unknown>, @Headers('flutterwave-signature') signature: string | undefined, @Request() request: { rawBody?: Buffer }) {
     const raw = request.rawBody;
-    if (!this.payoutWorker.verifyWebhookSignature(raw, signature)) throw new ServiceUnavailableException('Invalid Flutterwave payout webhook signature');
+    if (!this.payoutWorker.verifyWebhookSignature(raw, signature)) throw new ForbiddenException('Invalid Flutterwave payout webhook signature');
     const data = body.data && typeof body.data === 'object' ? body.data as Record<string, unknown> : {};
     if (body.type !== 'transfer.disburse') throw new ServiceUnavailableException('Unsupported Flutterwave payout event');
     return this.payoutWorker.callback({transferId:String(data.id ?? ''),reference:String(data.reference ?? ''),amount:String(data.amount ?? ''),currency:String(data.destination_currency ?? data.currency ?? '').toUpperCase(),status:(String(data.status ?? '').toUpperCase() as 'PENDING'|'PROCESSING'|'SUCCESSFUL'|'FAILED'|'UNKNOWN')});
