@@ -16,11 +16,14 @@ import { FinancialWorkersService } from './financial-workers.service';
 import { FinancialJobsService } from './financial-jobs.service';
 import { ProjectsModule } from '../projects/projects.module';
 import { UsersModule } from '../users/users.module';
+import { HttpModule } from '@nestjs/axios';
+import { FlutterwaveV4PayoutAdapter } from './providers/flutterwave-v4-payout.adapter';
 
 @Module({
   imports: [
     ProjectsModule,
     UsersModule,
+    HttpModule,
     MongooseModule.forFeature([
       { name: FinancialProjection.name, schema: FinancialProjectionSchema },
     ]),
@@ -30,6 +33,7 @@ import { UsersModule } from '../users/users.module';
     FinancialDatabase,
     FinancialService,
     FlutterwaveFinancialAdapter,
+    FlutterwaveV4PayoutAdapter,
     DpoFinancialAdapter,
     FinancialProjectionService,
     FinancialOutboxService,
