@@ -10,6 +10,7 @@ import { KeiboContractConfigService } from './services/keibo-contract-config.ser
 import { KeiboGovernanceService } from './services/keibo-governance.service';
 import { KeiboDealRoomEvidenceService } from './services/keibo-deal-room-evidence.service';
 import { EscrowWeb3Service } from '../modules/escrow/escrow.web3';
+import { KeiboLegacyRouteGuard } from './services/keibo-legacy-route.guard';
 
 @Global()
 @Module({
@@ -23,6 +24,7 @@ import { EscrowWeb3Service } from '../modules/escrow/escrow.web3';
     KeiboGovernanceService,
     KeiboDealRoomEvidenceService,
     EscrowWeb3Service,
+    KeiboLegacyRouteGuard,
     RateLimitService,
     RateLimitGuard,
   ],
@@ -34,6 +36,7 @@ import { EscrowWeb3Service } from '../modules/escrow/escrow.web3';
     KeiboGovernanceService,
     KeiboDealRoomEvidenceService,
     EscrowWeb3Service,
+    KeiboLegacyRouteGuard,
     RateLimitService,
     RateLimitGuard,
   ],

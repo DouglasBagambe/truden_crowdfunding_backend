@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  GoneException,
   Injectable,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -29,11 +30,12 @@ import {
 } from './interfaces/treasury-transaction.interface';
 import { ViemTreasuryClient } from './helpers/viem-treasury-client';
 import { ConfigService } from '@nestjs/config';
+import { isKeiboRuntimeEnabled } from '../../common/services/keibo-contract-config.service';
+import { KEIBO_LEGACY_ROUTE_DISABLED } from '../../common/services/keibo-legacy-route.guard';
 
 @Injectable()
 export class TreasuryService {
-  constructor
-  (
+  constructor(
     @InjectModel(TreasuryTransaction.name)
     private readonly transactionModel: Model<TreasuryTransactionDocument>,
     @InjectModel(TreasuryWallet.name)
@@ -46,6 +48,7 @@ export class TreasuryService {
     dto: CreateTreasuryTransactionDto,
     currentUser?: JwtPayload,
   ): Promise<TreasuryTransactionView> {
+    this.ensureLegacyTreasuryDisabled();
     const amountNumber = this.parseAmount(dto.amount, 'amount');
 
     const metadata: Record<string, any> = {
@@ -81,6 +84,7 @@ export class TreasuryService {
     dto: CreateTreasuryTransactionDto,
     currentUser?: JwtPayload,
   ): Promise<TreasuryTransactionView> {
+    this.ensureLegacyTreasuryDisabled();
     const amountNumber = this.parseAmount(dto.amount, 'amount');
 
     const initiatedById = currentUser?.sub
@@ -166,12 +170,12 @@ export class TreasuryService {
     );
 
     if (totalAmount <= 0) {
-      throw new BadRequestException('Total distribution amount must be positive');
+      throw new BadRequestException(
+        'Total distribution amount must be positive',
+      );
     }
 
-    const onchainRecipients = parsedRecipients.filter(
-      (r) => !!r.walletAddress,
-    );
+    const onchainRecipients = parsedRecipients.filter((r) => !!r.walletAddress);
 
     let txHash = dto.txHash;
 
@@ -214,6 +218,7 @@ export class TreasuryService {
   }
 
   async getTransactions(query: FilterTreasuryDto) {
+    this.ensureLegacyTreasuryDisabled();
     const filter: FilterQuery<TreasuryTransactionDocument> = {};
 
     if (query.type) {
@@ -261,6 +266,7 @@ export class TreasuryService {
   }
 
   async getBalance(): Promise<TreasuryBalanceView> {
+    this.ensureLegacyTreasuryDisabled();
     const wallet = await this.getOrCreateWallet();
     return {
       totalBalance: wallet.totalBalance,
@@ -270,6 +276,7 @@ export class TreasuryService {
   }
 
   async getSummary(): Promise<TreasurySummaryView> {
+    this.ensureLegacyTreasuryDisabled();
     const perType = await this.transactionModel.aggregate<{
       _id: TreasuryTransactionType;
       total: number;
@@ -285,10 +292,11 @@ export class TreasuryService {
     const feesCollected =
       perType.find((x) => x._id === TreasuryTransactionType.FEE)?.total ?? 0;
     const donations =
-      perType.find((x) => x._id === TreasuryTransactionType.DONATION)?.total ?? 0;
-    const totalDistributions =
-      perType.find((x) => x._id === TreasuryTransactionType.DISTRIBUTION)?.total ??
+      perType.find((x) => x._id === TreasuryTransactionType.DONATION)?.total ??
       0;
+    const totalDistributions =
+      perType.find((x) => x._id === TreasuryTransactionType.DISTRIBUTION)
+        ?.total ?? 0;
 
     const monthlyRaw = await this.transactionModel.aggregate<{
       _id: { year: number; month: number };
@@ -304,7 +312,11 @@ export class TreasuryService {
           },
           fees: {
             $sum: {
-              $cond: [{ $eq: ['$type', TreasuryTransactionType.FEE] }, '$amount', 0],
+              $cond: [
+                { $eq: ['$type', TreasuryTransactionType.FEE] },
+                '$amount',
+                0,
+              ],
             },
           },
           donations: {
@@ -346,6 +358,7 @@ export class TreasuryService {
   }
 
   async syncTreasuryEvents(): Promise<{ processed: number }> {
+    this.ensureLegacyTreasuryDisabled();
     const logs = await this.viemTreasuryClient.getFeeCapturedLogs();
     void logs;
     const count = Array.isArray(logs) ? logs.length : 0;
@@ -358,6 +371,7 @@ export class TreasuryService {
     investorId?: string;
     txHash: string;
   }): Promise<TreasuryTransactionView> {
+    this.ensureLegacyTreasuryDisabled();
     const amount = Number(params.amount) / 1e18;
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException('Invalid fee amount from event');
@@ -379,6 +393,7 @@ export class TreasuryService {
     nftId?: string;
     txHash: string;
   }): Promise<TreasuryTransactionView> {
+    this.ensureLegacyTreasuryDisabled();
     const amount = Number(params.amount) / 1e18;
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException('Invalid fee amount from event');
@@ -395,10 +410,11 @@ export class TreasuryService {
   }
 
   private ensureLegacyTreasuryDisabled(): void {
-    if (this.configService.get<string>('KEIBO_RECEIPT_CONTRACT_ADDRESS')) {
-      throw new ForbiddenException(
-        'Legacy treasury distribution is disabled for KEIBO receipt runtime',
-      );
+    if (isKeiboRuntimeEnabled(this.configService)) {
+      throw new GoneException({
+        code: KEIBO_LEGACY_ROUTE_DISABLED,
+        message: 'This legacy treasury runtime is unavailable in KEIBO mode',
+      });
     }
   }
 
@@ -479,9 +495,7 @@ export class TreasuryService {
     return wallet;
   }
 
-  private toView(
-    doc: TreasuryTransactionDocument,
-  ): TreasuryTransactionView {
+  private toView(doc: TreasuryTransactionDocument): TreasuryTransactionView {
     const createdAt =
       (doc as TreasuryTransactionDocument & { createdAt?: Date }).createdAt ??
       new Date();

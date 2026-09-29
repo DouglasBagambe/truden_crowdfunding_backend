@@ -40,6 +40,7 @@ import { UsersService } from '../users/users.service';
 import { Public } from '../../common/decorators/public.decorator';
 import { CsrfExempt } from '../../common/decorators/csrf-exempt.decorator';
 import { FinancialService } from '../financial/financial.service';
+import { KeiboLegacyRouteGuard } from '../../common/services/keibo-legacy-route.guard';
 import { ReleaseCharityMilestoneDto } from './dto/release-charity-milestone.dto';
 import { randomUUID } from 'crypto';
 
@@ -300,9 +301,13 @@ export class PaymentsController {
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth('JWT-auth')
 export class WalletController {
-  constructor(private readonly financialService: FinancialService) {}
+  constructor(
+    private readonly financialService: FinancialService,
+    private readonly legacyRouteGuard: KeiboLegacyRouteGuard,
+  ) {}
 
   private unavailable(): never {
+    this.legacyRouteGuard.rejectInKeiboMode();
     throw new ServiceUnavailableException(
       'Legacy wallet balances and mutations are disabled until ledger-backed wallet adapters are configured',
     );

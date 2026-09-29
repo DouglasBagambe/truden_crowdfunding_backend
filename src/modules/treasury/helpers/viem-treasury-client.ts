@@ -10,6 +10,7 @@ import {
   type TransactionReceipt,
 } from 'viem';
 import { PlatformSignerService } from '../../../common/services/platform-signer.service';
+import { isKeiboRuntimeEnabled } from '../../../common/services/keibo-contract-config.service';
 
 const TREASURY_ABI = [
   {
@@ -81,7 +82,7 @@ export class ViemTreasuryClient {
     private readonly configService: ConfigService,
     private readonly signer: PlatformSignerService,
   ) {
-    if (this.configService.get<string>('KEIBO_RECEIPT_CONTRACT_ADDRESS')) {
+    if (isKeiboRuntimeEnabled(this.configService)) {
       return;
     }
     const blockchain = this.configService.get<{

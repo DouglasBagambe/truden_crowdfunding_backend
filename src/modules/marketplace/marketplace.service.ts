@@ -22,6 +22,7 @@ import { InvestmentsService } from '../investments/services/investments.service'
 import { InjectModel as InjectModelAlias } from '@nestjs/mongoose';
 import { Investment, InvestmentDocument } from '../investments/schemas/investment.schema';
 import { InvestmentStatus } from '../investments/interfaces/investment.interface';
+import { isKeiboRuntimeEnabled } from '../../common/services/keibo-contract-config.service';
 
 @Injectable()
 export class MarketplaceService {
@@ -37,7 +38,7 @@ export class MarketplaceService {
     ) { }
 
     private ensureMarketplaceEnabled() {
-        if (this.configService.get<string>('KEIBO_RECEIPT_CONTRACT_ADDRESS')) {
+        if (isKeiboRuntimeEnabled(this.configService)) {
             throw new ServiceUnavailableException(
                 'Resale is unavailable because KEIBO investment receipts are non-transferable.',
             );

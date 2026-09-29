@@ -15,11 +15,15 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Public } from '../../common/decorators/public.decorator';
 import type { JwtPayload } from '../../common/interfaces/user.interface';
+import { KeiboLegacyRouteGuard } from '../../common/services/keibo-legacy-route.guard';
 
 @Controller('marketplace')
 @UseGuards(RolesGuard)
 export class MarketplaceController {
-    constructor(private readonly marketplaceService: MarketplaceService) { }
+    constructor(
+        private readonly marketplaceService: MarketplaceService,
+        private readonly legacyRouteGuard: KeiboLegacyRouteGuard,
+    ) { }
 
     /**
      * GET /marketplace/listings
@@ -33,6 +37,7 @@ export class MarketplaceController {
         @Query('skip') skip?: string,
         @Query('limit') limit?: string,
     ) {
+        this.legacyRouteGuard.rejectInKeiboMode();
         return this.marketplaceService.getActiveListings({
             projectOnchainId: projectOnchainId ? Number(projectOnchainId) : undefined,
             sellerId,
@@ -47,6 +52,7 @@ export class MarketplaceController {
      */
     @Get('listings/mine')
     async getMyListings(@CurrentUser() user: JwtPayload) {
+        this.legacyRouteGuard.rejectInKeiboMode();
         return this.marketplaceService.getMyListings(user);
     }
 
@@ -57,6 +63,7 @@ export class MarketplaceController {
     @Get('listings/:id')
     @Public()
     async getListing(@Param('id') id: string) {
+        this.legacyRouteGuard.rejectInKeiboMode();
         return this.marketplaceService.getListingById(id);
     }
 
@@ -71,6 +78,7 @@ export class MarketplaceController {
         @Body() dto: CreateListingDto,
         @CurrentUser() user: JwtPayload,
     ) {
+        this.legacyRouteGuard.rejectInKeiboMode();
         return this.marketplaceService.recordListing(dto, user);
     }
 
@@ -83,6 +91,7 @@ export class MarketplaceController {
         @Param('id') id: string,
         @CurrentUser() user: JwtPayload,
     ) {
+        this.legacyRouteGuard.rejectInKeiboMode();
         return this.marketplaceService.cancelListing(id, user);
     }
 
@@ -96,6 +105,7 @@ export class MarketplaceController {
         @Body() dto: RecordPurchaseDto,
         @CurrentUser() user: JwtPayload,
     ) {
+        this.legacyRouteGuard.rejectInKeiboMode();
         return this.marketplaceService.recordPurchase(id, dto, user);
     }
 }

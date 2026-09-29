@@ -10,6 +10,7 @@ import {
   type TransactionReceipt,
 } from 'viem';
 import { PlatformSignerService } from '../../../common/services/platform-signer.service';
+import { isKeiboRuntimeEnabled } from '../../../common/services/keibo-contract-config.service';
 
 /**
  * ABI subset matching InvestmentNFT.sol (ERC-1155)
@@ -209,7 +210,7 @@ export class ViemNftClient {
   ) {
     // KeiboInvestmentReceipt has incompatible non-transferable semantics and
     // ABI. Never bind this legacy transferable-NFT client to that runtime.
-    if (this.configService.get<string>('KEIBO_RECEIPT_CONTRACT_ADDRESS')) {
+    if (isKeiboRuntimeEnabled(this.configService)) {
       return;
     }
     const blockchain = this.configService.get<{

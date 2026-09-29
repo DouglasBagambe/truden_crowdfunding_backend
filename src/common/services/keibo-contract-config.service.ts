@@ -2,6 +2,41 @@ import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { isAddress, zeroAddress, type Address } from 'viem';
 
+function isConfigured(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+/**
+ * Detects the KEIBO runtime without attempting to validate or instantiate a
+ * contract client. This is deliberately broader than getRequired(): an
+ * incomplete KEIBO configuration must still never fall back to a legacy ABI.
+ */
+export function isKeiboRuntimeEnabled(configService: ConfigService): boolean {
+  const get = (rawKey: string, configKey: string): unknown =>
+    configService.get<unknown>(rawKey) ?? configService.get<unknown>(configKey);
+  const receipt = get(
+    'KEIBO_RECEIPT_CONTRACT_ADDRESS',
+    'blockchain.keiboContracts.receipt',
+  );
+  if (isConfigured(receipt)) return true;
+
+  const enabled = get('BLOCKCHAIN_FEATURES_ENABLED', 'blockchain.enabled');
+  const blockchainEnabled = enabled === true || enabled === 'true';
+  if (!blockchainEnabled) return false;
+
+  return [
+    get('KEIBO_ESCROW_CONTRACT_ADDRESS', 'blockchain.keiboContracts.escrow'),
+    get(
+      'KEIBO_GOVERNANCE_CONTRACT_ADDRESS',
+      'blockchain.keiboContracts.governance',
+    ),
+    get(
+      'KEIBO_EVIDENCE_CONTRACT_ADDRESS',
+      'blockchain.keiboContracts.evidence',
+    ),
+  ].some(isConfigured);
+}
+
 export interface KeiboContractConfig {
   rpcUrl: string;
   chainId: number;
@@ -28,6 +63,10 @@ export class KeiboContractConfigService {
     if (configured !== undefined)
       return configured === true || configured === 'true';
     return this.configService.get<boolean>('blockchain.enabled') === true;
+  }
+
+  isKeiboRuntimeEnabled(): boolean {
+    return isKeiboRuntimeEnabled(this.configService);
   }
 
   getRequired(): KeiboContractConfig {

@@ -23,6 +23,7 @@ import { Permission } from '../../../common/enums/permission.enum';
 import { Permissions } from '../../../common/decorators/permissions.decorator';
 import { RoleMetadataOr } from '../../../common/decorators/role-or.decorator';
 import type { JwtPayload } from '../../../common/interfaces/user.interface';
+import { KeiboLegacyRouteGuard } from '../../../common/services/keibo-legacy-route.guard';
 
 // NOTE: NFT endpoints (/nfts/:address, /nft/:tokenId, /project/:id/nfts) are
 // preserved in the `blockchain/nfts-future` branch and will be restored when
@@ -31,7 +32,10 @@ import type { JwtPayload } from '../../../common/interfaces/user.interface';
 @Controller('investments')
 @UseGuards(RolesGuard)
 export class InvestmentsController {
-  constructor(private readonly investmentsService: InvestmentsService) { }
+  constructor(
+    private readonly investmentsService: InvestmentsService,
+    private readonly legacyRouteGuard: KeiboLegacyRouteGuard,
+  ) {}
 
   @Post('invest')
   @HttpCode(HttpStatus.CREATED)
@@ -40,23 +44,36 @@ export class InvestmentsController {
     @CurrentUser() currentUser: JwtPayload,
     @Body() dto: CreateInvestmentDto,
   ) {
+    this.legacyRouteGuard.rejectInKeiboMode();
     throw new BadRequestException(
       'Direct investment creation is disabled. Use the DPO checkout flow.',
     );
   }
 
   @Get('user/:userId')
-  @Roles(UserRole.INVESTOR, UserRole.ADMIN, UserRole.SUPERADMIN, UserRole.INNOVATOR)
+  @Roles(
+    UserRole.INVESTOR,
+    UserRole.ADMIN,
+    UserRole.SUPERADMIN,
+    UserRole.INNOVATOR,
+  )
   async getUserInvestments(
     @Param('userId') userId: string,
     @CurrentUser() currentUser: JwtPayload,
   ) {
+    this.legacyRouteGuard.rejectInKeiboMode();
     return this.investmentsService.getInvestmentsByUser(userId, currentUser);
   }
 
   @Get('my')
-  @Roles(UserRole.INVESTOR, UserRole.ADMIN, UserRole.SUPERADMIN, UserRole.INNOVATOR)
+  @Roles(
+    UserRole.INVESTOR,
+    UserRole.ADMIN,
+    UserRole.SUPERADMIN,
+    UserRole.INNOVATOR,
+  )
   async getMyInvestments(@CurrentUser() currentUser: JwtPayload) {
+    this.legacyRouteGuard.rejectInKeiboMode();
     return this.investmentsService.getMyInvestments(currentUser);
   }
 
@@ -66,13 +83,18 @@ export class InvestmentsController {
     @Param('projectId') projectId: string,
     @CurrentUser() currentUser: JwtPayload,
   ) {
-    return this.investmentsService.getInvestmentsByProject(projectId, currentUser);
+    this.legacyRouteGuard.rejectInKeiboMode();
+    return this.investmentsService.getInvestmentsByProject(
+      projectId,
+      currentUser,
+    );
   }
 
   @Get('repair-prod-db')
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.MANAGE_PROJECTS)
   async repairProdDb() {
+    this.legacyRouteGuard.rejectInKeiboMode();
     return this.investmentsService.repairDatabase();
   }
 
@@ -85,6 +107,7 @@ export class InvestmentsController {
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.APPROVE_PROJECTS)
   async retryAllFailedNftMints() {
+    this.legacyRouteGuard.rejectInKeiboMode();
     return this.investmentsService.retryAllFailedNftMints();
   }
 
@@ -94,6 +117,7 @@ export class InvestmentsController {
     @Query() filterDto: FilterInvestmentsDto,
     @CurrentUser() currentUser: JwtPayload,
   ) {
+    this.legacyRouteGuard.rejectInKeiboMode();
     return this.investmentsService.listInvestments(filterDto, currentUser);
   }
 
@@ -104,6 +128,7 @@ export class InvestmentsController {
     @Body() dto: UpdateInvestmentStatusDto,
     @CurrentUser() currentUser: JwtPayload,
   ) {
+    this.legacyRouteGuard.rejectInKeiboMode();
     return this.investmentsService.updateStatus(id, dto, currentUser);
   }
 
@@ -115,6 +140,7 @@ export class InvestmentsController {
   @RoleMetadataOr(UserRole.ADMIN)
   @Permissions(Permission.APPROVE_PROJECTS)
   async retryNftMint(@Param('id') id: string) {
+    this.legacyRouteGuard.rejectInKeiboMode();
     return this.investmentsService.retryFailedNftMint(id);
   }
 
@@ -124,6 +150,7 @@ export class InvestmentsController {
     @Param('id') id: string,
     @CurrentUser() currentUser: JwtPayload,
   ) {
+    this.legacyRouteGuard.rejectInKeiboMode();
     return this.investmentsService.getInvestmentById(id, currentUser);
   }
 }

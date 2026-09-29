@@ -18,34 +18,39 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '../../common/enums/role.enum';
 import type { JwtPayload } from '../../common/interfaces/user.interface';
+import { KeiboLegacyRouteGuard } from '../../common/services/keibo-legacy-route.guard';
 
 @Controller('nfts')
 @UseGuards(RolesGuard)
 export class NftController {
-  constructor(private readonly nftService: NftService) {}
+  constructor(
+    private readonly nftService: NftService,
+    private readonly legacyRouteGuard: KeiboLegacyRouteGuard,
+  ) {}
 
   @Post('mint')
   @HttpCode(HttpStatus.CREATED)
   @Roles(UserRole.ADMIN)
-  async mint(
-    @Body() dto: MintNftDto,
-    @CurrentUser() currentUser: JwtPayload,
-  ) {
+  async mint(@Body() dto: MintNftDto, @CurrentUser() currentUser: JwtPayload) {
+    this.legacyRouteGuard.rejectInKeiboMode();
     return this.nftService.mintNft(dto, currentUser);
   }
 
   @Get('wallet/:address')
   async getByWallet(@Param('address') address: string) {
+    this.legacyRouteGuard.rejectInKeiboMode();
     return this.nftService.findByWallet(address);
   }
 
   @Get('project/:projectId')
   async getByProject(@Param('projectId') projectId: string) {
+    this.legacyRouteGuard.rejectInKeiboMode();
     return this.nftService.findByProject(projectId);
   }
 
   @Get(':tokenId')
   async getOne(@Param('tokenId') tokenId: string) {
+    this.legacyRouteGuard.rejectInKeiboMode();
     const parsed = Number(tokenId);
     if (!Number.isInteger(parsed) || parsed < 0) {
       throw new BadRequestException('Invalid tokenId');
@@ -60,6 +65,7 @@ export class NftController {
     @Body() dto: UpdateValuationDto,
     @CurrentUser() currentUser: JwtPayload,
   ) {
+    this.legacyRouteGuard.rejectInKeiboMode();
     return this.nftService.updateNFTValue(id, dto, currentUser);
   }
 }
