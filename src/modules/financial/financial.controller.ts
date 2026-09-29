@@ -18,6 +18,7 @@ import { FinancialService } from './financial.service';
 import { FlutterwaveFinancialAdapter } from './providers/flutterwave-financial.adapter';
 import { FinancialOutboxService } from './financial-outbox.service';
 import { FinancialPayoutService } from './financial-payout.service';
+import { FinancialPayoutWorker } from './financial-payout.worker';
 
 class CreatePaymentIntentDto {
   @IsString() projectId!: string;
@@ -46,6 +47,7 @@ export class FinancialController {
     private readonly flutterwave: FlutterwaveFinancialAdapter,
     private readonly outbox: FinancialOutboxService,
     private readonly payouts: FinancialPayoutService,
+    private readonly payoutWorker: FinancialPayoutWorker,
   ) {}
 
   @Post('payment-intents')
@@ -64,6 +66,14 @@ export class FinancialController {
       idempotencyKey,
       correlationId: randomUUID(),
     });
+  }
+  @Public() @CsrfExempt() @Post('payouts/flutterwave/callback')
+  async flutterwavePayoutCallback(@Body() body: Record<string, unknown>, @Headers('flutterwave-signature') signature: string | undefined, @Request() request: { rawBody?: Buffer }) {
+    const raw = request.rawBody;
+    if (!this.payoutWorker.verifyWebhookSignature(raw, signature)) throw new ServiceUnavailableException('Invalid Flutterwave payout webhook signature');
+    const data = body.data && typeof body.data === 'object' ? body.data as Record<string, unknown> : {};
+    if (body.type !== 'transfer.disburse') throw new ServiceUnavailableException('Unsupported Flutterwave payout event');
+    return this.payoutWorker.callback({transferId:String(data.id ?? ''),reference:String(data.reference ?? ''),amount:String(data.amount ?? ''),currency:String(data.destination_currency ?? data.currency ?? '').toUpperCase(),status:(String(data.status ?? '').toUpperCase() as 'PENDING'|'PROCESSING'|'SUCCESSFUL'|'FAILED'|'UNKNOWN')});
   }
   @Post('payout-destinations') createDestination(@Body() dto:PayoutDestinationDto,@Headers('idempotency-key') key:string,@Request() req:{user:{sub?:string;userId?:string}}){const creatorId=req.user?.sub??req.user?.userId;if(!creatorId)throw new Error('Authenticated user is required');return this.payouts.createDestination({...dto,creatorId,idempotencyKey:key});}
   @Get('payout-destinations') listDestinations(@Request() req:{user:{sub?:string;userId?:string}}){const creatorId=req.user?.sub??req.user?.userId;if(!creatorId)throw new Error('Authenticated user is required');return this.payouts.list(creatorId);}
