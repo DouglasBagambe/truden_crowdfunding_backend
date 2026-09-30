@@ -6,8 +6,11 @@ import { UserDocument } from '../users/schemas/user.schema';
 import { Model, Types } from 'mongoose';
 import { AuditService } from '../audit/audit.service';
 import * as crypto from 'crypto';
+import * as bcrypt from 'bcryptjs';
 import sgMail from '@sendgrid/mail';
 import { HttpException, UnauthorizedException } from '@nestjs/common';
+import { UserRole } from '../../common/enums/role.enum';
+import { AuthProvider } from './dto/oauth-login.dto';
 import type { RefreshTokenDocument } from './schemas/refresh-token.schema';
 import type { WalletChallengeDocument } from './schemas/wallet-challenge.schema';
 import type { AppEmailService } from '../../common/services/app-email.service';
@@ -253,5 +256,30 @@ describe('AuthService email verification (codes)', () => {
       emailVerificationCodeHash: expect.any(String) as unknown,
       emailVerificationCodeExpiresAt: expect.any(Date) as unknown,
     });
+  });
+
+  it('allows only the configured test bootstrap admin to bypass administrator MFA', async () => {
+    const user = mockUser({
+      emailVerifiedAt: new Date(),
+      roles: [UserRole.ADMIN, UserRole.SUPERADMIN],
+      authProvider: AuthProvider.EMAIL,
+      passwordHash: await bcrypt.hash('uat-password', 4),
+      mfa: { enabled: false, emailEnabled: false },
+    });
+    userModel.findOne.mockReturnValue(makeSelectableQuery(user));
+    userModel.findByIdAndUpdate.mockReturnValue(makeQuery(user));
+    configService.get.mockImplementation(((key: string) => {
+      if (key === 'NODE_ENV') return 'test';
+      if (key === 'UAT_BOOTSTRAP_ADMIN_EMAIL') return email;
+      return undefined;
+    }) as never);
+    jest.spyOn(service as never, 'generateTokens' as never).mockResolvedValue({
+      accessToken: 'access',
+      refreshToken: 'refresh',
+    } as never);
+
+    await expect(
+      service.login({ email, password: 'uat-password' }),
+    ).resolves.toMatchObject({ user: { email }, accessToken: 'access' });
   });
 });
