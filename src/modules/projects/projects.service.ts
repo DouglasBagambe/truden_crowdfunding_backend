@@ -52,6 +52,7 @@ import { StreamableFile } from '@nestjs/common';
 import { hasBackendRoiAccess } from '../../common/utils/roi-access.util';
 import { ViemNftClient } from '../nfts/helpers/viem-nft-client';
 import { OnchainProvisioningStatus } from './schemas/project.schema';
+import { NotificationsService } from '../notifications/notifications.service';
 import type { Address } from 'viem';
 type MulterFile = Express.Multer.File;
 
@@ -85,6 +86,7 @@ export class ProjectsService {
     private readonly attachmentRequirementsService: AttachmentRequirementsService,
     private readonly attachmentFilesRepo: AttachmentFilesRepository,
     private readonly viemNftClient: ViemNftClient,
+    private readonly notifications: NotificationsService,
     @InjectModel(Investment.name)
     private readonly investmentModel: Model<InvestmentDocument>,
   ) {}
@@ -235,7 +237,23 @@ export class ProjectsService {
       );
     }
 
-    return this.getProjectWithMilestones(String(project.id));
+    const createdProject = await this.getProjectWithMilestones(
+      String(project.id),
+    );
+    try {
+      await this.notifications.create({
+        recipientId: creatorId,
+        category: 'campaign',
+        title: 'Campaign submitted for review',
+        body: `Your campaign “${project.name}” has been submitted for KEIBO review.`,
+        link: `/projects/${String(project.id)}`,
+      });
+    } catch (notificationError: unknown) {
+      this.logger.warn(
+        `Could not record campaign-submitted notification for ${String(project.id)}: ${this.errorMessage(notificationError)}`,
+      );
+    }
+    return createdProject;
   }
 
   async updateProject(
@@ -693,12 +711,35 @@ export class ProjectsService {
     });
     if (!updated) throw new NotFoundException('Project not found');
 
+    const creatorId = this.extractObjectIdString(
+      project.creatorId,
+      'project.creatorId',
+    );
+    const decisionLabel =
+      finalStatus === ProjectStatus.FUNDING ||
+      finalStatus === ProjectStatus.APPROVED
+        ? 'approved'
+        : finalStatus === ProjectStatus.REJECTED
+          ? 'not approved'
+          : 'requires changes';
+    try {
+      await this.notifications.create({
+        recipientId: creatorId,
+        category: 'campaign',
+        title: `Campaign ${decisionLabel}`,
+        body: dto.reason
+          ? `“${project.name}” ${decisionLabel}. Review note: ${dto.reason}`
+          : `“${project.name}” ${decisionLabel}.`,
+        link: `/projects/${projectId}`,
+      });
+    } catch (notificationError: unknown) {
+      this.logger.warn(
+        `Could not record campaign-decision notification for ${projectId}: ${this.errorMessage(notificationError)}`,
+      );
+    }
+
     // Send email notification to creator on Rejection or Approval
     try {
-      const creatorId = this.extractObjectIdString(
-        project.creatorId,
-        'project.creatorId',
-      );
       const creator = await this.usersRepo.findById(creatorId);
       if (creator?.email) {
         await this.sendProjectDecisionEmail(

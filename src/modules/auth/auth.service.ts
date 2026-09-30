@@ -101,6 +101,10 @@ export class AuthService {
     const shouldBypassEmailVerification =
       this.isLocalEmailVerificationBypassEnabled();
 
+    if (!shouldBypassEmailVerification) {
+      this.assertVerificationDeliveryConfigured();
+    }
+
     const existingUser = await this.userModel
       .findOne({ email: email.toLowerCase() })
       .exec();
@@ -1724,6 +1728,9 @@ export class AuthService {
       strictDelivery?: boolean;
     } = {},
   ) {
+    if (opts.strictDelivery) {
+      this.assertVerificationDeliveryConfigured();
+    }
     const { code, expiresAt, hash } = this.generateEmailVerificationCode();
     const update: Record<string, unknown> = {
       emailVerificationSentAt: new Date(),
@@ -1750,6 +1757,20 @@ export class AuthService {
     await this.userModel.findByIdAndUpdate(user._id, update).exec();
     await this.sendVerificationEmail(user.email, code, opts.strictDelivery);
     return code;
+  }
+
+  private assertVerificationDeliveryConfigured() {
+    const nodeEnv =
+      this.configService.get<string>('NODE_ENV') || process.env.NODE_ENV;
+    const hasProviderConfiguration = Boolean(
+      this.configService.get<string>('SENDGRID_API_KEY') &&
+        this.configService.get<string>('EMAIL_FROM'),
+    );
+    if (nodeEnv !== 'test' && !hasProviderConfiguration) {
+      throw new BadRequestException(
+        'Verification email delivery is unavailable right now.',
+      );
+    }
   }
 
   private formatSendgridError(err: unknown): string {

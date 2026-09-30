@@ -224,6 +224,18 @@ describe('AuthService email verification (codes)', () => {
     ).rejects.toThrow('Verification email delivery is unavailable');
   });
 
+  it('does not consume a resend attempt when verification delivery is not configured', async () => {
+    const user = mockUser();
+    userModel.findOne.mockReturnValue(makeSelectableQuery(user));
+    configService.get.mockImplementation(((key: string) =>
+      key === 'NODE_ENV' ? 'development' : undefined) as never);
+
+    await expect(service.resendVerificationEmail(email)).rejects.toThrow(
+      'Verification email delivery is unavailable',
+    );
+    expect(userModel.findByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
   it('does not report password-reset delivery when SendGrid is unavailable', async () => {
     await expect(
       service['sendPasswordResetEmail'](email, 'reset-token'),

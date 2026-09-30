@@ -24,6 +24,7 @@ import { RateLimitGuard } from './common/guards/rate-limit.guard';
 import { AuditModule } from './modules/audit/audit.module';
 import { CommonModule } from './common/common.module';
 import { FinancialModule } from './modules/financial/financial.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { FinancialModule } from './modules/financial/financial.module';
     PaymentsModule,
     MarketplaceModule,
     FinancialModule,
+    NotificationsModule,
   ],
   providers: [
     {

@@ -33,6 +33,7 @@ import {
 import { Milestone, MilestoneSchema } from './schemas/milestone.schema';
 import { ProjectType } from '../../common/enums/project-type.enum';
 import { UsersModule } from '../users/users.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import {
   AgreementTemplate,
   AgreementTemplateSchema,
@@ -48,6 +49,7 @@ import {
 @Module({
   imports: [
     UsersModule,
+    NotificationsModule,
     MongooseModule.forFeature([
       { name: Investment.name, schema: InvestmentSchema },
       {

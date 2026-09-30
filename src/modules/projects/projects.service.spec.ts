@@ -88,6 +88,9 @@ const createService = () => {
       nftAddress: '0x0000000000000000000000000000000000000001',
     }),
   };
+  const notifications = {
+    create: jest.fn().mockResolvedValue(undefined),
+  };
 
   const service = new ProjectsService(
     projectsRepo as unknown as ProjectsServiceDependencies[0],
@@ -99,7 +102,8 @@ const createService = () => {
     attachmentRequirementsService as unknown as ProjectsServiceDependencies[6],
     attachmentFilesRepo as unknown as ProjectsServiceDependencies[7],
     viemNftClient as unknown as ProjectsServiceDependencies[8],
-    investmentModel as unknown as ProjectsServiceDependencies[9],
+    notifications as unknown as ProjectsServiceDependencies[9],
+    investmentModel as unknown as ProjectsServiceDependencies[10],
   );
 
   return {
@@ -112,6 +116,7 @@ const createService = () => {
     attachmentRequirementsService,
     attachmentFilesRepo,
     viemNftClient,
+    notifications,
   };
 };
 
@@ -254,8 +259,14 @@ describe('ProjectsService — existing CRUD', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('creates ROI project with defaults and persists agreements/media fields', async () => {
-    const { service, projectsRepo, milestonesRepo, usersRepo, configService } =
-      createService();
+    const {
+      service,
+      projectsRepo,
+      milestonesRepo,
+      usersRepo,
+      configService,
+      notifications,
+    } = createService();
     usersRepo.findById.mockResolvedValue(creatorWithWallet());
     configService.get.mockImplementation((key: string) =>
       key === 'ROI_ALLOWED_USER_IDS' ? mockCreatorId : undefined,
@@ -303,6 +314,13 @@ describe('ProjectsService — existing CRUD', () => {
       }),
     );
     expect(milestonesRepo.createMany).not.toHaveBeenCalled();
+    expect(notifications.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipientId: mockCreatorId,
+        category: 'campaign',
+        title: 'Campaign submitted for review',
+      }),
+    );
     expect(response).toEqual(result);
   });
 
@@ -465,7 +483,8 @@ describe('ProjectsService — ROI approval provisioning', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('ROI approval success: provisions on-chain then sets status=FUNDING', async () => {
-    const { service, projectsRepo, usersRepo, viemNftClient } = createService();
+    const { service, projectsRepo, usersRepo, viemNftClient, notifications } =
+      createService();
 
     const project = roiProjectStub();
     projectsRepo.findById.mockResolvedValue(project);
@@ -492,6 +511,13 @@ describe('ProjectsService — ROI approval provisioning', () => {
             OnchainProvisioningStatus.PENDING,
       ),
     ).toBe(true);
+    expect(notifications.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipientId: mockCreatorId,
+        category: 'campaign',
+        title: 'Campaign approved',
+      }),
+    );
 
     // Verifies createProjectNFT was called
     expect(viemNftClient.createProjectNFT).toHaveBeenCalledWith(
