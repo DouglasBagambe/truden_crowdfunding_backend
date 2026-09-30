@@ -119,7 +119,7 @@ export class TreasuryService {
     const walletMetadata = dto.metadata ?? {};
     const toWallet =
       typeof walletMetadata.toWallet === 'string'
-        ? (walletMetadata.toWallet as string)
+        ? walletMetadata.toWallet
         : undefined;
 
     let txHash = dto.txHash;
@@ -229,7 +229,7 @@ export class TreasuryService {
       const createdAt: Record<string, Date> = {};
       if (query.fromDate) createdAt.$gte = new Date(query.fromDate);
       if (query.toDate) createdAt.$lte = new Date(query.toDate);
-      filter.createdAt = createdAt as any;
+      filter.createdAt = createdAt;
     }
 
     if (query.minAmount || query.maxAmount) {
@@ -240,7 +240,7 @@ export class TreasuryService {
       if (typeof query.maxAmount === 'number') {
         amountFilter.$lte = query.maxAmount;
       }
-      filter.amount = amountFilter as any;
+      filter.amount = amountFilter;
     }
 
     const page = query.page && query.page > 0 ? query.page : 1;
@@ -505,7 +505,7 @@ export class TreasuryService {
       type: doc.type,
       amount: doc.amount,
       txHash: doc.txHash,
-      initiatedBy: doc.initiatedBy ? String(doc.initiatedBy) : null,
+      initiatedBy: doc.initiatedBy ? doc.initiatedBy.toHexString() : null,
       metadata: doc.metadata ?? null,
       createdAt,
     };

@@ -2,6 +2,24 @@ import { Injectable } from '@nestjs/common';
 import { FinancialDatabase } from './financial.database';
 import { KeiboInvestmentReceiptService } from '../investments/services/keibo-investment-receipt.service';
 
+type ReceiptJobRow = {
+  id: string;
+  state: string;
+  tx_hash: `0x${string}` | null;
+  investor_wallet: `0x${string}`;
+  campaign_id: string;
+  amount_minor: string;
+  expires_at: Date;
+  policy_hash: `0x${string}`;
+  eligibility_signature: `0x${string}`;
+  nonce: string;
+  eligibility_id: string;
+  eligibility_status: string;
+  issuance_state: string;
+  issuance_id: string;
+  reason_hash: `0x${string}`;
+};
+
 @Injectable()
 export class FinancialReceiptWorker {
   constructor(
@@ -14,7 +32,7 @@ export class FinancialReceiptWorker {
       throw Object.assign(new Error('Invalid receipt issuance job'), {
         code: 'INVALID_PAYLOAD',
       });
-    const row = await this.database.query<any>(
+    const row = await this.database.query<ReceiptJobRow>(
       `SELECT i.*,e.investor_wallet,e.campaign_id,e.amount_minor,e.expires_at,e.policy_hash,e.eligibility_signature,e.nonce,e.status AS eligibility_status FROM financial_receipt_issuances i JOIN financial_receipt_eligibilities e ON e.id=i.eligibility_id WHERE i.id=$1`,
       [id],
     );
@@ -69,7 +87,7 @@ export class FinancialReceiptWorker {
       throw Object.assign(new Error('Invalid receipt finalization job'), {
         code: 'INVALID_PAYLOAD',
       });
-    const row = await this.database.query<any>(
+    const row = await this.database.query<ReceiptJobRow>(
       `SELECT i.*,e.investor_wallet,e.campaign_id,e.amount_minor,e.nonce FROM financial_receipt_issuances i JOIN financial_receipt_eligibilities e ON e.id=i.eligibility_id WHERE i.id=$1`,
       [id],
     );
@@ -135,7 +153,7 @@ export class FinancialReceiptWorker {
       throw Object.assign(new Error('Invalid receipt revocation job'), {
         code: 'INVALID_PAYLOAD',
       });
-    const row = await this.database.query<any>(
+    const row = await this.database.query<ReceiptJobRow>(
       `SELECT r.*,i.state AS issuance_state,i.tx_hash AS issuance_tx_hash,i.chain_id,i.contract_address,e.investor_wallet,e.campaign_id,e.amount_minor
        FROM financial_receipt_revocations r JOIN financial_receipt_issuances i ON i.id=r.issuance_id
        JOIN financial_receipt_eligibilities e ON e.id=i.eligibility_id WHERE r.id=$1`,
@@ -155,7 +173,7 @@ export class FinancialReceiptWorker {
       throw Object.assign(new Error('Receipt is not issued'), {
         code: 'RECEIPT_POLICY_INVALID',
       });
-    let txHash = revocation.tx_hash as string | null;
+    let txHash = revocation.tx_hash;
     if (!txHash) {
       txHash = await this.receipt.submitRevoke({
         investor: revocation.investor_wallet,
@@ -175,9 +193,7 @@ export class FinancialReceiptWorker {
         );
       });
     }
-    const receipt = await this.receipt.getTransactionReceipt(
-      txHash as `0x${string}`,
-    );
+    const receipt = await this.receipt.getTransactionReceipt(txHash);
     if (receipt.state === 'PENDING')
       throw Object.assign(
         new Error('Receipt revocation transaction is pending'),

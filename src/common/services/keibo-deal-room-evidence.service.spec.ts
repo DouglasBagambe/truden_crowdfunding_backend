@@ -3,7 +3,7 @@ import * as viem from 'viem';
 import { KeiboDealRoomEvidenceService } from './keibo-deal-room-evidence.service';
 
 jest.mock('viem', () => ({
-  ...jest.requireActual('viem'),
+  ...jest.requireActual<typeof import('viem')>('viem'),
   createPublicClient: jest.fn(),
   decodeEventLog: jest.fn(),
   http: jest.fn(() => ({})),
@@ -27,12 +27,10 @@ const client = (overrides: Record<string, unknown> = {}) => ({
   getChainId: jest.fn().mockResolvedValue(11155111),
   getCode: jest.fn().mockResolvedValue('0x1234'),
   readContract: jest.fn().mockResolvedValue(false),
-  waitForTransactionReceipt: jest
-    .fn()
-    .mockResolvedValue({
-      status: 'success',
-      logs: [{ address, data: '0x', topics: [] }],
-    }),
+  waitForTransactionReceipt: jest.fn().mockResolvedValue({
+    status: 'success',
+    logs: [{ address, data: '0x', topics: [] }],
+  }),
   ...overrides,
 });
 

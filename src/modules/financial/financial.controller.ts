@@ -52,6 +52,9 @@ class ReceiptRevocationDto {
   @IsString() reason!: string;
 }
 
+const callbackValue = (value: unknown): string =>
+  typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+
 @Controller('financial')
 export class FinancialController {
   constructor(
@@ -102,13 +105,13 @@ export class FinancialController {
         'Unsupported Flutterwave payout event',
       );
     return this.payoutWorker.callback({
-      transferId: String(data.id ?? ''),
-      reference: String(data.reference ?? ''),
-      amount: String(data.amount ?? ''),
-      currency: String(
-        data.destination_currency ?? data.currency ?? '',
+      transferId: callbackValue(data.id),
+      reference: callbackValue(data.reference),
+      amount: callbackValue(data.amount),
+      currency: callbackValue(
+        data.destination_currency ?? data.currency,
       ).toUpperCase(),
-      status: String(data.status ?? '').toUpperCase() as
+      status: callbackValue(data.status).toUpperCase() as
         | 'PENDING'
         | 'PROCESSING'
         | 'SUCCESSFUL'

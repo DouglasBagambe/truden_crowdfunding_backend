@@ -50,11 +50,12 @@ export class AuthCookieService {
     response.cookie('keibo_csrf', token, {
       ...this.baseOptions(),
       httpOnly: false,
-      path: '/api',
+      path: '/',
       maxAge: this.durationMs(
         this.configService.get('REFRESH_TOKEN_EXPIRY') || '7d',
       ),
     });
+    response.clearCookie('keibo_csrf', { ...this.baseOptions(), path: '/api' });
     return token;
   }
 
@@ -72,6 +73,7 @@ export class AuthCookieService {
       path: '/api/auth',
     });
     response.clearCookie('keibo_csrf', { ...this.baseOptions(), path: '/api' });
+    response.clearCookie('keibo_csrf', { ...this.baseOptions(), path: '/' });
   }
 
   private baseOptions(): CookieOptions {

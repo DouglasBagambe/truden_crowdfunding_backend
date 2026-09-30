@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { FinancialPayoutWorker } from './financial-payout.worker';
 
 const payout = (state = 'pending') => ({
@@ -24,7 +25,9 @@ const setup = (row = payout()) => {
   };
   const database = {
     query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [row] }),
-    transaction: jest.fn((fn) => fn(client)),
+    transaction: jest.fn((fn: (connection: PoolClient) => Promise<unknown>) =>
+      fn(client as unknown as PoolClient),
+    ),
   };
   const provider = {
     createTransfer: jest
@@ -158,13 +161,13 @@ describe('FinancialPayoutWorker', () => {
   it('correlates callback data and never regresses PAID', async () => {
     const { worker, database, client } = setup(payout('paid'));
     database.transaction.mockImplementation(
-      async (fn: (c: typeof client) => unknown) =>
+      (fn: (c: PoolClient) => Promise<unknown>) =>
         fn({
           ...client,
           query: jest
             .fn()
             .mockResolvedValue({ rowCount: 1, rows: [payout('paid')] }),
-        }),
+        } as unknown as PoolClient),
     );
     await expect(
       worker.callback({

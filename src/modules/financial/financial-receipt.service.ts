@@ -5,7 +5,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import type { Address, Hex } from 'viem';
+import type { Address } from 'viem';
+import type { PoolClient } from 'pg';
+import { KYCStatus } from '../../common/enums/role.enum';
 import { KeiboContractConfigService } from '../../common/services/keibo-contract-config.service';
 import { PlatformSignerService } from '../../common/services/platform-signer.service';
 import { KeiboInvestmentReceiptService } from '../investments/services/keibo-investment-receipt.service';
@@ -29,6 +31,30 @@ type Settlement = {
   campaign_id: string;
 };
 
+type EligibilityRow = {
+  id: string;
+  payment_intent_id: string;
+  investor_wallet: string;
+  campaign_id: string;
+  amount_minor: string;
+  chain_id: number;
+  policy_hash: string;
+  nonce: string;
+  expires_at: Date;
+  status: string;
+};
+type ReceiptStateRow = { id: string; state: string; tx_hash: string | null };
+type ReceiptReadRow = ReceiptStateRow & {
+  block_number: string | null;
+  log_index: number | null;
+  receipt_token_id: string | null;
+  issued_at: Date | null;
+  revocation_state: string | null;
+  investor_wallet: string;
+  campaign_id: string;
+  amount_minor: string;
+};
+
 @Injectable()
 export class FinancialReceiptService {
   constructor(
@@ -44,7 +70,7 @@ export class FinancialReceiptService {
     const runtime = this.config.getRequired();
     const settlement = await this.settlement(userId, settlementId);
     const user = await this.users.findById(userId);
-    if (user?.kycStatus !== 'VERIFIED')
+    if (user?.kycStatus !== KYCStatus.VERIFIED)
       throw new ForbiddenException(
         'Verified KYC is required for receipt eligibility',
       );
@@ -60,7 +86,7 @@ export class FinancialReceiptService {
       settlement.project_id,
       settlement.campaign_id,
     );
-    const existing = await this.database.query<any>(
+    const existing = await this.database.query<EligibilityRow>(
       'SELECT * FROM financial_receipt_eligibilities WHERE payment_intent_id=$1',
       [settlementId],
     );
@@ -98,7 +124,7 @@ export class FinancialReceiptService {
       nonce,
     });
     const row = await this.database.transaction(async (client) => {
-      const result = await client.query<any>(
+      const result = await client.query<EligibilityRow>(
         `INSERT INTO financial_receipt_eligibilities(payment_intent_id,user_id,investor_wallet,campaign_id,amount_minor,chain_id,policy_version,canonical_policy_payload,policy_hash,eligibility_signature,nonce,expires_at,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,to_timestamp($12),'AUTHORIZED') ON CONFLICT(payment_intent_id) DO UPDATE SET canonical_policy_payload=EXCLUDED.canonical_policy_payload,policy_hash=EXCLUDED.policy_hash,eligibility_signature=EXCLUDED.eligibility_signature,nonce=EXCLUDED.nonce,expires_at=EXCLUDED.expires_at,status='AUTHORIZED',updated_at=now() WHERE financial_receipt_eligibilities.status IN ('EXPIRED','FAILED') RETURNING *`,
         [
           settlementId,
@@ -130,7 +156,7 @@ export class FinancialReceiptService {
 
   async issue(userId: string, settlementId: string) {
     return this.database.transaction(async (client) => {
-      const eligibility = await client.query<any>(
+      const eligibility = await client.query<EligibilityRow>(
         `SELECT * FROM financial_receipt_eligibilities WHERE payment_intent_id=$1 AND user_id=$2 FOR UPDATE`,
         [settlementId, userId],
       );
@@ -143,7 +169,7 @@ export class FinancialReceiptService {
         );
         throw new ConflictException('Receipt eligibility has expired');
       }
-      const prior = await client.query<any>(
+      const prior = await client.query<ReceiptStateRow>(
         'SELECT id,state,tx_hash FROM financial_receipt_issuances WHERE payment_intent_id=$1 FOR UPDATE',
         [settlementId],
       );
@@ -173,7 +199,7 @@ export class FinancialReceiptService {
   }
 
   async get(userId: string, settlementId: string) {
-    const row = await this.database.query<any>(
+    const row = await this.database.query<ReceiptReadRow>(
       `SELECT i.id,i.state,i.tx_hash,i.block_number,i.log_index,i.receipt_token_id,i.issued_at,r.state AS revocation_state,e.investor_wallet,e.campaign_id,e.amount_minor FROM financial_receipt_issuances i JOIN financial_receipt_eligibilities e ON e.id=i.eligibility_id LEFT JOIN financial_receipt_revocations r ON r.issuance_id=i.id WHERE i.payment_intent_id=$1 AND e.user_id=$2`,
       [settlementId, userId],
     );
@@ -189,13 +215,13 @@ export class FinancialReceiptService {
     if (!reason.trim())
       throw new ConflictException('A revocation reason is required');
     return this.database.transaction(async (client) => {
-      const issuance = await client.query<any>(
+      const issuance = await client.query<ReceiptStateRow>(
         'SELECT id,state FROM financial_receipt_issuances WHERE id=$1 FOR UPDATE',
         [issuanceId],
       );
       if (!issuance.rowCount || issuance.rows[0].state !== 'ISSUED')
         throw new ConflictException('Only issued receipts can be revoked');
-      const prior = await client.query<any>(
+      const prior = await client.query<ReceiptStateRow>(
         'SELECT id,state FROM financial_receipt_revocations WHERE issuance_id=$1 FOR UPDATE',
         [issuanceId],
       );
@@ -218,7 +244,7 @@ export class FinancialReceiptService {
   }
 
   private async settlement(userId: string, id: string): Promise<Settlement> {
-    const row = await this.database.query<any>(
+    const row = await this.database.query<Settlement>(
       `SELECT p.id,p.project_id,p.contributor_id,p.amount_minor,p.state,split_part(e.event_identity,':',4) AS investor_wallet,split_part(e.event_identity,':',3) AS campaign_id FROM financial_payment_intents p JOIN financial_chain_evidence e ON e.payment_intent_id=p.id WHERE p.id=$1 AND p.contributor_id=$2 AND p.state='settled'`,
       [id, userId],
     );
@@ -232,7 +258,7 @@ export class FinancialReceiptService {
       throw new ConflictException('Settlement chain evidence is invalid');
     return result;
   }
-  private safeEligibility(row: any) {
+  private safeEligibility(row: EligibilityRow) {
     return {
       id: row.id,
       settlementId: row.payment_intent_id,
@@ -247,7 +273,7 @@ export class FinancialReceiptService {
     };
   }
   private async outbox(
-    client: any,
+    client: PoolClient,
     topic: string,
     aggregateId: string,
     payload: Record<string, unknown>,

@@ -16,9 +16,9 @@ import { KeiboContractConfigService } from './keibo-contract-config.service';
 const blocked = async (call: () => unknown) => {
   await expect(Promise.resolve().then(call)).rejects.toMatchObject({
     status: 410,
-    response: expect.objectContaining({
+    response: expect.objectContaining<{ code: string }>({
       code: KEIBO_LEGACY_ROUTE_DISABLED,
-    }),
+    }) as unknown,
   });
 };
 
@@ -222,7 +222,7 @@ describe('KEIBO legacy route isolation', () => {
     expect(payments.handlePayoutCallback).not.toHaveBeenCalled();
   });
 
-  it('keeps verified on-chain contribution settlement independent from legacy-route isolation', () => {
+  it('keeps verified on-chain contribution settlement independent from legacy-route isolation', async () => {
     const financial = { settleVerifiedOnchainContribution: jest.fn() };
     const controller = new FinancialController(
       financial as never,
@@ -231,7 +231,7 @@ describe('KEIBO legacy route isolation', () => {
       {} as never,
     );
 
-    controller.submitOnchainContribution(
+    await controller.submitOnchainContribution(
       {
         paymentIntentId: 'intent',
         projectOnchainId: '1',

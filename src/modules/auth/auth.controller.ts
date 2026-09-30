@@ -5,6 +5,7 @@ import {
   Body,
   UseGuards,
   HttpCode,
+  Header,
   HttpStatus,
   Req,
   Res,
@@ -37,6 +38,7 @@ export class AuthController {
 
   @Public()
   @Get('csrf')
+  @Header('Cache-Control', 'no-store')
   issueCsrf(@Res({ passthrough: true }) response: Response) {
     return { csrfToken: this.authCookieService.setCsrf(response) };
   }

@@ -40,10 +40,12 @@ export class InvestmentsController {
   @Post('invest')
   @HttpCode(HttpStatus.CREATED)
   @Roles(UserRole.INVESTOR)
-  async invest(
-    @CurrentUser() currentUser: JwtPayload,
-    @Body() dto: CreateInvestmentDto,
+  invest(
+    @CurrentUser() _currentUser: JwtPayload,
+    @Body() _dto: CreateInvestmentDto,
   ) {
+    void _currentUser;
+    void _dto;
     this.legacyRouteGuard.rejectInKeiboMode();
     throw new BadRequestException(
       'Direct investment creation is disabled. Use the DPO checkout flow.',

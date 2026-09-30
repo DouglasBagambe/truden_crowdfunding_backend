@@ -29,20 +29,23 @@ describe('PlatformSignerService', () => {
     expect(signer.provider).toBe('local');
   });
 
-  it.each(['production', 'development'])('rejects local signing in %s', (nodeEnv) => {
-    expect(
-      () =>
-        new PlatformSignerService(
-          config({
-            NODE_ENV: nodeEnv,
-            PLATFORM_SIGNER_PROVIDER: 'local',
-            UAT_PLATFORM_SIGNER_PRIVATE_KEY: `0x${'1'.repeat(64)}`,
-            RPC_URL: 'https://rpc.example.test',
-            CHAIN_ID: '11155111',
-          }) as never,
-        ),
-    ).toThrow('permitted only in NODE_ENV=test');
-  });
+  it.each(['production', 'development'])(
+    'rejects local signing in %s',
+    (nodeEnv) => {
+      expect(
+        () =>
+          new PlatformSignerService(
+            config({
+              NODE_ENV: nodeEnv,
+              PLATFORM_SIGNER_PROVIDER: 'local',
+              UAT_PLATFORM_SIGNER_PRIVATE_KEY: `0x${'1'.repeat(64)}`,
+              RPC_URL: 'https://rpc.example.test',
+              CHAIN_ID: '11155111',
+            }) as never,
+          ),
+      ).toThrow('permitted only in NODE_ENV=test');
+    },
+  );
 
   it.each([
     [

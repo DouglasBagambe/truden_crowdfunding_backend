@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { FinancialPayoutService } from './financial-payout.service';
 
 const verifiedUser = {
@@ -9,16 +10,16 @@ const setup = () => {
   const client = { query: jest.fn() };
   const database = {
     query: jest.fn(),
-    transaction: jest.fn((fn) => fn(client)),
+    transaction: jest.fn((fn: (connection: PoolClient) => Promise<unknown>) =>
+      fn(client as unknown as PoolClient),
+    ),
   };
   const users = { findById: jest.fn().mockResolvedValue(verifiedUser) };
   const flutterwave = {
-    createRecipient: jest
-      .fn()
-      .mockResolvedValue({
-        id: 'recipient-1',
-        metadata: { network: 'MTN', status: 'ACTIVE' },
-      }),
+    createRecipient: jest.fn().mockResolvedValue({
+      id: 'recipient-1',
+      metadata: { network: 'MTN', status: 'ACTIVE' },
+    }),
   };
   return {
     service: new FinancialPayoutService(
@@ -93,7 +94,8 @@ describe('FinancialPayoutService', () => {
     expect(flutterwave.createRecipient).toHaveBeenCalledWith(
       expect.objectContaining({ accountNumber: '256771234567' }),
     );
-    const [, values] = database.query.mock.calls[0];
+    const calls = database.query.mock.calls as unknown[][];
+    const values: unknown = calls[0][1];
     expect(JSON.stringify(values)).not.toContain('256771234567');
     expect(JSON.stringify(values)).not.toContain('secret');
   });
@@ -222,9 +224,9 @@ describe('FinancialPayoutService', () => {
     const result = await service.getPayout('creator-1', 'payout-1');
     expect(result).toEqual(
       expect.not.objectContaining({
-        account_number: expect.anything(),
-        provider_metadata: expect.anything(),
-        provider_recipient_id: expect.anything(),
+        account_number: expect.anything() as unknown,
+        provider_metadata: expect.anything() as unknown,
+        provider_recipient_id: expect.anything() as unknown,
       }),
     );
   });

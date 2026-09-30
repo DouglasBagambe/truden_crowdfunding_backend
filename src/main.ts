@@ -34,7 +34,10 @@ async function bootstrap() {
 
   const trustProxy = configService.get<string>('TRUST_PROXY')?.trim();
   if (trustProxy) {
-    app.set('trust proxy', trustProxy);
+    app.set(
+      'trust proxy',
+      /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy,
+    );
   }
   app.use(cookieParser());
   app.use(

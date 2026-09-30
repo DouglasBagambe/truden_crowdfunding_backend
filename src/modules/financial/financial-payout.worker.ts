@@ -11,6 +11,23 @@ type CallbackInput = {
   status: 'PENDING' | 'PROCESSING' | 'SUCCESSFUL' | 'FAILED' | 'UNKNOWN';
 };
 
+type PayoutRow = {
+  id: string;
+  state: string;
+  provider_transfer_id: string | null;
+  destination_status: string;
+  destination_creator: string;
+  creator_id: string;
+  release_creator: string;
+  amount_minor: string;
+  owner_proceeds_minor: string;
+  currency: string;
+  release_currency: string;
+  provider_recipient_id: string;
+  keibo_reference: string;
+  idempotency_key: string;
+};
+
 @Injectable()
 export class FinancialPayoutWorker {
   constructor(
@@ -25,7 +42,7 @@ export class FinancialPayoutWorker {
   }
   async dispatch(payload: Record<string, unknown>) {
     const payoutId = this.payoutId(payload);
-    const row = await this.database.query<any>(
+    const row = await this.database.query<PayoutRow>(
       `SELECT p.*,d.provider_recipient_id,d.status AS destination_status,d.creator_id AS destination_creator,r.creator_id AS release_creator,r.owner_proceeds_minor,r.currency AS release_currency FROM financial_payout_transfers p JOIN financial_payout_destinations d ON d.id=p.payout_destination_id JOIN financial_campaign_releases r ON r.id=p.release_id WHERE p.id=$1`,
       [payoutId],
     );
@@ -67,7 +84,7 @@ export class FinancialPayoutWorker {
   }
   async reconcile(payload: Record<string, unknown>) {
     const payoutId = this.payoutId(payload);
-    const row = await this.database.query<any>(
+    const row = await this.database.query<PayoutRow>(
       'SELECT * FROM financial_payout_transfers WHERE id=$1',
       [payoutId],
     );
@@ -125,7 +142,7 @@ export class FinancialPayoutWorker {
     )
       throw new ConflictException('Malformed payout callback');
     await this.database.transaction(async (client) => {
-      const row = await client.query<any>(
+      const row = await client.query<PayoutRow>(
         'SELECT * FROM financial_payout_transfers WHERE keibo_reference=$1 FOR UPDATE',
         [input.reference],
       );

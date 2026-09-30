@@ -86,7 +86,7 @@ export class PlatformSignerService {
       abi: request.abi,
       functionName: request.functionName,
       args: request.args,
-    } as never) as Promise<Hash>;
+    } as never);
   }
 
   /** Narrow receipt-only typed signing boundary; controllers cannot sign arbitrary data. */

@@ -26,7 +26,7 @@ export class MilestoneDto {
     description:
       'Milestone description (optional — defaults to title if omitted)',
   })
-  @Transform(({ value }) =>
+  @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' && value.trim() === '' ? undefined : value,
   )
   @IsOptional()

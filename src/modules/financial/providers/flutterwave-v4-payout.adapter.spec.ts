@@ -1,3 +1,4 @@
+import { createHmac } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import { of, throwError } from 'rxjs';
 import { FlutterwaveV4PayoutAdapter } from './flutterwave-v4-payout.adapter';
@@ -62,11 +63,11 @@ describe('FlutterwaveV4PayoutAdapter', () => {
         'https://flutterwave.test/transfers/recipients',
         expected,
         expect.objectContaining({
-          headers: expect.objectContaining({
+          headers: expect.objectContaining<Record<string, unknown>>({
             Authorization: 'Bearer secret-not-to-log',
             'X-Idempotency-Key': 'key-1',
-            'X-Trace-Id': expect.any(String),
-          }),
+            'X-Trace-Id': expect.any(String) as unknown,
+          }) as unknown,
         }),
       );
     },
@@ -118,7 +119,9 @@ describe('FlutterwaveV4PayoutAdapter', () => {
         },
       }),
       expect.objectContaining({
-        headers: expect.objectContaining({ 'X-Idempotency-Key': 'stable-key' }),
+        headers: expect.objectContaining<Record<string, unknown>>({
+          'X-Idempotency-Key': 'stable-key',
+        }) as unknown,
       }),
     );
   });
@@ -201,10 +204,10 @@ describe('FlutterwaveV4PayoutAdapter', () => {
     expect(client.get).toHaveBeenCalledWith(
       'https://flutterwave.test/transfers/id%20%2F%201',
       expect.objectContaining({
-        headers: expect.objectContaining({
+        headers: expect.objectContaining<Record<string, unknown>>({
           Authorization: 'Bearer secret-not-to-log',
-          'X-Trace-Id': expect.any(String),
-        }),
+          'X-Trace-Id': expect.any(String) as unknown,
+        }) as unknown,
       }),
     );
   });
@@ -215,8 +218,7 @@ describe('FlutterwaveV4PayoutAdapter', () => {
       client as never,
     );
     const raw = Buffer.from('{"a":1}');
-    const signature = require('crypto')
-      .createHmac('sha256', values.FLUTTERWAVE_WEBHOOK_SECRET)
+    const signature = createHmac('sha256', values.FLUTTERWAVE_WEBHOOK_SECRET)
       .update(raw)
       .digest('base64');
     expect(adapter.verifyWebhookSignature(raw, signature)).toBe(true);

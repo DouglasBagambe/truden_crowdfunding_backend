@@ -20,7 +20,7 @@ export type ReceiptPolicyInput = {
 /** Fixed ABI tuple prevents JSON serialization or object-key ordering from changing policy truth. */
 export function canonicalReceiptPolicy(input: ReceiptPolicyInput) {
   const settlementReferenceHash = keccak256(
-    `0x${Buffer.from(input.settlementId, 'utf8').toString('hex')}` as Hex,
+    `0x${Buffer.from(input.settlementId, 'utf8').toString('hex')}`,
   );
   const encoded = encodeAbiParameters(
     parseAbiParameters('string,uint256,address,uint256,uint256,bytes32,uint64'),
@@ -42,7 +42,5 @@ export function canonicalReceiptPolicy(input: ReceiptPolicyInput) {
 }
 
 export function receiptReasonHash(reason: string): Hex {
-  return keccak256(
-    `0x${Buffer.from(reason.trim(), 'utf8').toString('hex')}` as Hex,
-  );
+  return keccak256(`0x${Buffer.from(reason.trim(), 'utf8').toString('hex')}`);
 }

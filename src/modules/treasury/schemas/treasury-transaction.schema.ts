@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Schema as MongooseSchema } from 'mongoose';
+import { Document, Types, Schema as MongooseSchema } from 'mongoose';
 import { TreasuryTransactionType } from '../interfaces/treasury-transaction.interface';
 
 @Schema({ timestamps: { createdAt: true, updatedAt: false } })
@@ -14,7 +14,7 @@ export class TreasuryTransaction {
   txHash?: string;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
-  initiatedBy?: MongooseSchema.Types.ObjectId;
+  initiatedBy?: Types.ObjectId;
 
   @Prop({ type: MongooseSchema.Types.Mixed })
   metadata?: Record<string, any>;
