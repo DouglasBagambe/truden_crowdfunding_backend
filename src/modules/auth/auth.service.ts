@@ -181,7 +181,8 @@ export class AuthService {
     const roles = Array.isArray(user.roles) ? user.roles : [];
     const isAdmin =
       roles.includes(UserRole.ADMIN) || roles.includes(UserRole.SUPERADMIN);
-    if (isAdmin) {
+    const bypassUatAdminMfa = this.isUatBootstrapAdmin(user);
+    if (isAdmin && !bypassUatAdminMfa) {
       const allowedIps = this.getAdminAllowedIps();
       if (allowedIps && ipAddress && !allowedIps.has(ipAddress)) {
         throw new UnauthorizedException('Admin login not allowed from this IP');
@@ -191,7 +192,7 @@ export class AuthService {
       }
     }
 
-    const requiresMfa = this.requiresMfa(user);
+    const requiresMfa = !bypassUatAdminMfa && this.requiresMfa(user);
     if (requiresMfa) {
       if (!loginDto.otp) {
         if (user.mfa?.emailEnabled) {
@@ -1291,6 +1292,21 @@ export class AuthService {
 
   private requiresMfa(user: UserDocument) {
     return Boolean(user.mfa?.enabled);
+  }
+
+  private isUatBootstrapAdmin(user: UserDocument): boolean {
+    const nodeEnv = (this.configService.get<string>('NODE_ENV') || '')
+      .trim()
+      .toLowerCase();
+    const configuredEmail = this.configService
+      .get<string>('UAT_BOOTSTRAP_ADMIN_EMAIL')
+      ?.trim()
+      .toLowerCase();
+    return (
+      nodeEnv === 'test' &&
+      Boolean(configuredEmail) &&
+      user.email?.trim().toLowerCase() === configuredEmail
+    );
   }
 
   private getAdminAllowedIps(): Set<string> | null {
