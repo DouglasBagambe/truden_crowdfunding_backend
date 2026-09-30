@@ -66,4 +66,41 @@ describe('AuthCookieService', () => {
       expect.objectContaining({ path: '/api' }),
     );
   });
+
+  it('can disable partitioning for a same-origin proxy while retaining secure cross-site semantics', () => {
+    const proxyConfig = {
+      get: jest.fn((key: string) => {
+        const values: Record<string, string> = {
+          CSRF_SECRET: 'csrf-test-secret',
+          JWT_EXPIRY: '15m',
+          REFRESH_TOKEN_EXPIRY: '7d',
+          NODE_ENV: 'test',
+          COOKIE_SECURE: 'true',
+          COOKIE_SAME_SITE: 'none',
+          COOKIE_PARTITIONED: 'false',
+        };
+        return values[key];
+      }),
+    } as unknown as ConfigService;
+    const cookie = jest.fn();
+    const response = { cookie, clearCookie: jest.fn() } as unknown as Response;
+
+    new AuthCookieService(proxyConfig).setSession(response, {
+      accessToken: 'access',
+      refreshToken: 'refresh',
+    });
+
+    expect(cookie).toHaveBeenCalledWith(
+      'keibo_access',
+      'access',
+      expect.objectContaining({ secure: true, sameSite: 'none' }),
+    );
+    const accessCall = (
+      cookie.mock.calls as unknown as Array<
+        [string, string, Record<string, unknown>]
+      >
+    ).find(([name]) => name === 'keibo_access');
+    expect(accessCall).toBeDefined();
+    expect(accessCall?.[2]).not.toHaveProperty('partitioned');
+  });
 });
