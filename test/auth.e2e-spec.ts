@@ -50,7 +50,9 @@ const isAuthUser = (value: unknown): value is AuthUser => {
 };
 
 function cookiePair(setCookies: string[], name: string): string {
-  const cookie = setCookies.find((value) => value.startsWith(`${name}=`));
+  const cookie = setCookies.find(
+    (value) => value.startsWith(`${name}=`) && !value.startsWith(`${name}=;`),
+  );
   if (!cookie) throw new Error(`Expected ${name} cookie`);
   return cookie.split(';', 1)[0];
 }

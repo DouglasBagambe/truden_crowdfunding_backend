@@ -47,6 +47,7 @@ export class AuthCookieService {
       .update(random)
       .digest('base64url');
     const token = `${random}.${signature}`;
+    response.clearCookie('keibo_csrf', { ...this.baseOptions(), path: '/api' });
     response.cookie('keibo_csrf', token, {
       ...this.baseOptions(),
       httpOnly: false,
@@ -55,7 +56,6 @@ export class AuthCookieService {
         this.configService.get('REFRESH_TOKEN_EXPIRY') || '7d',
       ),
     });
-    response.clearCookie('keibo_csrf', { ...this.baseOptions(), path: '/api' });
     return token;
   }
 
