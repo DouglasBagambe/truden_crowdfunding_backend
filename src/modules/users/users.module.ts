@@ -5,6 +5,7 @@ import { User, UserSchema } from './schemas/user.schema';
 import { UsersController } from './controllers/users.controller';
 import { AdminUsersController } from './controllers/admin-users.controller';
 import { KycWebhookController } from './controllers/kyc-webhook.controller';
+import { UatBootstrapController } from './controllers/uat-bootstrap.controller';
 import { UsersService } from './users.service';
 import { UsersRepository } from './repositories/users.repository';
 import { UserEventsListener } from './listeners/user-events.listener';
@@ -27,7 +28,12 @@ import {
     AuthModule,
     AuditModule,
   ],
-  controllers: [UsersController, AdminUsersController, KycWebhookController],
+  controllers: [
+    UsersController,
+    AdminUsersController,
+    KycWebhookController,
+    UatBootstrapController,
+  ],
   providers: [UsersService, UsersRepository, UserEventsListener],
   exports: [UsersService, UsersRepository],
 })
