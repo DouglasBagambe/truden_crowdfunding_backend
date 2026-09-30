@@ -87,6 +87,9 @@ export class AuthCookieService {
           ? 'none'
           : 'lax';
     const domain = this.configService.get<string>('COOKIE_DOMAIN')?.trim();
+    const partitioned =
+      sameSite === 'none' &&
+      this.configService.get<string>('COOKIE_PARTITIONED') !== 'false';
     return {
       secure:
         this.configService.get<string>('COOKIE_SECURE') === 'true' ||
@@ -95,7 +98,7 @@ export class AuthCookieService {
       // Vercel and Render are different sites. Partition the cross-site cookie
       // so modern browsers can retain it without allowing it to track users
       // across unrelated top-level sites.
-      partitioned: sameSite === 'none',
+      ...(partitioned ? { partitioned: true } : {}),
       ...(domain ? { domain } : {}),
     };
   }
