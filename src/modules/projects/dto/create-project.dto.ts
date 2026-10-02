@@ -3,7 +3,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
-  IsDate,
+  IsISO8601,
   IsEnum,
   IsNumber,
   IsOptional,
@@ -29,8 +29,6 @@ import { MilestoneDto } from './milestone.dto';
 import { DocumentAttachmentDto } from './document-attachment.dto';
 import { SocialLinkDto } from './social-link.dto';
 
-const toDate = (value: unknown) =>
-  value ? new Date(value as string) : undefined;
 const toStringArray = (value: unknown): string[] | undefined => {
   if (Array.isArray(value)) return value as string[];
   if (typeof value === 'string') {
@@ -190,15 +188,13 @@ export class CreateProjectDto {
 
   @ApiPropertyOptional({ description: 'Funding collection start date' })
   @IsOptional()
-  @IsDate()
-  @Transform(({ value }) => toDate(value))
-  fundingStartDate?: Date;
+  @IsISO8601({ strict: true })
+  fundingStartDate?: string;
 
   @ApiPropertyOptional({ description: 'Funding collection end date' })
   @IsOptional()
-  @IsDate()
-  @Transform(({ value }) => toDate(value))
-  fundingEndDate?: Date;
+  @IsISO8601({ strict: true })
+  fundingEndDate?: string;
 
   @ApiPropertyOptional({
     description: 'Milestones associated with the project',

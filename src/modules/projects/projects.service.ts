@@ -151,6 +151,15 @@ export class ProjectsService {
       { ...dto, type: projectType },
       { requireType: true },
     );
+    const fundingStartDate = this.parseIsoDate(
+      dto.fundingStartDate,
+      'fundingStartDate',
+    );
+    const fundingEndDate = this.parseIsoDate(
+      dto.fundingEndDate,
+      'fundingEndDate',
+    );
+    this.assertFundingWindow(fundingStartDate, fundingEndDate);
     if (projectType === ProjectType.CHARITY && dto.milestones?.length) {
       this.assertCharityMilestoneSchedule(dto.milestones);
     }
@@ -199,8 +208,8 @@ export class ProjectsService {
       status: ProjectStatus.PENDING_REVIEW,
       targetAmount: dto.targetAmount,
       currency: dto.currency,
-      fundingStartDate: dto.fundingStartDate,
-      fundingEndDate: dto.fundingEndDate,
+      fundingStartDate,
+      fundingEndDate,
       tags: dto.tags ?? [],
       videoUrls: dto.videoUrls ?? [],
       socialLinks: dto.socialLinks ?? [],
@@ -226,7 +235,7 @@ export class ProjectsService {
       const milestonesPayload = dto.milestones.map((m) => ({
         title: m.title,
         description: m.description?.trim() || m.title,
-        dueDate: m.dueDate,
+        dueDate: this.parseIsoDate(m.dueDate, 'milestone dueDate'),
         payoutPercentage: m.payoutPercentage ?? 0,
         status: MilestoneStatus.PLANNED,
         proofLinks: m.proofLinks ?? [],
@@ -334,10 +343,22 @@ export class ProjectsService {
     if (dto.targetAmount !== undefined)
       setPayload.targetAmount = dto.targetAmount;
     if (dto.currency !== undefined) setPayload.currency = dto.currency;
-    if (dto.fundingStartDate !== undefined)
-      setPayload.fundingStartDate = dto.fundingStartDate;
-    if (dto.fundingEndDate !== undefined)
-      setPayload.fundingEndDate = dto.fundingEndDate;
+    const fundingStartDate =
+      dto.fundingStartDate !== undefined
+        ? this.parseIsoDate(dto.fundingStartDate, 'fundingStartDate')
+        : undefined;
+    const fundingEndDate =
+      dto.fundingEndDate !== undefined
+        ? this.parseIsoDate(dto.fundingEndDate, 'fundingEndDate')
+        : undefined;
+    this.assertFundingWindow(
+      fundingStartDate ?? project.fundingStartDate,
+      fundingEndDate ?? project.fundingEndDate,
+    );
+    if (fundingStartDate !== undefined)
+      setPayload.fundingStartDate = fundingStartDate;
+    if (fundingEndDate !== undefined)
+      setPayload.fundingEndDate = fundingEndDate;
     if (dto.attachments !== undefined)
       setPayload.attachments = this.normalizeAttachmentArray(dto.attachments);
     if (dto.useOfFunds !== undefined)
@@ -1747,6 +1768,36 @@ export class ProjectsService {
 
   private normalizeUseOfFundsArray(value: unknown): UseOfFundsDto[] {
     return Array.isArray(value) ? (value as UseOfFundsDto[]) : [];
+  }
+
+  /**
+   * HTTP payloads carry ISO-8601 strings. Date instances are created only at
+   * the persistence boundary, where MongoDB expects them.
+   */
+  private parseIsoDate(value: string | undefined, fieldName: string) {
+    if (value === undefined) return undefined;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException(
+        `${fieldName} must be a valid ISO-8601 date`,
+      );
+    }
+    return date;
+  }
+
+  private assertFundingWindow(fundingStartDate?: Date, fundingEndDate?: Date) {
+    if (!fundingEndDate) return;
+    if (fundingEndDate.getTime() <= Date.now()) {
+      throw new BadRequestException('fundingEndDate must be in the future');
+    }
+    if (
+      fundingStartDate &&
+      fundingEndDate.getTime() <= fundingStartDate.getTime()
+    ) {
+      throw new BadRequestException(
+        'fundingEndDate must be after fundingStartDate',
+      );
+    }
   }
 
   private ensureValidObjectId(id: string) {

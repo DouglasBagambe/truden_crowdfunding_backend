@@ -6,6 +6,8 @@ import {
 import { ProjectsService } from './projects.service';
 import { ProjectStatus } from '../../common/enums/project-status.enum';
 import { ProjectType } from '../../common/enums/project-type.enum';
+import { CharityCategory } from '../../common/enums/charity-category.enum';
+import { CharitySubcategory } from '../../common/enums/charity-subcategory.enum';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { ProjectDecisionDto } from './dto/decision.dto';
@@ -283,8 +285,8 @@ describe('ProjectsService — existing CRUD', () => {
       risks: 'Execution risks',
       targetAmount: 1000,
       currency: 'USD',
-      fundingStartDate: new Date('2025-01-01'),
-      fundingEndDate: new Date('2025-02-01'),
+      fundingStartDate: '2099-01-01T00:00:00.000Z',
+      fundingEndDate: '2099-02-01T23:59:59.999Z',
       tags: ['education', 'tech'],
       videoUrls: ['https://example.com/video'],
       socialLinks: [{ platform: 'twitter', url: 'https://twitter.com/x' }],
@@ -311,6 +313,8 @@ describe('ProjectsService — existing CRUD', () => {
         projectType: ProjectType.ROI,
         name: 'Tech Academy',
         status: ProjectStatus.PENDING_REVIEW,
+        fundingStartDate: new Date('2099-01-01T00:00:00.000Z'),
+        fundingEndDate: new Date('2099-02-01T23:59:59.999Z'),
       }),
     );
     expect(milestonesRepo.createMany).not.toHaveBeenCalled();
@@ -370,6 +374,29 @@ describe('ProjectsService — existing CRUD', () => {
         }),
       ]),
     );
+  });
+
+  it('rejects a past campaign end date before persistence', async () => {
+    const { service, projectsRepo } = createService();
+
+    await expect(
+      service.createProject(mockCreatorId, {
+        type: ProjectType.CHARITY,
+        name: 'Community water project',
+        summary: 'A clean water project for the community',
+        story: 'A detailed community water project story.',
+        country: 'Uganda',
+        beneficiary: 'Community households',
+        paymentMethod: 'Mobile Money',
+        category: CharityCategory.COMMUNITY_GROUP,
+        subcategory: CharitySubcategory.OUTREACH,
+        targetAmount: 100000,
+        currency: 'UGX',
+        fundingEndDate: '2020-01-01T23:59:59.999Z',
+      }),
+    ).rejects.toThrow('fundingEndDate must be in the future');
+
+    expect(projectsRepo.create).not.toHaveBeenCalled();
   });
 
   it('rejects charity projects without category', async () => {

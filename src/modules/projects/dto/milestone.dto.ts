@@ -1,6 +1,6 @@
 import { Transform } from 'class-transformer';
 import {
-  IsDate,
+  IsISO8601,
   IsInt,
   IsOptional,
   IsString,
@@ -12,9 +12,6 @@ import {
   ApiProperty,
   ApiPropertyOptional,
 } from '../../../common/swagger.decorators';
-
-const toDate = (value: unknown) =>
-  value ? new Date(value as string) : undefined;
 
 export class MilestoneDto {
   @ApiProperty({ description: 'Milestone title' })
@@ -36,9 +33,8 @@ export class MilestoneDto {
 
   @ApiPropertyOptional({ description: 'Optional milestone due date' })
   @IsOptional()
-  @IsDate()
-  @Transform(({ value }) => toDate(value))
-  dueDate?: Date;
+  @IsISO8601({ strict: true })
+  dueDate?: string;
 
   @ApiPropertyOptional({
     description:
