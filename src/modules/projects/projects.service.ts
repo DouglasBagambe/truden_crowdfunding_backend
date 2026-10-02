@@ -445,7 +445,7 @@ export class ProjectsService {
         const milestonesPayload = dto.milestones.map((m) => ({
           title: m.title,
           description: m.description?.trim() || m.title,
-          dueDate: m.dueDate,
+          dueDate: this.parseIsoDate(m.dueDate, 'milestone dueDate'),
           payoutPercentage: m.payoutPercentage ?? 0,
           status: MilestoneStatus.PLANNED,
           proofLinks: m.proofLinks ?? [],
