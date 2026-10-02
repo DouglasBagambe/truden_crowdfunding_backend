@@ -6,11 +6,17 @@ describe('NotificationsService', () => {
   const recipientId = new Types.ObjectId().toString();
   const notificationId = new Types.ObjectId().toString();
 
-  const createQuery = <T>(value: T) => {
-    const query = {
-      sort: jest.fn(() => query),
-      limit: jest.fn(() => query),
-      lean: jest.fn().mockResolvedValue(value),
+  type QueryChain<T> = {
+    sort: (value: Record<string, 1 | -1>) => QueryChain<T>;
+    limit: (value: number) => QueryChain<T>;
+    lean: () => Promise<T>;
+  };
+
+  const createQuery = <T>(value: T): QueryChain<T> => {
+    const query: QueryChain<T> = {
+      sort: jest.fn<QueryChain<T>, [Record<string, 1 | -1>]>(() => query),
+      limit: jest.fn<QueryChain<T>, [number]>(() => query),
+      lean: jest.fn<Promise<T>, []>().mockResolvedValue(value),
     };
     return query;
   };
@@ -27,7 +33,11 @@ describe('NotificationsService', () => {
         createdAt: new Date('2026-10-01T00:00:00.000Z'),
       },
     ]);
-    const model = { find: jest.fn(() => query) };
+    const model = {
+      find: jest.fn<QueryChain<typeof query>, [Record<string, unknown>]>(
+        () => query,
+      ),
+    };
     const service = new NotificationsService(model as never);
 
     await expect(service.list(recipientId, 'campaign')).resolves.toEqual([
@@ -47,9 +57,14 @@ describe('NotificationsService', () => {
 
   it('does not allow one recipient to mark another recipient notification read', async () => {
     const model = {
-      findOneAndUpdate: jest.fn(() => ({
-        lean: jest.fn().mockResolvedValue(null),
-      })),
+      findOneAndUpdate: jest.fn<
+        { lean: () => Promise<null> },
+        [
+          Record<string, unknown>,
+          Record<string, unknown>,
+          Record<string, unknown>,
+        ]
+      >(() => ({ lean: jest.fn<Promise<null>, []>().mockResolvedValue(null) })),
     };
     const service = new NotificationsService(model as never);
 
