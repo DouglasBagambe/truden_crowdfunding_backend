@@ -47,10 +47,9 @@ describe('NotificationsService', () => {
         readAt: null,
       }),
     ]);
-    expect(model.find).toHaveBeenCalledWith({
-      recipientId: expect.any(Types.ObjectId),
-      category: 'campaign',
-    });
+    const [findFilter] = model.find.mock.calls[0] ?? [];
+    expect(findFilter?.category).toBe('campaign');
+    expect(findFilter?.recipientId).toBeInstanceOf(Types.ObjectId);
     expect(query.sort).toHaveBeenCalledWith({ createdAt: -1 });
     expect(query.limit).toHaveBeenCalledWith(100);
   });
@@ -71,11 +70,15 @@ describe('NotificationsService', () => {
     await expect(
       service.markRead(recipientId, notificationId),
     ).rejects.toBeInstanceOf(NotFoundException);
-    expect(model.findOneAndUpdate).toHaveBeenCalledWith(
-      { _id: notificationId, recipientId: expect.any(Types.ObjectId) },
-      { $set: { readAt: expect.any(Date) } },
-      { new: true },
-    );
+    const [filter, update, options] =
+      model.findOneAndUpdate.mock.calls[0] ?? [];
+    expect(filter?._id).toBe(notificationId);
+    expect(filter?.recipientId).toBeInstanceOf(Types.ObjectId);
+    expect(update?.$set).toHaveProperty('readAt');
+    expect(
+      (update?.$set as { readAt?: unknown } | undefined)?.readAt,
+    ).toBeInstanceOf(Date);
+    expect(options).toEqual({ new: true });
   });
 
   it('rejects malformed notification IDs without querying the database', async () => {
