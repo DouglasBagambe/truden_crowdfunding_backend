@@ -416,7 +416,11 @@ describe('Auth integration (e2e)', () => {
           passwordVersion: 0,
         },
         process.env.PASSWORD_RESET_SECRET!,
-        { expiresIn: -1, issuer: 'keibo-e2e', audience: 'keibo-e2e-client' },
+        {
+          expiresIn: -1,
+          issuer: process.env.JWT_ISSUER,
+          audience: process.env.JWT_AUDIENCE,
+        },
       );
       await agent
         .post('/api/auth/reset-password')
