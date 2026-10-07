@@ -14,6 +14,7 @@ import { KycApplicationStatus } from '../src/modules/kyc/interfaces/kyc.interfac
 import { KYCStatus } from '../src/common/enums/role.enum';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { getModelToken } from '@nestjs/mongoose';
 import type { Server } from 'node:http';
 import { Model } from 'mongoose';
@@ -415,11 +416,11 @@ describe('Auth integration (e2e)', () => {
           typ: 'password-reset',
           passwordVersion: 0,
         },
-        process.env.PASSWORD_RESET_SECRET!,
+        app.get(ConfigService).getOrThrow<string>('PASSWORD_RESET_SECRET'),
         {
           expiresIn: -1,
-          issuer: process.env.JWT_ISSUER,
-          audience: process.env.JWT_AUDIENCE,
+          issuer: app.get(ConfigService).get<string>('JWT_ISSUER'),
+          audience: app.get(ConfigService).get<string>('JWT_AUDIENCE'),
         },
       );
       await agent
