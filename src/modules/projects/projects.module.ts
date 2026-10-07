@@ -1,3 +1,9 @@
+import {
+  SavedProject,
+  SavedProjectSchema,
+} from './schemas/saved-project.schema';
+import { SavedProjectsService } from './services/saved-projects.service';
+import { SavedProjectsController } from './controllers/saved-projects.controller';
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ProjectsController } from './controllers/projects.controller';
@@ -51,6 +57,7 @@ import {
     UsersModule,
     NotificationsModule,
     MongooseModule.forFeature([
+      { name: SavedProject.name, schema: SavedProjectSchema },
       { name: Investment.name, schema: InvestmentSchema },
       {
         name: Project.name,
@@ -74,12 +81,14 @@ import {
     ]),
   ],
   controllers: [
+    SavedProjectsController,
     ProjectsController,
     AdminProjectsController,
     AdminAgreementsController,
     AdminAttachmentsController,
   ],
   providers: [
+    SavedProjectsService,
     ProjectsService,
     ProjectsRepository,
     MilestonesRepository,

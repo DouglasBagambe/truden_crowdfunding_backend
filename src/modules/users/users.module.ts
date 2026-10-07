@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { KycModule } from '../kyc/kyc.module';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ConfigModule } from '@nestjs/config';
 import { User, UserSchema } from './schemas/user.schema';
@@ -19,6 +20,7 @@ import {
 
 @Module({
   imports: [
+    KycModule,
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       { name: WalletOwnership.name, schema: WalletOwnershipSchema },

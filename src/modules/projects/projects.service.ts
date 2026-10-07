@@ -20,7 +20,7 @@ import {
 } from '../investments/interfaces/investment.interface';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
-import { QueryProjectsDto } from './dto/query-projects.dto';
+import { QueryProjectsDto, ProjectSort } from './dto/query-projects.dto';
 import { ProjectDecisionDto } from './dto/decision.dto';
 import { ProjectsRepository } from './repositories/projects.repository';
 import { MilestonesRepository } from './repositories/milestones.repository';
@@ -554,7 +554,10 @@ export class ProjectsService {
       filter.tags = { $in: query.tags };
     }
     if (query.search) {
-      filter.$text = { $search: query.search };
+      const escaped = query.search
+        .trim()
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (escaped) filter.name = { $regex: escaped, $options: 'i' };
     }
     if (!hasBackendRoiAccess(userId, this.configService)) {
       filter.projectType = ProjectType.CHARITY;
@@ -565,7 +568,16 @@ export class ProjectsService {
     const skip = (page - 1) * pageSize;
 
     const [projects, total] = await Promise.all([
-      this.projectsRepo.query(filter, pageSize, skip),
+      this.projectsRepo.query(
+        filter,
+        pageSize,
+        skip,
+        query.sort === ProjectSort.FUNDED
+          ? { raisedAmount: -1, _id: -1 }
+          : query.sort === ProjectSort.ENDING
+            ? { fundingEndDate: 1, _id: 1 }
+            : { createdAt: -1, _id: -1 },
+      ),
       this.projectsRepo.count(filter),
     ]);
     const projectsWithProgress = projects.map((proj) =>
@@ -1876,17 +1888,20 @@ export class ProjectsService {
     };
   }
 
-  private stripCreatorEmail<T extends { creator?: { email?: string } | null }>(
-    payload: T,
-  ): T {
-    if (
-      payload.creator &&
-      typeof payload.creator === 'object' &&
-      'email' in payload.creator
-    ) {
-      delete payload.creator.email;
+  private stripCreatorEmail<T>(payload: T): T {
+    const result = { ...(payload as Record<string, unknown>) };
+    for (const key of ['creator', 'creatorId']) {
+      const creator = this.asRecord(result[key]);
+      if (!creator || !('email' in creator || 'profile' in creator)) continue;
+      const profile = this.asRecord(creator.profile);
+      result[key] = {
+        _id: this.extractObjectIdString(creator, 'creatorId'),
+        firstName: profile?.firstName ?? creator.firstName,
+        lastName: profile?.lastName ?? creator.lastName,
+        avatarUrl: profile?.avatarUrl,
+      };
     }
-    return payload;
+    return result as T;
   }
 
   private ensureVerificationLogExists(

@@ -2,7 +2,7 @@ import { Transform } from 'class-transformer';
 import {
   IsArray,
   IsEnum,
-  IsNumber,
+  IsInt,
   IsOptional,
   IsString,
   Max,
@@ -19,26 +19,51 @@ const toNumber = (value: unknown, fallback: number) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+const queryString = (value: unknown): string | undefined =>
+  typeof value === 'string'
+    ? value
+    : typeof value === 'number'
+      ? String(value)
+      : undefined;
 const toStringArray = (value: unknown): string[] | undefined => {
-  if (value === undefined || value === null || value === '') return undefined;
-  const values = Array.isArray(value) ? value : String(value).split(',');
-  return values
-    .map((item) => String(item).trim())
+  const values: unknown[] = Array.isArray(value)
+    ? value
+    : (queryString(value)?.split(',') ?? []);
+  const strings = values
+    .map(queryString)
+    .filter((item): item is string => item !== undefined)
+    .map((item) => item.trim())
     .filter(Boolean);
+  return strings.length ? strings : undefined;
 };
 
+export enum ProjectSort {
+  NEWEST = 'newest',
+  FUNDED = 'funded',
+  ENDING = 'ending',
+}
+
 export class QueryProjectsDto {
+  @IsOptional()
+  @IsEnum(ProjectSort)
+  sort?: ProjectSort = ProjectSort.NEWEST;
+
   @ApiPropertyOptional({ enum: ProjectStatus, isArray: true })
   @IsOptional()
   @IsArray()
   @IsEnum(ProjectStatus, { each: true })
-  @Transform(({ value }) => toStringArray(value)?.map((status) => status.toUpperCase()))
+  @Transform(({ value }) =>
+    toStringArray(value)?.map((status) => status.toUpperCase()),
+  )
   statuses?: ProjectStatus[];
 
-  @ApiPropertyOptional({ enum: ProjectType, description: 'Project type filter' })
+  @ApiPropertyOptional({
+    enum: ProjectType,
+    description: 'Project type filter',
+  })
   @IsOptional()
   @IsEnum(ProjectType)
-  @Transform(({ value }) => (value ? String(value).trim().toUpperCase() : value))
+  @Transform(({ value }) => queryString(value)?.trim().toUpperCase())
   type?: ProjectType;
 
   @ApiPropertyOptional({
@@ -47,7 +72,7 @@ export class QueryProjectsDto {
   })
   @IsOptional()
   @IsEnum(CharityCategory)
-  @Transform(({ value }) => (value ? String(value).trim().toLowerCase() : value))
+  @Transform(({ value }) => queryString(value)?.trim().toLowerCase())
   category?: CharityCategory;
 
   @ApiPropertyOptional({
@@ -56,7 +81,7 @@ export class QueryProjectsDto {
   })
   @IsOptional()
   @IsEnum(ROIIndustry)
-  @Transform(({ value }) => (value ? String(value).trim().toLowerCase() : value))
+  @Transform(({ value }) => queryString(value)?.trim().toLowerCase())
   industry?: ROIIndustry;
 
   @ApiPropertyOptional({ description: 'Filter by country of operation' })
@@ -71,15 +96,7 @@ export class QueryProjectsDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
-  @Transform(({ value }) => {
-    if (value === undefined || value === null || value === '') return undefined;
-    return Array.isArray(value)
-      ? value
-      : String(value)
-          .split(',')
-          .map((tag) => tag.trim())
-          .filter(Boolean);
-  })
+  @Transform(({ value }) => toStringArray(value))
   tags?: string[];
 
   @ApiPropertyOptional({ description: 'Search by name/summary/story text' })
@@ -89,14 +106,14 @@ export class QueryProjectsDto {
 
   @ApiPropertyOptional({ description: 'Page number (1-based)', default: 1 })
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(1)
   @Transform(({ value }) => toNumber(value, 1))
   page?: number = 1;
 
   @ApiPropertyOptional({ description: 'Page size', default: 20, maximum: 100 })
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(1)
   @Max(100)
   @Transform(({ value }) => toNumber(value, 20))

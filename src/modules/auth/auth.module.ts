@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { KycModule } from '../kyc/kyc.module';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { MongooseModule } from '@nestjs/mongoose';
@@ -24,6 +25,7 @@ import { AuthCookieService } from './auth-cookie.service';
 
 @Module({
   imports: [
+    KycModule,
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       { name: RefreshToken.name, schema: RefreshTokenSchema },
@@ -34,7 +36,7 @@ import { AuthCookieService } from './auth-cookie.service';
     CommonModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
-      imports: [ConfigModule],
+      imports: [KycModule, ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
         const raw = configService.get<string>('JWT_EXPIRY') ?? '15m';

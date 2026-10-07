@@ -1,3 +1,4 @@
+import { KycService } from '../../kyc/kyc.service';
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, UpdateQuery } from 'mongoose';
@@ -9,14 +10,20 @@ export class UsersRepository {
   constructor(
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    private readonly kycService: KycService,
   ) {}
 
   create(payload: Partial<User>): Promise<UserDocument> {
     return this.userModel.create(payload);
   }
 
-  findById(id: string): Promise<UserDocument | null> {
-    return this.userModel.findById(id).select('-passwordHash').exec();
+  async findById(id: string): Promise<UserDocument | null> {
+    const user = await this.userModel
+      .findById(id)
+      .select('-passwordHash')
+      .exec();
+    if (user) await this.kycService.reconcileUser(user);
+    return user;
   }
 
   findByIdWithNonce(id: string): Promise<UserDocument | null> {

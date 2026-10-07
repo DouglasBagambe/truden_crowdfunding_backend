@@ -90,4 +90,26 @@ describe('NotificationsService', () => {
     ).rejects.toBeInstanceOf(NotFoundException);
     expect(model.findOneAndUpdate).not.toHaveBeenCalled();
   });
+  it('marks unread using the same recipient ownership filter', async () => {
+    const model = {
+      findOneAndUpdate: jest.fn().mockReturnValue({
+        lean: jest
+          .fn()
+          .mockResolvedValue({ _id: notificationId, readAt: null }),
+      }),
+    };
+    const service = new NotificationsService(model as never);
+    expect(await service.markRead(recipientId, notificationId, false)).toEqual({
+      id: notificationId,
+      readAt: null,
+    });
+    const calls = model.findOneAndUpdate.mock.calls as unknown as Array<
+      [Record<string, unknown>, Record<string, unknown>]
+    >;
+    expect(calls[0][0]).toMatchObject({
+      _id: notificationId,
+      recipientId: new Types.ObjectId(recipientId),
+    });
+    expect(calls[0][1]).toEqual({ $set: { readAt: null } });
+  });
 });

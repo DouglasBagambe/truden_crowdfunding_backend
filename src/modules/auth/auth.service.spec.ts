@@ -1,3 +1,4 @@
+import { KycService } from '../kyc/kyc.service';
 import { AuthService } from './auth.service';
 import { RolesService } from '../roles/roles.service';
 import { ConfigService } from '@nestjs/config';
@@ -115,6 +116,9 @@ describe('AuthService email verification (codes)', () => {
       rolesService as unknown as RolesService,
       auditService as unknown as AuditService,
       {} as AppEmailService,
+      {
+        reconcileUser: jest.fn().mockResolvedValue(undefined),
+      } as unknown as KycService,
     );
   });
 
@@ -293,5 +297,49 @@ describe('AuthService email verification (codes)', () => {
     await expect(
       service.login({ email, password: 'uat-password' }),
     ).resolves.toMatchObject({ user: { email }, accessToken: 'access' });
+  });
+  it('signs reset tokens without undefined issuer/audience options or passwords', async () => {
+    configService.get.mockImplementation((key: string) =>
+      key === 'PASSWORD_RESET_SECRET' ? 'test-reset-secret-only' : undefined,
+    );
+    jwtService.signAsync.mockResolvedValue('reset-token');
+    const user = mockUser({ passwordHash: 'private-hash' });
+    const token = await (
+      service as unknown as {
+        createPasswordResetToken(user: UserDocument): Promise<string>;
+      }
+    ).createPasswordResetToken(user);
+    expect(token).toBe('reset-token');
+    const [payload, options] = jwtService.signAsync.mock.calls[0];
+    expect(payload).toMatchObject({
+      sub: String(user._id),
+      typ: 'password-reset',
+      passwordVersion: 0,
+    });
+    expect(JSON.stringify(payload)).not.toContain('private-hash');
+    expect(options).not.toHaveProperty('issuer');
+    expect(options).not.toHaveProperty('audience');
+    expect(options).toMatchObject({
+      secret: 'test-reset-secret-only',
+      algorithm: 'HS256',
+    });
+  });
+
+  it('keeps configured issuer and audience on password reset tokens', async () => {
+    const config: Record<string, string> = {
+      PASSWORD_RESET_SECRET: 'test-reset-secret-only',
+      JWT_ISSUER: 'keibo-test',
+      JWT_AUDIENCE: 'keibo-client',
+    };
+    configService.get.mockImplementation((key: string) => config[key]);
+    await (
+      service as unknown as {
+        createPasswordResetToken(user: UserDocument): Promise<string>;
+      }
+    ).createPasswordResetToken(mockUser());
+    expect(jwtService.signAsync.mock.calls[0][1]).toMatchObject({
+      issuer: 'keibo-test',
+      audience: 'keibo-client',
+    });
   });
 });

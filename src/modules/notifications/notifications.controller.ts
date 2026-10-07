@@ -48,6 +48,17 @@ export class NotificationsController {
     return this.notifications.markRead(userId, id);
   }
 
+  @Post(':id/unread')
+  markUnread(
+    @Param('id') id: string,
+    @Request() request: { user: { sub?: string; userId?: string } },
+  ) {
+    const userId = request.user?.sub ?? request.user?.userId;
+    if (!userId)
+      throw new BadRequestException('Authenticated user is required');
+    return this.notifications.markRead(userId, id, false);
+  }
+
   @Post('read-all')
   markAllRead(@Request() request: { user: { sub?: string; userId?: string } }) {
     const userId = request.user?.sub ?? request.user?.userId;

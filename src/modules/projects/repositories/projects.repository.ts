@@ -10,7 +10,7 @@ export class ProjectsRepository {
   constructor(
     @InjectModel(Project.name)
     private readonly projectModel: Model<ProjectDocument>,
-  ) { }
+  ) {}
 
   create(payload: Partial<Project>): Promise<ProjectDocument> {
     const discriminatorType = payload.projectType;
@@ -27,7 +27,10 @@ export class ProjectsRepository {
   }
 
   findById(id: string): Promise<ProjectDocument | null> {
-    return this.projectModel.findById(id).populate('creatorId', 'profile email').exec();
+    return this.projectModel
+      .findById(id)
+      .populate('creatorId', 'profile email')
+      .exec();
   }
 
   findByOnchainId(projectOnchainId: string): Promise<ProjectDocument | null> {
@@ -63,7 +66,9 @@ export class ProjectsRepository {
     let objectId: Types.ObjectId | undefined;
     try {
       objectId = new Types.ObjectId(creatorId);
-    } catch { }
+    } catch {
+      // Invalid legacy identifiers are queried only as strings.
+    }
 
     const conditions: any[] = [];
     conditions.push({ creatorId });
@@ -84,10 +89,11 @@ export class ProjectsRepository {
     filter: FilterQuery<ProjectDocument>,
     limit: number,
     skip: number,
+    sort: Record<string, 1 | -1> = { createdAt: -1, _id: -1 },
   ): Promise<ProjectDocument[]> {
     return this.projectModel
       .find(filter)
-      .sort({ createdAt: -1 })
+      .sort(sort)
       .skip(skip)
       .limit(limit)
       .populate('creatorId', 'profile email')

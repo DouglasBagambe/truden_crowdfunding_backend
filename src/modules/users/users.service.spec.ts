@@ -24,6 +24,7 @@ describe('UsersService canonical profile capabilities', () => {
       config as unknown as UsersServiceDependencies[4],
       { log: jest.fn() } as unknown as UsersServiceDependencies[5],
       {} as UsersServiceDependencies[6],
+      {} as UsersServiceDependencies[7],
     );
 
   beforeEach(() => jest.clearAllMocks());

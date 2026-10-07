@@ -1,3 +1,4 @@
+import { KycService } from '../kyc/kyc.service';
 import {
   ConflictException,
   ForbiddenException,
@@ -71,6 +72,7 @@ export class UsersService {
     private readonly configService: ConfigService,
     private readonly auditService: AuditService,
     private readonly http: HttpService,
+    private readonly kycService: KycService,
   ) {}
 
   async createUser(dto: CreateUserDto) {
@@ -590,25 +592,13 @@ export class UsersService {
     actorId?: string,
     actorRoles?: string[],
   ) {
-    const user: UserDocument | null =
-      await this.usersRepository.updateKycStatus(userId, dto.kycStatus);
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-    this.emitEvent(UserEvent.KycUpdated, {
-      userId: String(user.id),
-      primaryWallet: user.primaryWallet,
-      changes: { kycStatus: dto.kycStatus },
-    });
-    await this.auditService.log({
-      action: 'kyc.status.update',
-      actorId: actorId ?? userId,
-      actorRoles: actorRoles ?? [],
-      targetType: 'user',
-      targetId: String(user.id),
-      metadata: { kycStatus: dto.kycStatus },
-    });
-    return this.sanitizeUser(user);
+    await this.kycService.adminUpdateUserStatus(
+      userId,
+      dto.kycStatus,
+      actorId ?? userId,
+      actorRoles ?? [],
+    );
+    return this.getUserById(userId);
   }
 
   async updateCreatorVerificationStatus(

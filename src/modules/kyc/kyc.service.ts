@@ -1,3 +1,4 @@
+import { canonicalKycStatus } from './kyc-state.util';
 import {
   BadRequestException,
   ForbiddenException,
@@ -67,6 +68,12 @@ export class KycService {
   // Public user-facing API
   // ─────────────────────────────────────────────
 
+  async reconcileUser(user: UserDocument): Promise<void> {
+    const profile = await this.getOrCreateProfileForUser(user._id);
+    await this.checkAndMarkExpired(profile, user);
+    await this.syncUserKycStatus(user, profile);
+  }
+
   async getProfileForUser(userId: string): Promise<KycProfileView> {
     const user = await this.findUser(userId);
     const profile = await this.getOrCreateProfileForUser(user._id);
@@ -106,6 +113,7 @@ export class KycService {
       }
     }
 
+    await this.syncUserKycStatus(user, profile);
     return this.toProfileView(profile, user);
   }
 
@@ -295,18 +303,10 @@ export class KycService {
     if (bypass) return;
 
     const user = await this.findUser(userId);
-    if (user.kycStatus === KYCStatus.VERIFIED) {
-      // Also check expiry
-      const profile = await this.profileModel
-        .findOne({ userId: user._id })
-        .exec();
-      if (profile) {
-        const isExpired = await this.checkAndMarkExpired(profile, user);
-        if (!isExpired) return;
-      } else {
-        return; // trust the user flag
-      }
-    }
+    const profile = await this.getOrCreateProfileForUser(user._id);
+    await this.checkAndMarkExpired(profile, user);
+    await this.syncUserKycStatus(user, profile);
+    if (canonicalKycStatus(profile.status) === KYCStatus.VERIFIED) return;
 
     const statusMsg =
       user.kycStatus === KYCStatus.PENDING
@@ -441,9 +441,16 @@ export class KycService {
     const userMap = new Map<string, UserDocument>();
     for (const u of users) userMap.set(u._id.toString(), u as UserDocument);
 
+    for (const profile of profiles) {
+      const user = userMap.get(profile.userId.toString());
+      if (user) {
+        await this.checkAndMarkExpired(profile, user);
+        await this.syncUserKycStatus(user, profile);
+      }
+    }
     const items: AdminKycProfileListItem[] = profiles.map((p) => {
       const user = userMap.get(p.userId.toString());
-      const userKycStatus = user?.kycStatus ?? KYCStatus.NOT_VERIFIED;
+      const userKycStatus = canonicalKycStatus(p.status);
       // Also get the creator's precise name from profile
       const firstName = user?.profile?.firstName ?? '';
       const lastName = user?.profile?.lastName ?? '';
@@ -477,7 +484,39 @@ export class KycService {
     const profile = await this.profileModel.findById(id).exec();
     if (!profile) throw new NotFoundException('KYC profile not found');
     const user = await this.userModel.findById(profile.userId).exec();
+    if (user) {
+      await this.checkAndMarkExpired(profile, user);
+      await this.syncUserKycStatus(user, profile);
+    }
     return this.toProfileView(profile, user ?? undefined);
+  }
+
+  async adminUpdateUserStatus(
+    userId: string,
+    status: KYCStatus,
+    actorId: string,
+    actorRoles: string[],
+  ): Promise<void> {
+    const user = await this.findUser(userId);
+    const profile = await this.getOrCreateProfileForUser(user._id);
+    const applicationStatus =
+      status === KYCStatus.VERIFIED
+        ? KycApplicationStatus.APPROVED
+        : status === KYCStatus.REJECTED
+          ? KycApplicationStatus.REJECTED
+          : status === KYCStatus.PENDING
+            ? KycApplicationStatus.UNDER_REVIEW
+            : KycApplicationStatus.UNVERIFIED;
+    await this.adminOverrideStatus(
+      String(profile._id),
+      {
+        status: applicationStatus,
+        manualNotes:
+          'Status updated through the authenticated user administration endpoint.',
+      },
+      actorId,
+      actorRoles,
+    );
   }
 
   async adminOverrideStatus(
@@ -519,6 +558,10 @@ export class KycService {
       metadata: { status: profile.status },
     });
 
+    if (user) {
+      await this.checkAndMarkExpired(profile, user);
+      await this.syncUserKycStatus(user, profile);
+    }
     return this.toProfileView(profile, user ?? undefined);
   }
 
@@ -628,15 +671,20 @@ export class KycService {
   private async getOrCreateProfileForUser(
     userId: Types.ObjectId,
   ): Promise<KycProfileDocument> {
-    let profile = await this.profileModel.findOne({ userId }).exec();
-    if (!profile) {
-      profile = await this.profileModel.create({
-        userId,
-        status: KycApplicationStatus.UNVERIFIED,
-        documents: [],
-      });
-    }
-    return profile;
+    return this.profileModel
+      .findOneAndUpdate(
+        { userId },
+        {
+          $setOnInsert: {
+            userId,
+            status: KycApplicationStatus.UNVERIFIED,
+            documents: [],
+          },
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true },
+      )
+      .orFail()
+      .exec();
   }
 
   private async findUser(userId: string): Promise<UserDocument> {
@@ -651,23 +699,9 @@ export class KycService {
     user: UserDocument,
     profile: KycProfileDocument,
   ): Promise<void> {
-    let newStatus: KYCStatus = user.kycStatus ?? KYCStatus.NOT_VERIFIED;
-
-    if (profile.status === KycApplicationStatus.APPROVED) {
-      newStatus = KYCStatus.VERIFIED;
-    } else if (profile.status === KycApplicationStatus.REJECTED) {
-      newStatus = KYCStatus.REJECTED;
-    } else if (profile.status === KycApplicationStatus.EXPIRED) {
-      newStatus = KYCStatus.NOT_VERIFIED;
-    } else if (
-      [
-        KycApplicationStatus.PENDING,
-        KycApplicationStatus.SUBMITTED_TO_PROVIDER,
-        KycApplicationStatus.UNDER_REVIEW,
-      ].includes(profile.status)
-    ) {
-      newStatus = KYCStatus.PENDING;
-    }
+    const newStatus = canonicalKycStatus(profile.status);
+    user.kycStatus = newStatus;
+    if (user.kyc) user.kyc.status = newStatus;
 
     await this.userModel
       .findByIdAndUpdate(user._id, {
@@ -734,10 +768,11 @@ export class KycService {
 
   private toProfileView(
     profile: KycProfileDocument,
-    user?: UserDocument,
+    _user?: UserDocument,
   ): KycProfileView {
+    void _user;
     const docs = (profile.documents ?? []).map((d) => this.toDocumentView(d));
-    const userKycStatus = user?.kycStatus ?? KYCStatus.NOT_VERIFIED;
+    const userKycStatus = canonicalKycStatus(profile.status);
 
     return {
       id: profile._id.toString(),

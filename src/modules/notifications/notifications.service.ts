@@ -49,13 +49,13 @@ export class NotificationsService {
     }));
   }
 
-  async markRead(recipientId: string, id: string) {
+  async markRead(recipientId: string, id: string, read = true) {
     if (!Types.ObjectId.isValid(id))
       throw new NotFoundException('Notification not found');
     const result = await this.notifications
       .findOneAndUpdate(
         { _id: id, recipientId: new Types.ObjectId(recipientId) },
-        { $set: { readAt: new Date() } },
+        { $set: { readAt: read ? new Date() : null } },
         { new: true },
       )
       .lean();

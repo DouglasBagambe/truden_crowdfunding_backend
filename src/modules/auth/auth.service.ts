@@ -1,3 +1,4 @@
+import { KycService } from '../kyc/kyc.service';
 import {
   Injectable,
   UnauthorizedException,
@@ -66,6 +67,7 @@ export class AuthService {
     private rolesService: RolesService,
     private readonly auditService: AuditService,
     private readonly appEmailService: AppEmailService,
+    private readonly kycService: KycService,
   ) {}
 
   private isLocalEmailVerificationBypassEnabled(): boolean {
@@ -151,7 +153,7 @@ export class AuthService {
     );
 
     return {
-      user: { ...this.sanitizeUser(user), permissions },
+      user: { ...(await this.sanitizeUser(user)), permissions },
       ...tokens,
     };
   }
@@ -262,7 +264,7 @@ export class AuthService {
     });
 
     return {
-      user: { ...this.sanitizeUser(user), permissions },
+      user: { ...(await this.sanitizeUser(user)), permissions },
       ...tokens,
     };
   }
@@ -412,7 +414,7 @@ export class AuthService {
     });
 
     return {
-      user: { ...this.sanitizeUser(user), permissions },
+      user: { ...(await this.sanitizeUser(user)), permissions },
       ...tokens,
     };
   }
@@ -595,7 +597,7 @@ export class AuthService {
       if (user?.emailVerifiedAt) {
         return {
           message: 'Email already verified',
-          user: this.sanitizeUser(user),
+          user: await this.sanitizeUser(user),
         };
       }
       const hashedInput = this.hashCode(rawCode);
@@ -653,7 +655,10 @@ export class AuthService {
       if (!updated) {
         throw new UnauthorizedException('User not found');
       }
-      return { message: 'Email verified', user: this.sanitizeUser(updated) };
+      return {
+        message: 'Email verified',
+        user: await this.sanitizeUser(updated),
+      };
     }
 
     // Legacy token path removed
@@ -795,14 +800,33 @@ export class AuthService {
   async resetPassword(token: string, newPassword: string) {
     this.enforceRateLimit('resetPassword', token.slice(-12), 5, 10 * 60 * 1000);
     try {
-      const payload = this.jwtService.verify<{ sub: string }>(token, {
+      const issuer = this.getIssuer();
+      const audience = this.getAudience();
+      const payload = this.jwtService.verify<{
+        sub: string;
+        typ?: string;
+        passwordVersion?: number;
+      }>(token, {
         secret: this.getRequiredSecret('PASSWORD_RESET_SECRET'),
+        algorithms: ['HS256'],
+        ...(issuer ? { issuer } : {}),
+        ...(audience ? { audience } : {}),
       });
+      if (
+        payload.typ !== 'password-reset' ||
+        !Types.ObjectId.isValid(payload.sub)
+      )
+        throw new UnauthorizedException('Invalid reset token');
       const user = await this.userModel
         .findById(payload.sub)
         .select('+passwordHash')
         .exec();
-      if (!user || !user.isActive || user.isBlocked) {
+      if (
+        !user ||
+        !user.isActive ||
+        user.isBlocked ||
+        payload.passwordVersion !== (user.passwordUpdatedAt?.getTime() ?? 0)
+      ) {
         throw new UnauthorizedException('Invalid reset token');
       }
       const passwordHash = await bcrypt.hash(newPassword, 10);
@@ -830,7 +854,7 @@ export class AuthService {
     const permissions = await this.rolesService.getPermissionsForRoles(
       user.roles,
     );
-    return { ...this.sanitizeUser(user), permissions };
+    return { ...(await this.sanitizeUser(user)), permissions };
   }
 
   async logoutAll(userId: string) {
@@ -1252,7 +1276,8 @@ export class AuthService {
     return new Date(Date.now() + value * multipliers[unit]);
   }
 
-  private sanitizeUser(user: UserDocument) {
+  private async sanitizeUser(user: UserDocument) {
+    await this.kycService.reconcileUser(user);
     const candidate = user as unknown as { toObject?: unknown };
     const raw =
       typeof candidate.toObject === 'function'
@@ -1408,12 +1433,17 @@ export class AuthService {
     const issuer = this.getIssuer();
     const audience = this.getAudience();
     return this.jwtService.signAsync(
-      { sub: String(user._id) },
       {
+        sub: String(user._id),
+        typ: 'password-reset',
+        passwordVersion: user.passwordUpdatedAt?.getTime() ?? 0,
+      },
+      {
+        algorithm: 'HS256',
         secret: this.getRequiredSecret('PASSWORD_RESET_SECRET'),
         expiresIn,
-        issuer,
-        audience,
+        ...(issuer ? { issuer } : {}),
+        ...(audience ? { audience } : {}),
       },
     );
   }

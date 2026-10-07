@@ -995,3 +995,72 @@ describe('ProjectsService — backfillRoiProvisioning', () => {
     expect(report.results).toHaveLength(0);
   });
 });
+
+describe('Public project query regressions', () => {
+  it.each(['Test', 'Tes', 'tes', 'no-result', '.*'])(
+    'matches a literal partial title safely: %s',
+    async (search) => {
+      const { service, projectsRepo } = createService();
+      projectsRepo.query.mockResolvedValue([]);
+      projectsRepo.count.mockResolvedValue(0);
+      await service.listPublicProjects({ search });
+      const calls = projectsRepo.query.mock.calls as unknown as Array<
+        [{ name: { $regex: string; $options: string } }]
+      >;
+      const filter = calls[0][0] as {
+        name: { $regex: string; $options: string };
+      };
+      const regex = new RegExp(filter.name.$regex, filter.name.$options);
+      expect(regex.test('Test campaign')).toBe(
+        ['Test', 'Tes', 'tes'].includes(search),
+      );
+    },
+  );
+  it.each([
+    ['newest', { createdAt: -1, _id: -1 }],
+    ['funded', { raisedAmount: -1, _id: -1 }],
+    ['ending', { fundingEndDate: 1, _id: 1 }],
+  ] as const)(
+    'uses deterministic %s sorting and real pagination',
+    async (sort, expected) => {
+      const { service, projectsRepo } = createService();
+      projectsRepo.query.mockResolvedValue([]);
+      projectsRepo.count.mockResolvedValue(25);
+      const result = await service.listPublicProjects({
+        sort: sort as import('./dto/query-projects.dto').ProjectSort,
+        page: 2,
+        pageSize: 12,
+      });
+      expect(projectsRepo.query).toHaveBeenCalledWith(
+        expect.any(Object),
+        12,
+        12,
+        expected,
+      );
+      expect(result).toMatchObject({ total: 25, page: 2, pageSize: 12 });
+    },
+  );
+  it('removes private fields from both public creator representations without mutating source', async () => {
+    const { service, projectsRepo } = createService();
+    const creator = {
+      _id: mockCreatorId,
+      email: 'private@example.test',
+      profile: { firstName: 'Creator', homeAddress: 'private address' },
+    };
+    const project = {
+      targetAmount: 100,
+      raisedAmount: 0,
+      toObject: () => ({ creatorId: creator, name: 'Test' }),
+    };
+    projectsRepo.query.mockResolvedValue([project]);
+    projectsRepo.count.mockResolvedValue(1);
+    const result = await service.listPublicProjects({});
+    expect(JSON.stringify(result)).not.toContain('private@example.test');
+    expect(JSON.stringify(result)).not.toContain('private address');
+    expect(result.projects[0]).toMatchObject({
+      creatorId: { firstName: 'Creator' },
+      creator: { firstName: 'Creator' },
+    });
+    expect(creator.email).toBe('private@example.test');
+  });
+});
