@@ -83,6 +83,54 @@ describe('UsersService canonical profile capabilities', () => {
     });
   });
 
+  it.each([
+    {
+      label: 'pending creator approval',
+      creatorStatus: CreatorVerificationStatus.PENDING,
+      active: true,
+      blocked: false,
+      roles: [UserRole.INNOVATOR],
+    },
+    {
+      label: 'inactive account',
+      creatorStatus: CreatorVerificationStatus.VERIFIED,
+      active: false,
+      blocked: false,
+      roles: [UserRole.INNOVATOR],
+    },
+    {
+      label: 'blocked account',
+      creatorStatus: CreatorVerificationStatus.VERIFIED,
+      active: true,
+      blocked: true,
+      roles: [UserRole.INNOVATOR],
+    },
+    {
+      label: 'investor-only role',
+      creatorStatus: CreatorVerificationStatus.VERIFIED,
+      active: true,
+      blocked: false,
+      roles: [UserRole.INVESTOR],
+    },
+  ])(
+    'does not grant ROI creation with verified KYC but $label',
+    async ({ creatorStatus, active, blocked, roles }) => {
+      repository.findById.mockResolvedValue({
+        id: userId,
+        roles,
+        isActive: active,
+        isBlocked: blocked,
+        kycStatus: KYCStatus.VERIFIED,
+        kyc: { status: KYCStatus.VERIFIED },
+        creatorVerification: { status: creatorStatus },
+        toObject: () => ({ roles }),
+      });
+      expect(
+        (await createService().getUserById(userId)).capabilities.createRoi,
+      ).toBe(false);
+    },
+  );
+
   it('enrolls an email-verified user as a Charity Creator without granting ROI access', async () => {
     const enrolled = {
       id: userId,

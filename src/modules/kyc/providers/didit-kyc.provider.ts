@@ -1,4 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import {
@@ -43,21 +47,45 @@ export class DiditKycProviderService implements IKycProviderService {
   }
 
   private get baseUrl(): string {
-    const sandbox =
-      this.configService.get<string>('KYC_PROVIDER_MODE') === 'sandbox';
-    return sandbox
-      ? 'https://sandbox.didit.me'
-      : 'https://verification.didit.me';
+    // Sandbox is selected by the Didit application's API key, not a separate host.
+    return 'https://verification.didit.me';
   }
 
-  private get backendUrl(): string {
-    const configured = this.configService.get<string>('BACKEND_URL');
-    if (!configured)
-      throw new Error('BACKEND_URL is required for KYC callbacks');
-    return configured
+  private sessionConfiguration(): { workflowId: string; callback: string } {
+    const required = [
+      'DIDIT_API_KEY',
+      'DIDIT_WORKFLOW_ID',
+      'DIDIT_WEBHOOK_SECRET',
+      'FRONTEND_URL',
+    ];
+    const missing = required.filter(
+      (key) => !this.configService.get<string>(key)?.trim(),
+    );
+    if (missing.length) {
+      this.logger.error(`KYC configuration missing: ${missing.join(', ')}`);
+      throw new ServiceUnavailableException(
+        'Identity verification is temporarily unavailable. Please contact support.',
+      );
+    }
+    const frontendUrl = this.configService
+      .get<string>('FRONTEND_URL')!
       .trim()
-      .replace(/[,\s]+$/, '')
       .replace(/\/+$/, '');
+    let callback: URL;
+    try {
+      callback = new URL(`${frontendUrl}/dashboard`);
+      if (!['https:', 'http:'].includes(callback.protocol)) throw new Error();
+    } catch {
+      this.logger.error('KYC configuration invalid: FRONTEND_URL');
+      throw new ServiceUnavailableException(
+        'Identity verification is temporarily unavailable. Please contact support.',
+      );
+    }
+    callback.searchParams.set('tab', 'kyc');
+    return {
+      workflowId: this.configService.get<string>('DIDIT_WORKFLOW_ID')!.trim(),
+      callback: callback.toString(),
+    };
   }
 
   /**
@@ -67,36 +95,40 @@ export class DiditKycProviderService implements IKycProviderService {
   async submitApplication(
     profile: KycProfileDocument,
   ): Promise<KycProviderSubmitResult> {
+    const { workflowId, callback } = this.sessionConfiguration();
     const userId = profile.userId.toString();
 
     try {
       const payload: Record<string, unknown> = {
-        callback: `${this.backendUrl}/api/kyc/webhook/didit`,
+        callback,
+        workflow_id: workflowId,
         vendor_data: userId, // echoed back in webhook — we use this to find the profile
       };
-
-      // Didit v3 API requires a workflow_id
-      const workflowId = this.configService.get<string>('DIDIT_WORKFLOW_ID');
-      if (!workflowId) {
-        throw new Error(
-          'DIDIT_WORKFLOW_ID is not configured. ' +
-            'Go to app.didit.me → Workflows → copy the workflow ID and set it as DIDIT_WORKFLOW_ID env var.',
-        );
-      }
-      payload.workflow_id = workflowId;
 
       const headers = this.buildHeaders();
 
       const response = await axios.post(
         `${this.baseUrl}/v3/session/`,
         payload,
-        { headers },
+        { headers, timeout: 15_000 },
       );
       const data = response.data as {
         session_id: string;
         url: string;
         status?: string;
       };
+
+      if (
+        typeof data.session_id !== 'string' ||
+        !data.session_id ||
+        typeof data.url !== 'string' ||
+        !data.url
+      ) {
+        throw new Error('Invalid session response');
+      }
+      const verificationUrl = new URL(data.url);
+      if (verificationUrl.protocol !== 'https:')
+        throw new Error('Invalid verification URL');
 
       this.logger.log('KYC verification session created');
 
@@ -113,7 +145,9 @@ export class DiditKycProviderService implements IKycProviderService {
       this.logger.error(
         `KYC session creation failed with provider status ${status || 'unknown'}`,
       );
-      throw new Error('KYC provider session creation failed');
+      throw new ServiceUnavailableException(
+        'Identity verification could not be started. Please try again later.',
+      );
     }
   }
 
@@ -135,8 +169,8 @@ export class DiditKycProviderService implements IKycProviderService {
     try {
       const headers = this.buildHeaders();
       const response = await axios.get(
-        `${this.baseUrl}/v3/session/${sessionId}`,
-        { headers },
+        `${this.baseUrl}/v3/session/${encodeURIComponent(sessionId)}/decision/`,
+        { headers, timeout: 15_000 },
       );
       const data = response.data as { session_id: string; status: string };
 
@@ -207,6 +241,8 @@ export class DiditKycProviderService implements IKycProviderService {
       case 'PROCESSING':
       case 'UNDER_REVIEW':
       case 'IN_PROGRESS':
+      case 'IN REVIEW':
+      case 'IN_REVIEW':
         return 'UNDER_REVIEW';
       default:
         return 'PENDING';

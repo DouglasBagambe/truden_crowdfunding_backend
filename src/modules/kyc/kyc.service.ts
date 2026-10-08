@@ -257,11 +257,12 @@ export class KycService {
     let submitResult: KycProviderSubmitResult;
     try {
       submitResult = await provider.submitApplication(profile);
-    } catch {
+    } catch (error: unknown) {
       this.logger.error('KYC provider session creation failed');
       // Reset status back so user can retry
       profile.status = KycApplicationStatus.UNVERIFIED;
       await profile.save();
+      if (error instanceof ServiceUnavailableException) throw error;
       throw new BadRequestException(
         'KYC provider session creation failed. Please try again.',
       );
