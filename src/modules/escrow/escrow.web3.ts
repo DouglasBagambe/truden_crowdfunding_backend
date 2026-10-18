@@ -19,6 +19,9 @@ import { PlatformSignerService } from '../../common/services/platform-signer.ser
 import { EscrowCurrency } from './types';
 
 // Curated KEIBO escrow ABI. Legacy Escrow.json is deliberately not imported.
+const METAMASK_DELEGATION_MANAGER =
+  '0xdb9B1e94B5b69Df7e401DDbedE43491141047dB3' as Address;
+
 export const KEIBO_CAMPAIGN_ESCROW_ABI = [
   {
     type: 'function',
@@ -272,20 +275,26 @@ export class EscrowWeb3Service {
       }
       throw invalidProof(reason);
     }
-    if (transaction.to?.toLowerCase() !== expected.to.toLowerCase())
-      throw invalidProof(
-        `escrow target mismatch (expected ${expected.to}, mined ${transaction.to ?? 'contract creation'}, from ${transaction.from}, nonce ${transaction.nonce}, value ${transaction.value.toString()}, input ${transaction.input.slice(0, 74)})`,
-      );
     if (transaction.from.toLowerCase() !== params.creator.toLowerCase())
       throw invalidProof('creator sender mismatch');
-    if (transaction.input.toLowerCase() !== expected.data.toLowerCase())
-      throw invalidProof('campaign calldata mismatch');
     if (transaction.value !== 0n)
       throw invalidProof('unexpected native value');
     if (transaction.nonce !== expectedNonce)
       throw invalidProof(
         `reserved nonce mismatch (expected ${expectedNonce}, mined ${transaction.nonce})`,
       );
+    const minedTarget = transaction.to?.toLowerCase();
+    const directTarget = expected.to.toLowerCase();
+    const delegatedTarget = METAMASK_DELEGATION_MANAGER.toLowerCase();
+    if (minedTarget !== directTarget && minedTarget !== delegatedTarget)
+      throw invalidProof(
+        `escrow target mismatch (expected ${expected.to} or MetaMask Delegation Manager ${METAMASK_DELEGATION_MANAGER}, mined ${transaction.to ?? 'contract creation'})`,
+      );
+    if (
+      minedTarget === directTarget &&
+      transaction.input.toLowerCase() !== expected.data.toLowerCase()
+    )
+      throw invalidProof('campaign calldata mismatch');
     for (const log of receipt.logs) {
       if (log.address.toLowerCase() !== config.escrow.toLowerCase()) continue;
       try {
