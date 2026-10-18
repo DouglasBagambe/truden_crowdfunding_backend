@@ -14,6 +14,8 @@ jest.mock('viem', () => ({
 const escrow = '0x0000000000000000000000000000000000000001' as const;
 const investor = '0x0000000000000000000000000000000000000002' as const;
 const hash = `0x${'a'.repeat(64)}` as const;
+const metamaskDelegationManager =
+  '0xdb9B1e94B5b69Df7e401DDbedE43491141047dB3' as const;
 
 const client = (overrides: Record<string, unknown> = {}) => ({
   getChainId: jest.fn().mockResolvedValue(11155111),
@@ -205,6 +207,21 @@ describe('Creator campaign provisioning evidence', () => {
       ).rejects.toThrow('does not prove');
     },
   );
+  it('accepts MetaMask delegated execution only when creator, nonce, value, event and campaign state still match', async () => {
+    const { service } = evidence({
+      getTransaction: jest.fn().mockResolvedValue({
+        to: metamaskDelegationManager,
+        from: investor,
+        input: '0xdeadbeef',
+        value: 0n,
+        nonce: 7,
+      }),
+    });
+    await expect(service.verifyCampaignCreation(hash, params, 7)).resolves.toBe(
+      '0',
+    );
+  });
+
   it('rejects reverted receipts and closed campaigns', async () => {
     const reverted = evidence({
       waitForTransactionReceipt: jest
