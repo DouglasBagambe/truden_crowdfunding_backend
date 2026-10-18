@@ -175,25 +175,38 @@ export class EscrowWeb3Service {
       throw new ConflictException(
         'Milestone amounts must sum exactly to the cap',
       );
-    const { config } = await this.readyClient();
+    const { client, config } = await this.readyClient();
     if (config.chainId !== 11155111)
       throw new ConflictException(
         'Campaign provisioning requires Ethereum Sepolia',
       );
+    const data = encodeFunctionData({
+      abi: KEIBO_CAMPAIGN_ESCROW_ABI,
+      functionName: 'createCampaign',
+      args: [
+        params.asset,
+        params.cap,
+        params.deadline,
+        params.milestoneAmounts,
+      ],
+    });
+    try {
+      await client.call({
+        account: params.creator,
+        to: config.escrow,
+        data,
+        value: 0n,
+      });
+    } catch (error) {
+      throw new ConflictException(
+        `Campaign creation would revert on Sepolia: ${this.rpcErrorMessage(error)}`,
+      );
+    }
     return {
       to: config.escrow,
       chainId: config.chainId,
       account: params.creator,
-      data: encodeFunctionData({
-        abi: KEIBO_CAMPAIGN_ESCROW_ABI,
-        functionName: 'createCampaign',
-        args: [
-          params.asset,
-          params.cap,
-          params.deadline,
-          params.milestoneAmounts,
-        ],
-      }),
+      data,
     };
   }
 
@@ -243,7 +256,22 @@ export class EscrowWeb3Service {
       new ConflictException(
         `Transaction does not prove the requested creator campaign: ${reason}`,
       );
-    if (receipt.status !== 'success') throw invalidProof('transaction reverted');
+    if (receipt.status !== 'success') {
+      let reason = 'transaction reverted';
+      try {
+        await client.call({
+          account: transaction.from,
+          to: transaction.to ?? undefined,
+          data: transaction.input,
+          value: transaction.value,
+          blockNumber:
+            receipt.blockNumber > 0n ? receipt.blockNumber - 1n : undefined,
+        });
+      } catch (error) {
+        reason = `transaction reverted: ${this.rpcErrorMessage(error)}`;
+      }
+      throw invalidProof(reason);
+    }
     if (transaction.to?.toLowerCase() !== expected.to.toLowerCase())
       throw invalidProof('escrow target mismatch');
     if (transaction.from.toLowerCase() !== params.creator.toLowerCase())
@@ -561,12 +589,34 @@ export class EscrowWeb3Service {
     return BigInt(value);
   }
 
+  private rpcErrorMessage(error: unknown): string {
+    if (!error || typeof error !== 'object')
+      return error instanceof Error ? error.message : 'unknown RPC failure';
+    const candidate = error as {
+      shortMessage?: unknown;
+      details?: unknown;
+      message?: unknown;
+      cause?: { shortMessage?: unknown; details?: unknown; message?: unknown };
+    };
+    for (const value of [
+      candidate.shortMessage,
+      candidate.details,
+      candidate.cause?.shortMessage,
+      candidate.cause?.details,
+      candidate.message,
+      candidate.cause?.message,
+    ]) {
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return 'unknown RPC failure';
+  }
+
   private rpcFailure(
     operation: string,
     error: unknown,
   ): ServiceUnavailableException {
     return new ServiceUnavailableException(
-      `Unable to ${operation}: ${error instanceof Error ? error.message : 'unknown RPC failure'}`,
+      `Unable to ${operation}: ${this.rpcErrorMessage(error)}`,
     );
   }
 }
