@@ -1145,7 +1145,16 @@ export class ProjectsService {
 
   async prepareCreatorCampaign(projectId: string, userId: string) {
     const { params, project } = await this.campaignCreation(projectId, userId);
-    const prepared = await this.campaignEscrow.prepareCampaign(params);
+    let prepared;
+    try {
+      prepared = await this.campaignEscrow.prepareCampaign(params);
+    } catch (error: unknown) {
+      const message = `Creator campaign preflight failed: ${this.errorMessage(error)}`;
+      await this.projectsRepo.updateById(projectId, {
+        $set: { onchainProvisioningError: message },
+      });
+      throw new ConflictException(message);
+    }
     let stored = project;
     if (stored.provisioningNonce === undefined) {
       const nonce = await this.campaignEscrow.creatorNonce(params.creator);
