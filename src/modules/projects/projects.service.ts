@@ -1306,8 +1306,25 @@ export class ProjectsService {
       }
       return updated;
     } catch (error: unknown) {
+      const message = this.errorMessage(error);
+      if (
+        message.startsWith(
+          'Transaction does not prove the requested creator campaign: transaction reverted',
+        ) &&
+        project.provisioningNonce !== undefined
+      ) {
+        const reset = await this.projectsRepo.resetRevertedProvisioning(
+          projectId,
+          project.provisioningNonce,
+        );
+        if (reset) {
+          throw new ConflictException(
+            `${message}. The consumed creator nonce was released; retry will preflight a new transaction before requesting a wallet signature.`,
+          );
+        }
+      }
       await this.projectsRepo.updateById(projectId, {
-        $set: { onchainProvisioningError: this.errorMessage(error) },
+        $set: { onchainProvisioningError: message },
       });
       throw error;
     }
