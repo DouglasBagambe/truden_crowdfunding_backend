@@ -274,7 +274,7 @@ export class EscrowWeb3Service {
     }
     if (transaction.to?.toLowerCase() !== expected.to.toLowerCase())
       throw invalidProof(
-        `escrow target mismatch (expected ${expected.to}, mined ${transaction.to ?? 'contract creation'})`,
+        `escrow target mismatch (expected ${expected.to}, mined ${transaction.to ?? 'contract creation'}, from ${transaction.from}, nonce ${transaction.nonce}, value ${transaction.value.toString()}, input ${transaction.input.slice(0, 74)})`,
       );
     if (transaction.from.toLowerCase() !== params.creator.toLowerCase())
       throw invalidProof('creator sender mismatch');
