@@ -568,7 +568,9 @@ describe('ProjectsService — ROI approval provisioning', () => {
       service.decide(mockProjectId, {
         finalStatus: ProjectStatus.APPROVED,
       } as unknown as ProjectDecisionDto),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    ).rejects.toThrow(
+      'Approval blocked: on-chain provisioning failed: RPC timeout Project status is unchanged. Resolve the provisioning error, then retry Approve.',
+    );
 
     // FAILED state must have been written
     expect(

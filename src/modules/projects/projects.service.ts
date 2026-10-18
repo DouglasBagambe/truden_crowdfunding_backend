@@ -720,7 +720,7 @@ export class ProjectsService {
         this.logger.error(
           `ROI on-chain provisioning failed for project ${projectId}: ${errMsg}`,
         );
-        // Persist failure state — project stays APPROVED (visible to admin) but not FUNDING
+        // Preserve the existing moderation status until provisioning succeeds.
         await this.projectsRepo.updateById(projectId, {
           $set: {
             onchainProvisioningStatus: OnchainProvisioningStatus.FAILED,
@@ -729,8 +729,8 @@ export class ProjectsService {
         });
         // Re-throw so the HTTP response reflects the failure to the admin
         throw new BadRequestException(
-          `Project approved but on-chain provisioning failed: ${errMsg}. ` +
-            'Run the backfill repair to retry provisioning.',
+          `Approval blocked: on-chain provisioning failed: ${errMsg} ` +
+            'Project status is unchanged. Resolve the provisioning error, then retry Approve.',
         );
       }
     }
