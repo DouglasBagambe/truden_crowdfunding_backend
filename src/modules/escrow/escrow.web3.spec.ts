@@ -129,3 +129,158 @@ describe('EscrowWeb3Service', () => {
     ).rejects.toThrow('offline');
   });
 });
+
+describe('Creator campaign provisioning evidence', () => {
+  const params = {
+    creator: investor,
+    asset: escrow,
+    cap: 100n,
+    deadline: BigInt(Math.floor(Date.now() / 1000) + 86400),
+    milestoneAmounts: [100n],
+  };
+  beforeEach(() => jest.clearAllMocks());
+  function evidence(overrides: Record<string, unknown> = {}) {
+    const runtime = client({
+      getTransaction: jest.fn().mockResolvedValue({
+        to: escrow,
+        from: investor,
+        input: '0x1234',
+        value: 0n,
+        nonce: 7,
+      }),
+      readContract: jest
+        .fn()
+        .mockResolvedValue([investor, escrow, 100n, 0n, params.deadline, 0]),
+      ...overrides,
+    });
+    (viem.createPublicClient as jest.Mock).mockReturnValue(runtime);
+    (viem.decodeEventLog as jest.Mock).mockReturnValue({
+      eventName: 'CampaignCreated',
+      args: {
+        campaignId: 0n,
+        creator: investor,
+        asset: escrow,
+        cap: 100n,
+        deadline: params.deadline,
+      },
+    });
+    return {
+      runtime,
+      service: new EscrowWeb3Service(config as never, signer as never),
+    };
+  }
+  it('prepares createCampaign for the creator without any platform write', async () => {
+    const { service } = evidence();
+    expect(await service.prepareCampaign(params)).toMatchObject({
+      account: investor,
+      chainId: 11155111,
+      to: escrow,
+    });
+    expect(signer.writeContract).not.toHaveBeenCalled();
+  });
+  it('validates receipt, sender, exact calldata and current state; accepts campaign ID zero', async () => {
+    const { service, runtime } = evidence();
+    await expect(service.verifyCampaignCreation(hash, params, 7)).resolves.toBe(
+      '0',
+    );
+    expect(runtime.waitForTransactionReceipt).toHaveBeenCalledWith({
+      hash,
+      confirmations: 2,
+    });
+    expect(signer.writeContract).not.toHaveBeenCalled();
+  });
+  it.each([
+    { to: investor, from: investor, input: '0x1234', value: 0n },
+    { to: escrow, from: escrow, input: '0x1234', value: 0n },
+    { to: escrow, from: investor, input: '0xdead', value: 0n },
+    { to: escrow, from: investor, input: '0x1234', value: 1n },
+  ])(
+    'rejects wrong target, creator, calldata or attached value',
+    async (transaction) => {
+      const { service } = evidence({
+        getTransaction: jest.fn().mockResolvedValue(transaction),
+      });
+      await expect(
+        service.verifyCampaignCreation(hash, params, 7),
+      ).rejects.toThrow('does not prove');
+    },
+  );
+  it('rejects reverted receipts and closed campaigns', async () => {
+    const reverted = evidence({
+      waitForTransactionReceipt: jest
+        .fn()
+        .mockResolvedValue({ status: 'reverted', logs: [] }),
+    });
+    await expect(
+      reverted.service.verifyCampaignCreation(hash, params, 7),
+    ).rejects.toThrow();
+    const closed = evidence({
+      readContract: jest
+        .fn()
+        .mockResolvedValue([investor, escrow, 100n, 0n, params.deadline, 1]),
+    });
+    await expect(
+      closed.service.verifyCampaignCreation(hash, params, 7),
+    ).rejects.toThrow('no longer funding');
+  });
+  it('rejects a mismatched milestone total and unsupported chain', async () => {
+    const { service } = evidence();
+    await expect(
+      service.prepareCampaign({ ...params, milestoneAmounts: [99n] }),
+    ).rejects.toThrow('sum exactly');
+    evidence({ getChainId: jest.fn().mockResolvedValue(1) });
+    await expect(service.prepareCampaign(params)).rejects.toThrow('chain ID');
+  });
+});
+
+describe('Nonce-bound campaign retries', () => {
+  it('refuses a mined creation transaction with a different nonce', async () => {
+    const runtime = client({
+      getTransaction: jest.fn().mockResolvedValue({
+        from: investor,
+        to: escrow,
+        input: '0x1234',
+        value: 0n,
+        nonce: 8,
+      }),
+    });
+    (viem.createPublicClient as jest.Mock).mockReturnValue(runtime);
+    const service = new EscrowWeb3Service(config as never, signer as never);
+    await expect(
+      service.verifyCampaignCreation(
+        hash,
+        {
+          creator: investor,
+          asset: escrow,
+          cap: 100n,
+          deadline: BigInt(Math.floor(Date.now() / 1000) + 86400),
+          milestoneAmounts: [100n],
+        },
+        7,
+      ),
+    ).rejects.toThrow('does not prove');
+  });
+  it('allows a new nonce only for a matching mined reverted transaction', async () => {
+    const runtime = client({
+      waitForTransactionReceipt: jest
+        .fn()
+        .mockResolvedValue({ status: 'reverted' }),
+      getTransaction: jest.fn().mockResolvedValue({
+        from: investor,
+        to: escrow,
+        input: '0x1234',
+        nonce: 7,
+      }),
+    });
+    (viem.createPublicClient as jest.Mock).mockReturnValue(runtime);
+    const service = new EscrowWeb3Service(config as never, signer as never);
+    const plan = { creator: investor, escrow, nonce: 7, data: '0x1234' };
+    await expect(
+      service.verifyRevertedCreation(hash, plan),
+    ).resolves.toBeUndefined();
+    runtime.waitForTransactionReceipt.mockResolvedValue({ status: 'success' });
+    await expect(service.verifyRevertedCreation(hash, plan)).rejects.toThrow(
+      'Only the mined, reverted',
+    );
+  });
+});

@@ -9,6 +9,7 @@ import {
   encodeFunctionData,
   http,
   isHash,
+  isAddress,
   type Address,
   type Hash,
   type Hex,
@@ -19,6 +20,30 @@ import { EscrowCurrency } from './types';
 
 // Curated KEIBO escrow ABI. Legacy Escrow.json is deliberately not imported.
 export const KEIBO_CAMPAIGN_ESCROW_ABI = [
+  {
+    type: 'function',
+    name: 'createCampaign',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'asset', type: 'address' },
+      { name: 'cap', type: 'uint128' },
+      { name: 'deadline', type: 'uint64' },
+      { name: 'milestoneAmounts', type: 'uint128[]' },
+    ],
+    outputs: [{ name: 'id', type: 'uint256' }],
+  },
+  {
+    type: 'event',
+    name: 'CampaignCreated',
+    inputs: [
+      { indexed: true, name: 'campaignId', type: 'uint256' },
+      { indexed: true, name: 'creator', type: 'address' },
+      { indexed: true, name: 'asset', type: 'address' },
+      { indexed: false, name: 'cap', type: 'uint256' },
+      { indexed: false, name: 'deadline', type: 'uint64' },
+    ],
+  },
+
   {
     type: 'function',
     name: 'campaigns',
@@ -112,6 +137,154 @@ export class EscrowWeb3Service {
     private readonly keiboConfig: KeiboContractConfigService,
     private readonly platformSigner: PlatformSignerService,
   ) {}
+
+  async creatorNonce(
+    creator: Address,
+    blockTag: 'pending' | 'latest' = 'pending',
+  ) {
+    const { client } = await this.readyClient();
+    return client.getTransactionCount({ address: creator, blockTag });
+  }
+
+  async prepareCampaign(params: {
+    creator: Address;
+    asset: Address;
+    cap: bigint;
+    deadline: bigint;
+    milestoneAmounts: bigint[];
+  }) {
+    if (
+      !isAddress(params.creator) ||
+      !isAddress(params.asset) ||
+      /^0x0{40}$/i.test(params.asset)
+    )
+      throw new ConflictException('Invalid campaign wallet or asset');
+    if (
+      params.cap <= 0n ||
+      params.cap >= 2n ** 128n ||
+      params.deadline <= BigInt(Math.floor(Date.now() / 1000)) ||
+      params.deadline >= 2n ** 64n
+    )
+      throw new ConflictException('Invalid campaign cap or deadline');
+    if (
+      !params.milestoneAmounts.length ||
+      params.milestoneAmounts.length > 32 ||
+      params.milestoneAmounts.some((value) => value <= 0n) ||
+      params.milestoneAmounts.reduce((a, b) => a + b, 0n) !== params.cap
+    )
+      throw new ConflictException(
+        'Milestone amounts must sum exactly to the cap',
+      );
+    const { config } = await this.readyClient();
+    if (config.chainId !== 11155111)
+      throw new ConflictException(
+        'Campaign provisioning requires Ethereum Sepolia',
+      );
+    return {
+      to: config.escrow,
+      chainId: config.chainId,
+      account: params.creator,
+      data: encodeFunctionData({
+        abi: KEIBO_CAMPAIGN_ESCROW_ABI,
+        functionName: 'createCampaign',
+        args: [
+          params.asset,
+          params.cap,
+          params.deadline,
+          params.milestoneAmounts,
+        ],
+      }),
+    };
+  }
+
+  async verifyRevertedCreation(
+    hash: Hash,
+    plan: { creator: Address; nonce: number; data: string; escrow: string },
+  ) {
+    if (!isHash(hash)) throw new ConflictException('Invalid transaction hash');
+    const { client, config } = await this.readyClient();
+    if (plan.escrow.toLowerCase() !== config.escrow.toLowerCase())
+      throw new ConflictException('Signing plan belongs to another deployment');
+    const [receipt, transaction] = await Promise.all([
+      client.waitForTransactionReceipt({ hash, confirmations: 2 }),
+      client.getTransaction({ hash }),
+    ]);
+    if (
+      receipt.status !== 'reverted' ||
+      transaction.from.toLowerCase() !== plan.creator.toLowerCase() ||
+      transaction.to?.toLowerCase() !== config.escrow.toLowerCase() ||
+      transaction.input.toLowerCase() !== plan.data.toLowerCase() ||
+      transaction.nonce !== plan.nonce
+    )
+      throw new ConflictException(
+        'Only the mined, reverted reserved transaction may be retried with a new nonce',
+      );
+  }
+
+  async verifyCampaignCreation(
+    hash: Hash,
+    params: {
+      creator: Address;
+      asset: Address;
+      cap: bigint;
+      deadline: bigint;
+      milestoneAmounts: bigint[];
+    },
+    expectedNonce: number,
+  ): Promise<string> {
+    if (!isHash(hash)) throw new ConflictException('Invalid transaction hash');
+    const expected = await this.prepareCampaign(params);
+    const { client, config } = await this.readyClient();
+    const [receipt, transaction] = await Promise.all([
+      client.waitForTransactionReceipt({ hash, confirmations: 2 }),
+      client.getTransaction({ hash }),
+    ]);
+    if (
+      receipt.status !== 'success' ||
+      transaction.to?.toLowerCase() !== expected.to.toLowerCase() ||
+      transaction.from.toLowerCase() !== params.creator.toLowerCase() ||
+      transaction.input.toLowerCase() !== expected.data.toLowerCase() ||
+      transaction.value !== 0n ||
+      transaction.nonce !== expectedNonce
+    )
+      throw new ConflictException(
+        'Transaction does not prove the requested creator campaign',
+      );
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== config.escrow.toLowerCase()) continue;
+      try {
+        const decoded = decodeEventLog({
+          abi: KEIBO_CAMPAIGN_ESCROW_ABI,
+          data: log.data,
+          topics: log.topics,
+        });
+        if (decoded.eventName !== 'CampaignCreated') continue;
+        const event = decoded.args;
+        if (
+          event.creator.toLowerCase() !== params.creator.toLowerCase() ||
+          event.asset.toLowerCase() !== params.asset.toLowerCase() ||
+          event.cap !== params.cap ||
+          event.deadline !== params.deadline
+        )
+          continue;
+        const campaign = await this.getCampaign(event.campaignId.toString());
+        if (
+          campaign.creator.toLowerCase() !== params.creator.toLowerCase() ||
+          campaign.asset.toLowerCase() !== params.asset.toLowerCase() ||
+          campaign.cap !== params.cap ||
+          campaign.deadline !== params.deadline ||
+          campaign.state !== 0
+        )
+          throw new ConflictException(
+            'Campaign is no longer funding or does not match',
+          );
+        return event.campaignId.toString();
+      } catch (error) {
+        if (error instanceof ConflictException) throw error;
+      }
+    }
+    throw new ConflictException('Missing matching CampaignCreated evidence');
+  }
 
   getRuntimeConfig() {
     return this.keiboConfig.getRequired();

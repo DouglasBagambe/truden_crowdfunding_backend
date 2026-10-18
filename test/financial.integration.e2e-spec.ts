@@ -25,6 +25,12 @@ describe('financial PostgreSQL integration', () => {
   const database = new FinancialDatabase(config);
   const projectsService = {
     ensureProjectCanReceiveDonation: jest.fn().mockResolvedValue(undefined),
+    requireInvestorForCampaign: jest.fn().mockResolvedValue({
+      project: { currency: 'USDC' },
+      agreementSnapshot: [
+        { title: 'Investor terms', acceptanceKey: 'terms:1' },
+      ],
+    }),
     getCharityMilestoneReleaseEligibility: jest.fn().mockResolvedValue({
       creatorId: 'creator-release',
       currency: 'UGX',
@@ -48,6 +54,34 @@ describe('financial PostgreSQL integration', () => {
     await database.query(
       'TRUNCATE financial_outbox, financial_inbox, financial_postings, financial_campaign_releases, financial_journals, financial_payment_intents, financial_reconciliations CASCADE',
     );
+  });
+
+  it('migrates idempotently and persists full USDC currency plus investment agreement snapshot', async () => {
+    const key = randomUUID();
+    const input = {
+      projectId: 'usdc-campaign',
+      contributorId: 'verified-investor',
+      currency: 'USDC',
+      amountMinor: 1250000n,
+      acceptedAgreements: ['terms:1'],
+      idempotencyKey: key,
+      correlationId: randomUUID(),
+    };
+    const created = await financial.createPaymentIntent(input);
+    expect((await financial.createPaymentIntent(input)).id).toBe(created.id);
+    const stored = await database.query<{
+      currency: string;
+      amount_minor: string;
+      agreement_snapshot: unknown[];
+    }>(
+      'SELECT currency, amount_minor, agreement_snapshot FROM financial_payment_intents WHERE id=$1',
+      [created.id],
+    );
+    expect(stored.rows[0].currency).toBe('USDC');
+    expect(stored.rows[0].amount_minor).toBe('1250000');
+    expect(stored.rows[0].agreement_snapshot).toEqual([
+      { title: 'Investor terms', acceptanceKey: 'terms:1' },
+    ]);
   });
 
   afterAll(async () => {

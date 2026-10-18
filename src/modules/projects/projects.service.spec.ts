@@ -10,11 +10,21 @@ import { CharityCategory } from '../../common/enums/charity-category.enum';
 import { CharitySubcategory } from '../../common/enums/charity-subcategory.enum';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
-import { ProjectDecisionDto } from './dto/decision.dto';
 import { MilestoneStatus } from '../../common/enums/milestone-status.enum';
 import { KYCStatus } from '../../common/enums/role.enum';
 import { CreatorVerificationStatus } from '../../common/enums/creator-verification-status.enum';
 import { OnchainProvisioningStatus } from './schemas/project.schema';
+
+type ProjectEmailSender = {
+  sendProjectDecisionEmail: (
+    email: string,
+    creator: string,
+    name: string,
+    decision: ProjectStatus,
+    type?: ProjectType,
+    reason?: string,
+  ) => Promise<void>;
+};
 
 const mockProjectId = '507f1f77bcf86cd799439011';
 const mockCreatorId = '507f1f77bcf86cd799439012';
@@ -25,24 +35,16 @@ type ProjectsServiceDependencies = ConstructorParameters<
 type ProjectWithMilestones = Awaited<
   ReturnType<ProjectsService['getProjectWithMilestones']>
 >;
-type ProjectUpdate = {
-  $set?: {
-    status?: ProjectStatus;
-    onchainProvisioningStatus?: OnchainProvisioningStatus;
-    onchainProvisioningError?: string;
-  };
-};
-
-const getProjectUpdateCalls = (
-  calls: unknown,
-): Array<[string, ProjectUpdate]> => calls as Array<[string, ProjectUpdate]>;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Test factory
 // ─────────────────────────────────────────────────────────────────────────────
 
 const createService = () => {
   const projectsRepo = {
+    resetRevertedProvisioning: jest.fn().mockResolvedValue({}),
+    reserveProvisioningPlan: jest.fn(),
+    reserveProvisioningTransaction: jest.fn().mockResolvedValue({}),
+    confirmProvisioning: jest.fn(),
     create: jest.fn(),
     findById: jest.fn(),
     updateById: jest.fn(),
@@ -82,6 +84,18 @@ const createService = () => {
     create: jest.fn(),
   };
   const viemNftClient = {
+    creatorNonce: jest.fn().mockResolvedValue(7),
+    prepareCampaign: jest.fn().mockResolvedValue({
+      to: '0x0000000000000000000000000000000000000001',
+      data: '0x1234',
+      account: creatorWithWallet().primaryWallet,
+    }),
+    verifyCampaignCreation: jest.fn().mockResolvedValue('0'),
+    verifyRevertedCreation: jest.fn().mockResolvedValue(undefined),
+    getRuntimeConfig: jest.fn().mockReturnValue({
+      escrow: '0x0000000000000000000000000000000000000001',
+    }),
+    getCampaign: jest.fn().mockResolvedValue({ state: 0 }),
     createProjectNFT: jest.fn(),
     mintInvestmentTokens: jest.fn(),
     getDiagnostics: jest.fn().mockReturnValue({
@@ -831,172 +845,6 @@ describe('ProjectsService — contribution eligibility', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Suite: repairRoiProjectProvisioning (single repair)
 // ─────────────────────────────────────────────────────────────────────────────
-
-describe('ProjectsService — repairRoiProjectProvisioning', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('repairs a legacy APPROVED ROI project: provisions + promotes to FUNDING', async () => {
-    const { service, projectsRepo, usersRepo, viemNftClient } = createService();
-
-    projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({ status: ProjectStatus.APPROVED }),
-    );
-    usersRepo.findById.mockResolvedValue(creatorWithWallet());
-    viemNftClient.createProjectNFT.mockResolvedValue({
-      hash: '0xhash',
-      receipt: {},
-    });
-    projectsRepo.updateById.mockResolvedValue({});
-
-    const result = await service.repairRoiProjectProvisioning(mockProjectId);
-
-    expect(result.result).toBe('PROVISIONED');
-    expect(result.projectOnchainId).toBeDefined();
-
-    // The project was APPROVED so it should have been promoted to FUNDING
-    expect(
-      getProjectUpdateCalls(projectsRepo.updateById.mock.calls).some(
-        ([id, update]) =>
-          id === mockProjectId && update.$set?.status === ProjectStatus.FUNDING,
-      ),
-    ).toBe(true);
-  });
-
-  it('returns ALREADY_PROVISIONED without calling contract when id already set', async () => {
-    const { service, projectsRepo, viemNftClient } = createService();
-
-    projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({
-        projectOnchainId: '99887766',
-        onchainProvisioningStatus: OnchainProvisioningStatus.READY,
-      }),
-    );
-    projectsRepo.updateById.mockResolvedValue({});
-
-    const result = await service.repairRoiProjectProvisioning(mockProjectId);
-
-    expect(result.result).toBe('ALREADY_PROVISIONED');
-    expect(viemNftClient.createProjectNFT).not.toHaveBeenCalled();
-  });
-
-  it('returns FAILED and persists error when contract call throws', async () => {
-    const { service, projectsRepo, usersRepo, viemNftClient } = createService();
-
-    projectsRepo.findById.mockResolvedValue(roiProjectStub());
-    usersRepo.findById.mockResolvedValue(creatorWithWallet());
-    viemNftClient.createProjectNFT.mockRejectedValue(
-      new Error('Nonce too low'),
-    );
-    projectsRepo.updateById.mockResolvedValue({});
-
-    const result = await service.repairRoiProjectProvisioning(mockProjectId);
-
-    expect(result.result).toBe('FAILED');
-    expect(result.error).toContain('Nonce too low');
-
-    expect(
-      getProjectUpdateCalls(projectsRepo.updateById.mock.calls).some(
-        ([id, update]) =>
-          id === mockProjectId &&
-          update.$set?.onchainProvisioningStatus ===
-            OnchainProvisioningStatus.FAILED &&
-          update.$set.onchainProvisioningError?.includes('Nonce too low'),
-      ),
-    ).toBe(true);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Suite: backfillRoiProvisioning (batch scan)
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('ProjectsService — backfillRoiProvisioning', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('skips already-provisioned projects and processes unprovisioned ones', async () => {
-    const { service, projectsRepo, usersRepo, viemNftClient } = createService();
-
-    const alreadyProvisioned = roiProjectStub({
-      _id: '507f1f77bcf86cd799439020',
-      id: '507f1f77bcf86cd799439020',
-      projectOnchainId: '111222333',
-      onchainProvisioningStatus: OnchainProvisioningStatus.READY,
-    });
-    const needsProvisioning = roiProjectStub({
-      _id: '507f1f77bcf86cd799439021',
-      id: '507f1f77bcf86cd799439021',
-      projectOnchainId: undefined,
-    });
-
-    // query returns both candidates (repo query is called once for batch scan)
-    projectsRepo.query.mockResolvedValue([
-      alreadyProvisioned,
-      needsProvisioning,
-    ]);
-
-    // For the repair of the unprovisioned project:
-    projectsRepo.findById.mockImplementation((id: string) => {
-      if (id === '507f1f77bcf86cd799439020')
-        return Promise.resolve(alreadyProvisioned);
-      if (id === '507f1f77bcf86cd799439021')
-        return Promise.resolve(needsProvisioning);
-      return Promise.resolve(null);
-    });
-    usersRepo.findById.mockResolvedValue(creatorWithWallet());
-    viemNftClient.createProjectNFT.mockResolvedValue({
-      hash: '0xhash',
-      receipt: {},
-    });
-    projectsRepo.updateById.mockResolvedValue({});
-
-    const report = await service.backfillRoiProvisioning();
-
-    // alreadyProvisioned has valid projectOnchainId so the batch skips it inline
-    expect(report.skipped).toBe(1);
-    expect(report.provisioned).toBe(1);
-    expect(report.failed).toBe(0);
-    expect(report.total).toBe(2);
-  });
-
-  it('records failures without crashing the batch', async () => {
-    const { service, projectsRepo, usersRepo, viemNftClient } = createService();
-
-    const failingProject = roiProjectStub({
-      _id: '507f1f77bcf86cd799439030',
-      id: '507f1f77bcf86cd799439030',
-      projectOnchainId: undefined,
-    });
-
-    projectsRepo.query.mockResolvedValue([failingProject]);
-    projectsRepo.findById.mockResolvedValue(failingProject);
-    usersRepo.findById.mockResolvedValue(creatorWithWallet());
-    viemNftClient.createProjectNFT.mockRejectedValue(
-      new Error('Contract reverted'),
-    );
-    projectsRepo.updateById.mockResolvedValue({});
-
-    const report = await service.backfillRoiProvisioning();
-
-    expect(report.failed).toBe(1);
-    expect(report.provisioned).toBe(0);
-    expect(report.results[0].result).toBe('FAILED');
-    expect(report.results[0].error).toContain('Contract reverted');
-  });
-
-  it('returns empty report when no candidates exist', async () => {
-    const { service, projectsRepo } = createService();
-
-    projectsRepo.query.mockResolvedValue([]);
-
-    const report = await service.backfillRoiProvisioning();
-
-    expect(report.total).toBe(0);
-    expect(report.skipped).toBe(0);
-    expect(report.provisioned).toBe(0);
-    expect(report.failed).toBe(0);
-    expect(report.results).toHaveLength(0);
-  });
-});
 
 describe('Public project query regressions', () => {
   it.each(['Test', 'Tes', 'tes', 'no-result', '.*'])(

@@ -9,6 +9,7 @@ describe('FinancialService contribution eligibility', () => {
     };
     const projectsService = {
       ensureProjectCanReceiveDonation: jest.fn(),
+      requireInvestorForCampaign: jest.fn(),
       getCharityMilestoneReleaseEligibility: jest.fn(),
       assertProjectOnchainId: jest.fn(),
     };
@@ -84,6 +85,63 @@ describe('FinancialService contribution eligibility', () => {
       projectsService.ensureProjectCanReceiveDonation,
     ).toHaveBeenCalledWith('approved-project');
     expect(database.transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('supports verified USDC funding with server-validated agreement evidence', async () => {
+    const c = createService();
+    c.projectsService.requireInvestorForCampaign.mockResolvedValue({
+      project: { currency: 'USDC' },
+      agreementSnapshot: [{ title: 'Risk terms', acceptanceKey: 'terms:1' }],
+    });
+    const query = jest.fn().mockResolvedValue({
+      rowCount: 0,
+      rows: [{ id: 'intent-usdc', state: 'pending' }],
+    });
+    c.database.transaction.mockImplementation(
+      (callback: (client: { query: jest.Mock }) => Promise<unknown>) =>
+        callback({ query }),
+    );
+    await expect(
+      c.service.createPaymentIntent({
+        projectId: 'funding-project',
+        contributorId: 'investor',
+        currency: 'USDC',
+        amountMinor: 1000000n,
+        acceptedAgreements: ['terms:1'],
+        idempotencyKey: 'usdc-intent',
+        correlationId: 'correlation',
+      }),
+    ).resolves.toMatchObject({ id: 'intent-usdc' });
+    expect(c.projectsService.requireInvestorForCampaign).toHaveBeenCalledWith(
+      'funding-project',
+      'investor',
+      ['terms:1'],
+    );
+    expect(
+      c.projectsService.ensureProjectCanReceiveDonation,
+    ).not.toHaveBeenCalled();
+    const queryCalls = query.mock.calls as unknown as [string, unknown[]][];
+    expect(queryCalls[1][1]).toContain(
+      JSON.stringify([{ title: 'Risk terms', acceptanceKey: 'terms:1' }]),
+    );
+  });
+
+  it('fails before creating a USDC intent when KYC, wallet or agreement eligibility fails', async () => {
+    const c = createService();
+    c.projectsService.requireInvestorForCampaign.mockRejectedValue(
+      new BadRequestException('Investment eligibility incomplete'),
+    );
+    await expect(
+      c.service.createPaymentIntent({
+        projectId: 'funding-project',
+        contributorId: 'investor',
+        currency: 'USDC',
+        amountMinor: 1000000n,
+        idempotencyKey: 'usdc-intent',
+        correlationId: 'correlation',
+      }),
+    ).rejects.toThrow('eligibility incomplete');
+    expect(c.database.transaction).not.toHaveBeenCalled();
   });
 
   it.each(['captured', 'settled'] as const)(

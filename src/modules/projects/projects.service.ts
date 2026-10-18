@@ -50,10 +50,10 @@ import { AttachmentFilesRepository } from './repositories/attachment-files.repos
 import { UploadAttachmentDto } from './dto/upload-attachment.dto';
 import { StreamableFile } from '@nestjs/common';
 import { hasBackendRoiAccess } from '../../common/utils/roi-access.util';
-import { ViemNftClient } from '../nfts/helpers/viem-nft-client';
+import { EscrowWeb3Service } from '../escrow/escrow.web3';
+import { isAddress, parseUnits, type Hash } from 'viem';
 import { OnchainProvisioningStatus } from './schemas/project.schema';
 import { NotificationsService } from '../notifications/notifications.service';
-import type { Address } from 'viem';
 type MulterFile = Express.Multer.File;
 
 const PUBLIC_STATUSES = [
@@ -85,7 +85,7 @@ export class ProjectsService {
     private readonly agreementTemplatesService: AgreementTemplatesService,
     private readonly attachmentRequirementsService: AttachmentRequirementsService,
     private readonly attachmentFilesRepo: AttachmentFilesRepository,
-    private readonly viemNftClient: ViemNftClient,
+    private readonly campaignEscrow: EscrowWeb3Service,
     private readonly notifications: NotificationsService,
     @InjectModel(Investment.name)
     private readonly investmentModel: Model<InvestmentDocument>,
@@ -281,6 +281,15 @@ export class ProjectsService {
     ) {
       throw new ForbiddenException('You can only edit your own projects');
     }
+    if (
+      currentType === ProjectType.ROI &&
+      project.status === ProjectStatus.APPROVED &&
+      project.onchainProvisioningStatus ===
+        OnchainProvisioningStatus.AWAITING_CREATOR
+    )
+      throw new ConflictException(
+        'Request changes before editing an approved campaign awaiting creator provisioning',
+      );
     const isOwnerEditable = OWNER_EDITABLE_STATUSES.some(
       (status) => status === project.status,
     );
@@ -741,6 +750,10 @@ export class ProjectsService {
         ...(dto.reason !== undefined ? { decisionReason: dto.reason } : {}),
         ...extraSet,
       },
+      ...(extraSet.onchainProvisioningStatus ===
+      OnchainProvisioningStatus.AWAITING_CREATOR
+        ? { $unset: { onchainProvisioningError: 1 } }
+        : {}),
     });
     if (!updated) throw new NotFoundException('Project not found');
 
@@ -751,7 +764,10 @@ export class ProjectsService {
     const decisionLabel =
       finalStatus === ProjectStatus.FUNDING ||
       finalStatus === ProjectStatus.APPROVED
-        ? 'approved'
+        ? this.readProjectType(project) === ProjectType.ROI &&
+          finalStatus === ProjectStatus.APPROVED
+          ? 'awaiting creator provisioning'
+          : 'approved'
         : finalStatus === ProjectStatus.REJECTED
           ? 'not approved'
           : 'requires changes';
@@ -770,6 +786,12 @@ export class ProjectsService {
         `Could not record campaign-decision notification for ${projectId}: ${this.errorMessage(notificationError)}`,
       );
     }
+
+    if (
+      this.readProjectType(project) === ProjectType.ROI &&
+      finalStatus === ProjectStatus.APPROVED
+    )
+      return updated;
 
     // Send email notification to creator on Rejection or Approval
     try {
@@ -922,62 +944,65 @@ export class ProjectsService {
       );
     }
 
-    const investmentsTestMode =
-      String(
-        this.configService.get('INVESTMENTS_TEST_MODE') ?? '',
-      ).toLowerCase() === 'true';
-    const kycBypass =
-      String(this.configService.get('KYC_BYPASS') ?? '').toLowerCase() ===
-      'true';
-
-    if (!investmentsTestMode && !kycBypass) {
-      const openInvestmentStatuses: ProjectStatus[] = [
-        ProjectStatus.FUNDING,
-        // Legacy ROI approvals stored as APPROVED before provisioning was added.
-        ProjectStatus.APPROVED,
-      ];
-      if (!openInvestmentStatuses.includes(project.status)) {
-        throw new BadRequestException('Project is not accepting investments');
-      }
-    }
-
-    const target = project.targetAmount || 0;
-    if (target <= 0) {
+    if (project.status !== ProjectStatus.FUNDING)
+      throw new BadRequestException('Project is not accepting investments');
+    if (!(project.targetAmount > 0))
       throw new BadRequestException('Project has invalid funding target');
-    }
-
-    // ── On-chain provisioning gate ─────────────────────────────────────────────
-    // Default: strict (ROI_REQUIRE_ONCHAIN_PROVISIONING=true)
-    const requireProvisioning =
-      String(
-        this.configService.get<string>('ROI_REQUIRE_ONCHAIN_PROVISIONING') ??
-          'true',
-      ).toLowerCase() !== 'false';
-
-    const projectOnchainId = project.projectOnchainId?.trim() ?? '';
-    const isProvisioned =
-      projectOnchainId.length > 0 && projectOnchainId !== '0';
-
-    if (requireProvisioning && !isProvisioned) {
-      const provisioningStatus =
-        project.onchainProvisioningStatus ??
-        OnchainProvisioningStatus.NOT_STARTED;
-      if (provisioningStatus === OnchainProvisioningStatus.FAILED) {
-        const reason =
-          project.onchainProvisioningError || 'Unknown provisioning error';
-        throw new BadRequestException(
-          `ROI project on-chain provisioning previously failed: ${reason}. ` +
-            'An admin must run the repair endpoint before investments can proceed.',
-        );
-      }
+    if (
+      project.onchainProvisioningStatus !== OnchainProvisioningStatus.READY ||
+      !project.provisioningTransactionHash ||
+      !project.provisioningEscrow ||
+      !/^(0|[1-9][0-9]*)$/.test(project.projectOnchainId || '')
+    )
       throw new BadRequestException(
-        'This ROI project has not yet been provisioned on-chain. ' +
-          'It cannot accept investments until provisioning completes.',
+        'ROI project requires confirmed KEIBO escrow provisioning',
       );
-    }
-    // ──────────────────────────────────────────────────────────────────────────
-
     return project;
+  }
+
+  async requireInvestorForCampaign(
+    projectId: string,
+    userId: string,
+    acceptedAgreements: string[] = [],
+  ) {
+    const project = await this.ensureProjectIsOpenForInvestment(projectId);
+    const user = await this.usersRepo.findById(userId);
+    if (
+      !user ||
+      user.isBlocked ||
+      user.isActive === false ||
+      (user.kyc?.status ?? user.kycStatus) !== KYCStatus.VERIFIED ||
+      !hasBackendRoiAccess(userId, this.configService)
+    )
+      throw new ForbiddenException(
+        'Verified KYC and investment eligibility are required',
+      );
+    if (!user.primaryWallet && !user.linkedWallets?.length)
+      throw new ForbiddenException('A verified linked wallet is required');
+    const agreements = project.roiAgreements?.length
+      ? project.roiAgreements
+      : project.agreements || [];
+    const snapshot = agreements.map((agreement, index) => ({
+      title: agreement.title,
+      description: agreement.description,
+      requiresAcceptance: agreement.requiresAcceptance,
+      templateId: agreement.templateId,
+      templateVersion: agreement.templateVersion,
+      acceptanceKey: agreement.templateId
+        ? `${agreement.templateId}:${agreement.templateVersion || 1}`
+        : `campaign:${index}:${agreement.title}`,
+    }));
+    if (
+      snapshot.some(
+        (agreement) =>
+          agreement.requiresAcceptance !== false &&
+          !acceptedAgreements.includes(agreement.acceptanceKey),
+      )
+    )
+      throw new ForbiddenException(
+        'Accept the current required investment agreements before contributing',
+      );
+    return { project, agreementSnapshot: snapshot };
   }
 
   async ensureProjectCanReceiveDonation(projectId: string) {
@@ -1029,108 +1054,274 @@ export class ProjectsService {
       );
     }
 
-    // ── Already provisioned — idempotency guard ─────────────────────────────
-    const existingOnchainId = project.projectOnchainId?.trim() ?? '';
-    if (existingOnchainId && existingOnchainId !== '0') {
-      // Ensure status field is synced in case it was set before this field existed
-      await this.projectsRepo.updateById(projectId, {
-        $set: {
-          onchainProvisioningStatus: OnchainProvisioningStatus.READY,
-          onchainProvisionedAt: project.onchainProvisionedAt ?? new Date(),
-        },
-        $unset: { onchainProvisioningError: 1 },
-      });
-      return { projectOnchainId: existingOnchainId };
-    }
-
-    // ── Validate creator and wallet ─────────────────────────────────────────
-    const creatorId = this.extractObjectIdString(
-      project.creatorId,
-      'project.creatorId',
-    );
-    const creator = await this.usersRepo.findById(creatorId);
-    if (!creator) {
-      this.logger.error(
-        `ROI provisioning failed for project ${projectId}: creator ${creatorId} not found`,
-      );
-      throw new BadRequestException('Project creator not found');
-    }
-
-    const linkedWallet = creator.linkedWallets?.find(
-      (w): w is string => typeof w === 'string' && w.trim().length > 0,
-    );
-    const rawCreator = this.documentRecord(creator);
-    const legacyWallet =
-      typeof rawCreator.walletAddress === 'string'
-        ? rawCreator.walletAddress.trim().toLowerCase() || undefined
-        : undefined;
-    const creatorWallet: string | undefined =
-      creator.primaryWallet || linkedWallet || legacyWallet;
-
-    if (!creatorWallet) {
-      this.logger.error(
-        `ROI provisioning blocked for project ${projectId}: creator ${creatorId} has no linked wallet`,
-      );
+    if (
+      project.onchainProvisioningStatus !== OnchainProvisioningStatus.READY ||
+      !project.provisioningTransactionHash ||
+      !project.provisioningEscrow ||
+      !/^(0|[1-9][0-9]*)$/.test(project.projectOnchainId || '')
+    )
       throw new BadRequestException(
-        'ROI project provisioning requires the creator to have a linked wallet address. ' +
-          'Ask the creator to link a wallet before approving.',
+        'Creator-signed KEIBO escrow provisioning is required; no platform or legacy NFT transaction is permitted',
       );
-    }
-
-    if (!creator.primaryWallet && legacyWallet) {
-      await this.usersRepo.updateById(creatorId, {
-        $set: { primaryWallet: legacyWallet },
-        $addToSet: { linkedWallets: legacyWallet },
-      });
-      this.logger.log(
-        `ROI provisioning recovered a legacy wallet for creator ${creatorId}`,
+    const runtime = this.campaignEscrow.getRuntimeConfig();
+    if (
+      runtime.escrow.toLowerCase() !== project.provisioningEscrow.toLowerCase()
+    )
+      throw new ConflictException(
+        'Stored campaign proof belongs to a different escrow deployment',
       );
-    }
-
-    // ── Derive deterministic on-chain ID ────────────────────────────────────
-    // Same derivation as the original ensureRoiProjectReadyForFunding so IDs are stable.
-    const projectOnchainId = BigInt(`0x${project._id.toString()}`).toString();
-    const targetAmountWei = BigInt(
-      Math.floor(Number(project.targetAmount || 0) * 1e6),
+    const campaign = await this.campaignEscrow.getCampaign(
+      project.projectOnchainId!,
     );
+    if (campaign.state !== 0)
+      throw new BadRequestException('KEIBO campaign is not funding');
+    return { projectOnchainId: project.projectOnchainId! };
+  }
 
-    this.logger.log(`ROI provisioning started for project ${projectId}`);
+  private async campaignCreation(projectId: string, userId: string) {
+    this.ensureValidObjectId(projectId);
+    const project = await this.projectsRepo.findById(projectId);
+    if (!project) throw new NotFoundException('Project not found');
+    if (
+      this.extractObjectIdString(project.creatorId, 'project.creatorId') !==
+      userId
+    )
+      throw new ForbiddenException(
+        'Only the campaign creator may provision it',
+      );
+    if (
+      this.readProjectType(project) !== ProjectType.ROI ||
+      project.status !== ProjectStatus.APPROVED ||
+      project.onchainProvisioningStatus !==
+        OnchainProvisioningStatus.AWAITING_CREATOR
+    )
+      throw new ConflictException(
+        'Campaign is not awaiting creator provisioning',
+      );
+    await this.ensureCreatorEligible(userId);
+    if (!hasBackendRoiAccess(userId, this.configService))
+      throw new ForbiddenException('ROI access is required');
+    const creator = await this.usersRepo.findById(userId);
+    const wallet = creator?.primaryWallet;
+    if (!wallet || !isAddress(wallet))
+      throw new BadRequestException(
+        'Link and verify a primary wallet before provisioning',
+      );
+    // No conversion of fiat goals into token units: only a genuine USDC goal is supported.
+    if (project.currency.toUpperCase() !== 'USDC')
+      throw new BadRequestException(
+        'On-chain campaigns require a USDC-denominated goal; fiat conversion is not configured',
+      );
+    const asset = this.configService.get<string>('USDC_TOKEN_ADDRESS');
+    if (!asset || !isAddress(asset))
+      throw new BadRequestException(
+        'USDC_TOKEN_ADDRESS must be configured for Sepolia',
+      );
+    if (!/^\d+(\.\d{1,6})?$/.test(String(project.targetAmount)))
+      throw new BadRequestException(
+        'USDC target must use at most six decimal places',
+      );
+    const cap = parseUnits(String(project.targetAmount), 6);
+    const deadline = project.fundingEndDate
+      ? BigInt(Math.floor(new Date(project.fundingEndDate).getTime() / 1000))
+      : 0n;
+    const milestones = await this.milestonesRepo.findByProject(projectId);
+    if (
+      !milestones.length ||
+      milestones.some((m) => !m.payoutPercentage || m.payoutPercentage <= 0) ||
+      Math.abs(
+        milestones.reduce((sum, m) => sum + (m.payoutPercentage || 0), 0) - 100,
+      ) > 0.000001
+    )
+      throw new BadRequestException(
+        'Milestone payout percentages must total 100',
+      );
+    const amounts = milestones.map(
+      (m) =>
+        (cap * BigInt(Math.round((m.payoutPercentage || 0) * 10000))) /
+        1000000n,
+    );
+    amounts[amounts.length - 1] += cap - amounts.reduce((a, b) => a + b, 0n);
+    return {
+      project,
+      params: {
+        creator: wallet,
+        asset,
+        cap,
+        deadline,
+        milestoneAmounts: amounts,
+      },
+    };
+  }
 
-    // ── Call contract ───────────────────────────────────────────────────────
+  async prepareCreatorCampaign(projectId: string, userId: string) {
+    const { params, project } = await this.campaignCreation(projectId, userId);
+    const prepared = await this.campaignEscrow.prepareCampaign(params);
+    let stored = project;
+    if (stored.provisioningNonce === undefined) {
+      const nonce = await this.campaignEscrow.creatorNonce(params.creator);
+      try {
+        stored =
+          (await this.projectsRepo.reserveProvisioningPlan(projectId, {
+            ...prepared,
+            nonce,
+          })) || (await this.projectsRepo.findById(projectId))!;
+      } catch (error: unknown) {
+        if ((error as { code?: number }).code === 11000)
+          throw new ConflictException(
+            'This creator nonce is reserved for another campaign. Finish its transaction first.',
+          );
+        throw error;
+      }
+    }
+    if (
+      stored.provisioningNonce === undefined ||
+      stored.provisioningCreator?.toLowerCase() !==
+        prepared.account.toLowerCase() ||
+      stored.provisioningEscrow?.toLowerCase() !== prepared.to.toLowerCase() ||
+      stored.provisioningCalldata?.toLowerCase() !== prepared.data.toLowerCase()
+    )
+      throw new ConflictException(
+        'Campaign signing plan changed. Recover the original transaction before continuing.',
+      );
+    const latestNonce = await this.campaignEscrow.creatorNonce(
+      params.creator,
+      'latest',
+    );
+    return {
+      ...prepared,
+      nonce: stored.provisioningNonce,
+      transactionHash: stored.provisioningTransactionHash,
+      requiresTransactionHash: latestNonce > stored.provisioningNonce,
+    };
+  }
+
+  async retryRevertedCreatorCampaign(
+    projectId: string,
+    userId: string,
+    hash: Hash,
+  ) {
+    const { project, params } = await this.campaignCreation(projectId, userId);
+    if (
+      project.provisioningNonce === undefined ||
+      !project.provisioningCalldata ||
+      !project.provisioningEscrow
+    )
+      throw new ConflictException('No reserved signing plan exists');
+    await this.campaignEscrow.verifyRevertedCreation(hash, {
+      creator: params.creator,
+      nonce: project.provisioningNonce,
+      data: project.provisioningCalldata,
+      escrow: project.provisioningEscrow,
+    });
+    const updated = await this.projectsRepo.resetRevertedProvisioning(
+      projectId,
+      project.provisioningNonce,
+    );
+    if (!updated)
+      throw new ConflictException(
+        'Campaign state changed; refresh before retrying',
+      );
+    return { retryAllowed: true };
+  }
+
+  async confirmCreatorCampaign(
+    projectId: string,
+    userId: string,
+    transactionHash: Hash,
+  ) {
+    const existing = await this.projectsRepo.findById(projectId);
+    if (
+      existing &&
+      this.extractObjectIdString(existing.creatorId, 'project.creatorId') ===
+        userId &&
+      existing.status === ProjectStatus.FUNDING &&
+      existing.provisioningTransactionHash?.toLowerCase() ===
+        transactionHash.toLowerCase()
+    )
+      return existing;
+    const { params, project } = await this.campaignCreation(projectId, userId);
+    if (project.provisioningNonce === undefined)
+      throw new ConflictException(
+        'Prepare and reserve the creator transaction before confirmation',
+      );
+    const prepared = await this.campaignEscrow.prepareCampaign(params);
+    if (
+      project.provisioningCreator?.toLowerCase() !==
+        params.creator.toLowerCase() ||
+      project.provisioningEscrow?.toLowerCase() !== prepared.to.toLowerCase() ||
+      project.provisioningCalldata?.toLowerCase() !==
+        prepared.data.toLowerCase()
+    )
+      throw new ConflictException(
+        'Campaign does not match its reserved signing plan',
+      );
     try {
-      await this.viemNftClient.createProjectNFT({
-        projectOnchainId: BigInt(projectOnchainId),
-        creator: creatorWallet as Address,
-        targetAmountWei,
-        paymentToken: '0x0000000000000000000000000000000000000000' as Address,
-      });
-
-      this.logger.log(
-        `ROI provisioning contract write succeeded for project ${projectId}`,
+      const reserved = await this.projectsRepo.reserveProvisioningTransaction(
+        projectId,
+        transactionHash,
       );
+      if (!reserved)
+        throw new ConflictException(
+          'A different campaign transaction is already reserved, or campaign state changed',
+        );
+      const campaignId = await this.campaignEscrow.verifyCampaignCreation(
+        transactionHash,
+        params,
+        project.provisioningNonce,
+      );
+      const runtime = this.campaignEscrow.getRuntimeConfig();
+      const updated = await this.projectsRepo.confirmProvisioning(
+        projectId,
+        transactionHash,
+        campaignId,
+        runtime.escrow,
+      );
+      if (!updated) {
+        const concurrent = await this.projectsRepo.findById(projectId);
+        if (
+          concurrent?.status === ProjectStatus.FUNDING &&
+          concurrent.provisioningTransactionHash?.toLowerCase() ===
+            transactionHash.toLowerCase()
+        )
+          return concurrent;
+        throw new ConflictException(
+          'Campaign changed during confirmation; refresh before retrying',
+        );
+      }
+      try {
+        await this.notifications.create({
+          recipientId: userId,
+          category: 'campaign',
+          title: 'Campaign approved',
+          body: `“${project.name}” is provisioned and open for funding.`,
+          link: `/projects/${projectId}`,
+        });
+      } catch {
+        this.logger.warn('Campaign funding notification delivery failed');
+      }
+      try {
+        const creator = await this.usersRepo.findById(userId);
+        if (creator?.email)
+          await this.sendProjectDecisionEmail(
+            creator.email,
+            creator.profile?.displayName ||
+              creator.profile?.firstName ||
+              creator.email,
+            project.name,
+            ProjectStatus.FUNDING,
+            ProjectType.ROI,
+          );
+      } catch {
+        this.logger.warn('Campaign funding email delivery failed');
+      }
+      return updated;
     } catch (error: unknown) {
-      this.logger.error(
-        `ROI provisioning contract write failed for project ${projectId}`,
-      );
+      await this.projectsRepo.updateById(projectId, {
+        $set: { onchainProvisioningError: this.errorMessage(error) },
+      });
       throw error;
     }
-
-    // ── Persist success ─────────────────────────────────────────────────────
-    const now = new Date();
-    await this.projectsRepo.updateById(projectId, {
-      $set: {
-        projectOnchainId,
-        onchainProvisioningStatus: OnchainProvisioningStatus.READY,
-        onchainProvisionedAt: now,
-      },
-      $unset: { onchainProvisioningError: 1 },
-    });
-
-    this.logger.log(
-      `ROI project ${projectId} provisioned on-chain: onchainId=${projectOnchainId}`,
-    );
-
-    return { projectOnchainId };
   }
 
   /**
@@ -1150,7 +1341,9 @@ export class ProjectsService {
     const preRepairProject = await this.projectsRepo.findById(projectId);
     const preRepairOnchainId = preRepairProject?.projectOnchainId?.trim() ?? '';
     const wasAlreadyProvisioned =
-      preRepairOnchainId.length > 0 && preRepairOnchainId !== '0';
+      /^(0|[1-9][0-9]*)$/.test(preRepairOnchainId) &&
+      preRepairProject?.onchainProvisioningStatus ===
+        OnchainProvisioningStatus.READY;
 
     try {
       const { projectOnchainId } =
@@ -1172,7 +1365,11 @@ export class ProjectsService {
       const errMsg = err instanceof Error ? err.message : String(err);
       await this.projectsRepo.updateById(projectId, {
         $set: {
-          onchainProvisioningStatus: OnchainProvisioningStatus.FAILED,
+          onchainProvisioningStatus:
+            preRepairProject?.onchainProvisioningStatus ===
+            OnchainProvisioningStatus.AWAITING_CREATOR
+              ? OnchainProvisioningStatus.AWAITING_CREATOR
+              : OnchainProvisioningStatus.FAILED,
           onchainProvisioningError: errMsg,
         },
       });
@@ -1209,7 +1406,9 @@ export class ProjectsService {
           { projectOnchainId: { $exists: false } },
           { projectOnchainId: null },
           { projectOnchainId: '' },
-          { projectOnchainId: '0' },
+          {
+            onchainProvisioningStatus: { $ne: OnchainProvisioningStatus.READY },
+          },
         ],
       },
       500,
@@ -1234,7 +1433,12 @@ export class ProjectsService {
 
       // Double-check: skip if the freshly-fetched record already has a valid ID
       const freshOnchainId = project.projectOnchainId?.trim() ?? '';
-      if (freshOnchainId && freshOnchainId !== '0') {
+      if (
+        /^(0|[1-9][0-9]*)$/.test(freshOnchainId) &&
+        project.onchainProvisioningStatus === OnchainProvisioningStatus.READY &&
+        project.provisioningTransactionHash &&
+        project.provisioningEscrow
+      ) {
         skipped++;
         results.push({
           projectId: pid,

@@ -48,3 +48,8 @@ FOR EACH ROW EXECUTE FUNCTION reject_financial_ledger_mutation();
 DROP TRIGGER IF EXISTS financial_postings_immutable ON financial_postings;
 CREATE TRIGGER financial_postings_immutable BEFORE UPDATE OR DELETE ON financial_postings
 FOR EACH ROW EXECUTE FUNCTION reject_financial_ledger_mutation();
+
+ALTER TABLE financial_payment_intents ALTER COLUMN currency TYPE varchar(16) USING trim(currency);
+ALTER TABLE financial_payment_intents ADD COLUMN IF NOT EXISTS agreement_snapshot jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE financial_postings ALTER COLUMN currency TYPE varchar(16) USING trim(currency);
+ALTER TABLE financial_campaign_releases ALTER COLUMN currency TYPE varchar(16) USING trim(currency);

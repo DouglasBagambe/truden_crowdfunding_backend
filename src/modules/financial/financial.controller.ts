@@ -10,7 +10,14 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { IsEthereumAddress, IsString, Matches } from 'class-validator';
+import {
+  IsArray,
+  IsOptional,
+  ArrayMaxSize,
+  IsEthereumAddress,
+  IsString,
+  Matches,
+} from 'class-validator';
 import { Public } from '../../common/decorators/public.decorator';
 import { CsrfExempt } from '../../common/decorators/csrf-exempt.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -23,9 +30,14 @@ import { FinancialPayoutWorker } from './financial-payout.worker';
 import { FinancialReceiptService } from './financial-receipt.service';
 
 class CreatePaymentIntentDto {
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  acceptedAgreements?: string[];
   @IsString() projectId!: string;
   @IsString() @Matches(/^\d+$/) amountMinor!: string;
-  @IsString() @Matches(/^[A-Za-z]{3}$/) currency!: string;
+  @IsString() @Matches(/^([A-Za-z]{3}|USDC)$/) currency!: string;
 }
 class ReconcileDto {
   @IsString() provider!: string;
@@ -77,6 +89,7 @@ export class FinancialController {
     return this.financial.createPaymentIntent({
       projectId: dto.projectId,
       contributorId,
+      acceptedAgreements: dto.acceptedAgreements,
       amountMinor: BigInt(dto.amountMinor),
       currency: dto.currency,
       idempotencyKey,

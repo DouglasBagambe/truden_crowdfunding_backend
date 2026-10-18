@@ -1107,7 +1107,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Withdraw from wallet.
-   * A 2% platform fee is charged on every withdrawal.
+   * A 5% platform fee is charged on every withdrawal.
    * The fee goes to the Keibo Treasury wallet (KEIBO_TREASURY_USER_ID env var).
    */
   async withdrawFromWallet(dto: WithdrawFromWalletDto, userId: string) {
@@ -1160,10 +1160,10 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('Invalid withdrawal method');
     }
 
-    // ── 2% Platform Fee ──────────────────────────────────────────
-    const PLATFORM_FEE_RATE = 0.02; // 2%
-    const platformFee = Math.ceil(dto.amount * PLATFORM_FEE_RATE);
-    const payoutAmount = dto.amount - platformFee; // Creator receives 98%
+    // ── 5% Platform Fee ──────────────────────────────────────────
+    const PLATFORM_FEE_RATE = 0.05; // KEIBO success/platform fee
+    const platformFee = Math.floor(dto.amount * PLATFORM_FEE_RATE);
+    const payoutAmount = dto.amount - platformFee; // Creator receives 95%
     // ─────────────────────────────────────────────────────────────
 
     // Create payout reference

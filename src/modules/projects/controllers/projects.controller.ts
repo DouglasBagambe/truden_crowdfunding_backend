@@ -1,3 +1,5 @@
+import { IsString, Matches } from 'class-validator';
+import type { Hash } from 'viem';
 import {
   Body,
   Controller,
@@ -24,6 +26,12 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { EmailVerifiedGuard } from '../../../common/guards/email-verified.guard';
 import { OptionalJwtAuthGuard } from '../../../common/guards/optional-jwt-auth.guard';
 type MulterFile = Express.Multer.File;
+
+class ConfirmCampaignDto {
+  @IsString()
+  @Matches(/^0x[0-9a-fA-F]{64}$/)
+  transactionHash!: Hash;
+}
 
 @ApiTags('Projects')
 @Controller('projects')
@@ -72,6 +80,40 @@ export class ProjectsController {
   }
 
   // ── Parameterized routes AFTER static ones ────────────────────────────────
+
+  @Post(':id/provisioning/prepare')
+  @UseGuards(EmailVerifiedGuard)
+  prepareCampaign(@Param('id') id: string, @CurrentUser('sub') userId: string) {
+    return this.projectsService.prepareCreatorCampaign(id, userId);
+  }
+
+  @Post(':id/provisioning/retry-reverted')
+  @UseGuards(EmailVerifiedGuard)
+  retryRevertedCampaign(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @Body() dto: ConfirmCampaignDto,
+  ) {
+    return this.projectsService.retryRevertedCreatorCampaign(
+      id,
+      userId,
+      dto.transactionHash,
+    );
+  }
+
+  @Post(':id/provisioning/confirm')
+  @UseGuards(EmailVerifiedGuard)
+  confirmCampaign(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @Body() dto: ConfirmCampaignDto,
+  ) {
+    return this.projectsService.confirmCreatorCampaign(
+      id,
+      userId,
+      dto.transactionHash,
+    );
+  }
 
   @Put(':id')
   updateProject(

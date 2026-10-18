@@ -5,7 +5,6 @@ import { CommonModule } from '../../common/common.module';
 import { InvestmentsController } from './controllers/investments.controller';
 import { InvestmentsService } from './services/investments.service';
 import { InvestmentNFTService } from './services/investment-nft.service';
-import { PaymentInvestmentListener } from './listeners/payment-investment.listener';
 import { KeiboInvestmentReceiptService } from './services/keibo-investment-receipt.service';
 import { Investment, InvestmentSchema } from './schemas/investment.schema';
 import { AuthModule } from '../auth/auth.module';
@@ -37,7 +36,8 @@ import {
   providers: [
     InvestmentsService,
     InvestmentNFTService,
-    PaymentInvestmentListener,
+    // Legacy payment.successful listener is intentionally unregistered.
+    // FinancialService owns settlement and non-transferable receipt issuance.
     KeiboInvestmentReceiptService,
     RolesGuard,
   ],

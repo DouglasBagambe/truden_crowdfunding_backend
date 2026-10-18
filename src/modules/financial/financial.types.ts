@@ -17,6 +17,7 @@ export interface LedgerLine {
 }
 
 export interface PaymentIntentInput {
+  acceptedAgreements?: string[];
   projectId: string;
   contributorId: string;
   amountMinor: bigint;

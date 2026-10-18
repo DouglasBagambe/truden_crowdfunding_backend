@@ -228,7 +228,7 @@ export class UsersService {
 
     try {
       await this.walletOwnershipModel.updateOne(
-        { address: wallet },
+        { address: wallet, userId: new Types.ObjectId(userId) },
         {
           $setOnInsert: { address: wallet, userId: new Types.ObjectId(userId) },
         },

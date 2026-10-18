@@ -64,7 +64,7 @@ function asNonNegativeMinor(value: string | number | bigint): bigint {
 
 function assertCurrency(currency: string): string {
   const normalized = currency.trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(normalized))
+  if (!/^([A-Z]{3}|USDC)$/.test(normalized))
     throw new BadRequestException('Invalid currency');
   return normalized;
 }
@@ -87,7 +87,23 @@ export class FinancialService {
   async createPaymentIntent(input: PaymentIntentInput) {
     const currency = assertCurrency(input.currency);
     const amountMinor = asMinor(input.amountMinor);
-    await this.projectsService.ensureProjectCanReceiveDonation(input.projectId);
+    let agreementSnapshot: unknown[] = [];
+    if (currency === 'USDC') {
+      const eligibility = await this.projectsService.requireInvestorForCampaign(
+        input.projectId,
+        input.contributorId,
+        input.acceptedAgreements,
+      );
+      if (eligibility.project.currency.toUpperCase() !== currency)
+        throw new BadRequestException(
+          'Intent currency must match the campaign',
+        );
+      agreementSnapshot = eligibility.agreementSnapshot;
+    } else {
+      await this.projectsService.ensureProjectCanReceiveDonation(
+        input.projectId,
+      );
+    }
     if (!input.idempotencyKey || input.idempotencyKey.length > 200) {
       throw new BadRequestException('A valid Idempotency-Key is required');
     }
@@ -99,8 +115,9 @@ export class FinancialService {
         contributor_id: string;
         amount_minor: string;
         currency: string;
+        agreement_snapshot?: unknown[];
       }>(
-        `SELECT id, state, project_id, contributor_id, amount_minor, currency
+        `SELECT id, state, project_id, contributor_id, amount_minor, currency, agreement_snapshot
          FROM financial_payment_intents WHERE idempotency_key = $1 FOR UPDATE`,
         [input.idempotencyKey],
       );
@@ -110,7 +127,9 @@ export class FinancialService {
           prior.project_id !== input.projectId ||
           prior.contributor_id !== input.contributorId ||
           prior.amount_minor !== amountMinor.toString() ||
-          prior.currency !== currency
+          prior.currency !== currency ||
+          JSON.stringify(prior.agreement_snapshot || []) !==
+            JSON.stringify(agreementSnapshot)
         ) {
           throw new ConflictException(
             'Idempotency-Key was already used for a different payment intent',
@@ -119,8 +138,8 @@ export class FinancialService {
         return { id: prior.id, state: prior.state, replayed: true };
       }
       const result = await client.query<{ id: string; state: string }>(
-        `INSERT INTO financial_payment_intents (project_id, contributor_id, amount_minor, currency, state, idempotency_key, correlation_id)
-         VALUES ($1, $2, $3, $4, 'pending', $5, $6) RETURNING id, state`,
+        `INSERT INTO financial_payment_intents (project_id, contributor_id, amount_minor, currency, state, idempotency_key, correlation_id, agreement_snapshot)
+         VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7::jsonb) RETURNING id, state`,
         [
           input.projectId,
           input.contributorId,
@@ -128,6 +147,7 @@ export class FinancialService {
           currency,
           input.idempotencyKey,
           input.correlationId,
+          JSON.stringify(agreementSnapshot),
         ],
       );
       await this.enqueue(
@@ -1008,7 +1028,7 @@ export class FinancialService {
   }
 
   private currencyFromAccount(account: string): string {
-    const match = account.match(/:([A-Z]{3})$/);
+    const match = account.match(/:([A-Z]{3}|USDC)$/);
     if (!match)
       throw new BadRequestException(
         'Ledger account must end with a currency code',

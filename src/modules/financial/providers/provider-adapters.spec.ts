@@ -50,3 +50,17 @@ describe('financial provider adapters', () => {
     });
   });
 });
+
+describe('DPO missing configuration', () => {
+  it('fails closed before accepting provider evidence', () => {
+    const adapter = new DpoFinancialAdapter(config({}));
+    expect(adapter.isConfigured()).toBe(false);
+    expect(() =>
+      adapter.fromVerifiedToken({
+        token: 'fixture',
+        paymentIntentId: 'fixture',
+        evidence: { status: '000', amount: '100', currency: 'UGX' } as never,
+      }),
+    ).toThrow('disabled');
+  });
+});

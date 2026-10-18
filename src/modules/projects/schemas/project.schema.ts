@@ -8,6 +8,7 @@ import { ROIIndustry } from '../../../common/enums/roi-industry.enum';
 
 /** Lifecycle state of the on-chain provisioning for ROI projects. */
 export enum OnchainProvisioningStatus {
+  AWAITING_CREATOR = 'AWAITING_CREATOR',
   NOT_STARTED = 'NOT_STARTED',
   PENDING = 'PENDING',
   READY = 'READY',
@@ -143,6 +144,21 @@ export class Project {
   @Prop({ type: Date })
   onchainProvisionedAt?: Date;
 
+  @Prop({ type: Number })
+  provisioningNonce?: number;
+
+  @Prop({ type: String })
+  provisioningCreator?: string;
+
+  @Prop({ type: String })
+  provisioningCalldata?: string;
+
+  @Prop({ type: String })
+  provisioningTransactionHash?: string;
+
+  @Prop({ type: String })
+  provisioningEscrow?: string;
+
   @Prop({ type: Boolean, default: true })
   requiresAgreement!: boolean;
 
@@ -179,6 +195,8 @@ export class Project {
         title: { type: String, required: true, trim: true },
         description: { type: String, trim: true },
         requiresAcceptance: { type: Boolean, default: true },
+        templateId: { type: String, trim: true },
+        templateVersion: { type: Number },
       },
     ],
     default: [],
@@ -187,6 +205,8 @@ export class Project {
     title: string;
     description?: string;
     requiresAcceptance: boolean;
+    templateId?: string;
+    templateVersion?: number;
   }>;
 
   @Prop({
@@ -213,6 +233,8 @@ export class Project {
         title: { type: String, required: true, trim: true },
         description: { type: String, trim: true },
         requiresAcceptance: { type: Boolean, default: true },
+        templateId: { type: String, trim: true },
+        templateVersion: { type: Number },
       },
     ],
     default: [],
@@ -221,6 +243,8 @@ export class Project {
     title: string;
     description?: string;
     requiresAcceptance: boolean;
+    templateId?: string;
+    templateVersion?: number;
   }>;
 
   @Prop({
@@ -229,6 +253,8 @@ export class Project {
         title: { type: String, required: true, trim: true },
         description: { type: String, trim: true },
         requiresAcceptance: { type: Boolean, default: true },
+        templateId: { type: String, trim: true },
+        templateVersion: { type: Number },
       },
     ],
     default: [],
@@ -237,6 +263,8 @@ export class Project {
     title: string;
     description?: string;
     requiresAcceptance: boolean;
+    templateId?: string;
+    templateVersion?: number;
   }>;
 
   @Prop({ type: [String], default: [] })
@@ -393,3 +421,34 @@ ProjectSchema.pre('validate', function (next) {
 
   return next();
 });
+
+ProjectSchema.index(
+  { provisioningTransactionHash: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      provisioningTransactionHash: { $type: 'string' },
+    },
+  },
+);
+ProjectSchema.index(
+  { provisioningEscrow: 1, projectOnchainId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      provisioningEscrow: { $type: 'string' },
+      projectOnchainId: { $type: 'string' },
+    },
+  },
+);
+
+ProjectSchema.index(
+  { provisioningCreator: 1, provisioningEscrow: 1, provisioningNonce: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      provisioningCreator: { $type: 'string' },
+      provisioningNonce: { $type: 'number' },
+    },
+  },
+);

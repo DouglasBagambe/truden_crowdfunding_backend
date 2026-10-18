@@ -440,7 +440,7 @@ export class AuthService {
     const domain = this.getRequiredSiweDomain();
     const uri = this.getRequiredSiweUri();
     const allowedChainIds = this.getAllowedSiweChainIds();
-    const nonce = crypto.randomBytes(24).toString('base64url');
+    const nonce = crypto.randomBytes(24).toString('hex');
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
     await this.walletChallengeModel.create({

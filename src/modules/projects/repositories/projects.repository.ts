@@ -12,6 +12,106 @@ export class ProjectsRepository {
     private readonly projectModel: Model<ProjectDocument>,
   ) {}
 
+  resetRevertedProvisioning(id: string, nonce: number) {
+    return this.projectModel
+      .findOneAndUpdate(
+        {
+          _id: id,
+          status: ProjectStatus.APPROVED,
+          onchainProvisioningStatus: 'AWAITING_CREATOR',
+          provisioningNonce: nonce,
+        },
+        {
+          $unset: {
+            provisioningNonce: 1,
+            provisioningCreator: 1,
+            provisioningEscrow: 1,
+            provisioningCalldata: 1,
+            provisioningTransactionHash: 1,
+          },
+          $set: {
+            onchainProvisioningError:
+              'Prior creator transaction reverted. A new signing plan may now be prepared.',
+          },
+        },
+        { new: true },
+      )
+      .exec();
+  }
+
+  reserveProvisioningPlan(
+    id: string,
+    plan: { nonce: number; account: string; to: string; data: string },
+  ) {
+    return this.projectModel
+      .findOneAndUpdate(
+        {
+          _id: id,
+          status: ProjectStatus.APPROVED,
+          onchainProvisioningStatus: 'AWAITING_CREATOR',
+          provisioningNonce: { $exists: false },
+        },
+        {
+          $set: {
+            provisioningNonce: plan.nonce,
+            provisioningCreator: plan.account.toLowerCase(),
+            provisioningEscrow: plan.to.toLowerCase(),
+            provisioningCalldata: plan.data.toLowerCase(),
+          },
+        },
+        { new: true },
+      )
+      .exec();
+  }
+
+  reserveProvisioningTransaction(id: string, hash: string) {
+    return this.projectModel
+      .findOneAndUpdate(
+        {
+          _id: id,
+          status: ProjectStatus.APPROVED,
+          onchainProvisioningStatus: 'AWAITING_CREATOR',
+          $or: [
+            { provisioningTransactionHash: { $exists: false } },
+            { provisioningTransactionHash: hash.toLowerCase() },
+          ],
+        },
+        { $set: { provisioningTransactionHash: hash.toLowerCase() } },
+        { new: true },
+      )
+      .exec();
+  }
+
+  confirmProvisioning(
+    id: string,
+    hash: string,
+    campaignId: string,
+    escrow: string,
+  ) {
+    return this.projectModel
+      .findOneAndUpdate(
+        {
+          _id: id,
+          status: ProjectStatus.APPROVED,
+          onchainProvisioningStatus: 'AWAITING_CREATOR',
+          provisioningTransactionHash: hash.toLowerCase(),
+        },
+        {
+          $set: {
+            status: ProjectStatus.FUNDING,
+            projectOnchainId: campaignId,
+            provisioningTransactionHash: hash.toLowerCase(),
+            provisioningEscrow: escrow.toLowerCase(),
+            onchainProvisioningStatus: 'READY',
+            onchainProvisionedAt: new Date(),
+          },
+          $unset: { onchainProvisioningError: 1 },
+        },
+        { new: true },
+      )
+      .exec();
+  }
+
   create(payload: Partial<Project>): Promise<ProjectDocument> {
     const discriminatorType = payload.projectType;
     const discriminatorModel =

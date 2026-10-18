@@ -45,7 +45,7 @@ import {
   AgreementTemplateSchema,
 } from './schemas/agreement-template.schema';
 import { CharityDonationsRepository } from './repositories/charity-donations.repository';
-import { ViemNftClient } from '../nfts/helpers/viem-nft-client';
+import { EscrowWeb3Service } from '../escrow/escrow.web3';
 
 import {
   Investment,
@@ -98,7 +98,7 @@ import {
     AttachmentRequirementsRepository,
     AttachmentRequirementsService,
     AttachmentFilesRepository,
-    ViemNftClient,
+    EscrowWeb3Service,
   ],
   exports: [
     MongooseModule,

@@ -21,14 +21,22 @@ export class SavedProjectsService {
       projectId: new Types.ObjectId(projectId),
     };
   }
+  private async requireVisible(userId: string, projectId: string) {
+    try {
+      await this.projects.getProjectPublic(projectId, userId);
+    } catch (error) {
+      if (!(error instanceof NotFoundException)) throw error;
+      await this.projects.getProjectOwnerView(projectId, userId);
+    }
+  }
   async get(userId: string, projectId: string) {
-    await this.projects.getProjectPublic(projectId, userId);
+    await this.requireVisible(userId, projectId);
     return {
       saved: Boolean(await this.saved.exists(this.key(userId, projectId))),
     };
   }
   async set(userId: string, projectId: string, saved: boolean) {
-    await this.projects.getProjectPublic(projectId, userId);
+    await this.requireVisible(userId, projectId);
     const key = this.key(userId, projectId);
     if (saved)
       await this.saved.updateOne(key, { $setOnInsert: key }, { upsert: true });
