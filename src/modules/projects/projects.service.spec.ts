@@ -520,331 +520,279 @@ describe('ProjectsService — existing CRUD', () => {
 // Suite: ROI approval provisioning
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('ProjectsService — ROI approval provisioning', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('ROI approval success: provisions on-chain then sets status=FUNDING', async () => {
-    const { service, projectsRepo, usersRepo, viemNftClient, notifications } =
-      createService();
-
-    const project = roiProjectStub();
-    projectsRepo.findById.mockResolvedValue(project);
-    usersRepo.findById.mockResolvedValue(creatorWithWallet());
-    viemNftClient.createProjectNFT.mockResolvedValue({
-      hash: '0xhash',
-      receipt: {},
-    });
-    projectsRepo.updateById.mockResolvedValue({
-      ...project,
-      status: ProjectStatus.FUNDING,
-    });
-
-    await service.decide(mockProjectId, {
-      finalStatus: ProjectStatus.APPROVED,
-    } as unknown as ProjectDecisionDto);
-
-    // Verifies PENDING was written before provisioning attempt
-    expect(
-      getProjectUpdateCalls(projectsRepo.updateById.mock.calls).some(
-        ([id, update]) =>
-          id === mockProjectId &&
-          update.$set?.onchainProvisioningStatus ===
-            OnchainProvisioningStatus.PENDING,
-      ),
-    ).toBe(true);
-    expect(notifications.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        recipientId: mockCreatorId,
-        category: 'campaign',
-        title: 'Campaign approved',
-      }),
-    );
-
-    // Verifies createProjectNFT was called
-    expect(viemNftClient.createProjectNFT).toHaveBeenCalledWith(
-      expect.objectContaining({ creator: creatorWithWallet().primaryWallet }),
-    );
-
-    // Final status write must include FUNDING
-    const updates = getProjectUpdateCalls(projectsRepo.updateById.mock.calls);
-    expect(updates.at(-1)?.[1].$set?.status).toBe(ProjectStatus.FUNDING);
-  });
-
-  it('ROI approval failure: persists FAILED state, does NOT set FUNDING, re-throws', async () => {
-    const { service, projectsRepo, usersRepo, viemNftClient } = createService();
-
-    projectsRepo.findById.mockResolvedValue(roiProjectStub());
-    usersRepo.findById.mockResolvedValue(creatorWithWallet());
-    viemNftClient.createProjectNFT.mockRejectedValue(new Error('RPC timeout'));
-    projectsRepo.updateById.mockResolvedValue({});
-
-    await expect(
-      service.decide(mockProjectId, {
-        finalStatus: ProjectStatus.APPROVED,
-      } as unknown as ProjectDecisionDto),
-    ).rejects.toThrow(
-      'Approval blocked: on-chain provisioning failed: RPC timeout Project status is unchanged. Resolve the provisioning error, then retry Approve.',
-    );
-
-    // FAILED state must have been written
-    expect(
-      getProjectUpdateCalls(projectsRepo.updateById.mock.calls).some(
-        ([id, update]) =>
-          id === mockProjectId &&
-          update.$set?.onchainProvisioningStatus ===
-            OnchainProvisioningStatus.FAILED &&
-          update.$set.onchainProvisioningError?.includes('RPC timeout'),
-      ),
-    ).toBe(true);
-
-    // FUNDING must NOT have been set
-    for (const [, update] of getProjectUpdateCalls(
-      projectsRepo.updateById.mock.calls,
-    )) {
-      expect(update.$set?.status).not.toBe(ProjectStatus.FUNDING);
-    }
-  });
-
-  it('charity approval is unaffected by provisioning logic', async () => {
-    const { service, projectsRepo, usersRepo, viemNftClient } = createService();
-
-    projectsRepo.findById.mockResolvedValue({
-      _id: mockProjectId,
-      projectType: ProjectType.CHARITY,
-      status: ProjectStatus.PENDING_REVIEW,
-      creatorId: mockCreatorId,
-      attachments: [],
-      toObject: jest.fn().mockReturnThis(),
-    });
-    usersRepo.findById.mockResolvedValue({ email: 'a@b.com' });
-    projectsRepo.updateById.mockResolvedValue({});
-
-    await service.decide(mockProjectId, {
-      finalStatus: ProjectStatus.APPROVED,
-    } as unknown as ProjectDecisionDto);
-
-    // createProjectNFT must NOT be called for charity
-    expect(viemNftClient.createProjectNFT).not.toHaveBeenCalled();
-    expect(
-      getProjectUpdateCalls(projectsRepo.updateById.mock.calls).some(
-        ([id, update]) =>
-          id === mockProjectId &&
-          update.$set?.status === ProjectStatus.APPROVED,
-      ),
-    ).toBe(true);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Suite: ensureProjectProvisionedOnChain (idempotency)
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('ProjectsService — ensureProjectProvisionedOnChain', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('returns existing id without calling contract when already provisioned', async () => {
-    const { service, projectsRepo, viemNftClient } = createService();
-
-    projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({
-        projectOnchainId: '123456789',
-        onchainProvisioningStatus: OnchainProvisioningStatus.READY,
-      }),
-    );
-    projectsRepo.updateById.mockResolvedValue({});
-
-    const result = await service.ensureProjectProvisionedOnChain(mockProjectId);
-
-    expect(result.projectOnchainId).toBe('123456789');
-    expect(viemNftClient.createProjectNFT).not.toHaveBeenCalled();
-  });
-
-  it('throws BadRequest when creator has no wallet', async () => {
-    const { service, projectsRepo, usersRepo } = createService();
-
-    projectsRepo.findById.mockResolvedValue(roiProjectStub());
-    usersRepo.findById.mockResolvedValue({
-      ...creatorWithWallet(),
-      primaryWallet: undefined,
-      linkedWallets: [],
-    });
-
-    await expect(
-      service.ensureProjectProvisionedOnChain(mockProjectId),
-    ).rejects.toBeInstanceOf(BadRequestException);
-  });
-
-  it('throws BadRequest when project is not ROI', async () => {
-    const { service, projectsRepo } = createService();
-
-    projectsRepo.findById.mockResolvedValue({
-      _id: mockProjectId,
-      projectType: ProjectType.CHARITY,
-      status: ProjectStatus.FUNDING,
-    });
-
-    await expect(
-      service.ensureProjectProvisionedOnChain(mockProjectId),
-    ).rejects.toBeInstanceOf(BadRequestException);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Suite: checkout provisioning gate
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('ProjectsService — ROI checkout provisioning gate', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('strict mode (default): rejects ROI checkout when projectOnchainId is missing', async () => {
-    const { service, projectsRepo, configService } = createService();
-
-    projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({
-        status: ProjectStatus.FUNDING,
-        projectOnchainId: undefined,
-      }),
-    );
-    configService.get.mockImplementation((key: string) => {
-      if (key === 'ROI_REQUIRE_ONCHAIN_PROVISIONING') return 'true';
-      return undefined;
-    });
-
-    await expect(
-      service.ensureProjectIsOpenForInvestment(mockProjectId),
-    ).rejects.toThrow(/not yet been provisioned/);
-  });
-
-  it('strict mode: gives precise FAILED error when provisioning previously failed', async () => {
-    const { service, projectsRepo, configService } = createService();
-
-    projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({
-        status: ProjectStatus.APPROVED,
-        projectOnchainId: undefined,
-        onchainProvisioningStatus: OnchainProvisioningStatus.FAILED,
-        onchainProvisioningError: 'Gas estimating failed',
-      }),
-    );
-    configService.get.mockImplementation((key: string) => {
-      if (key === 'ROI_REQUIRE_ONCHAIN_PROVISIONING') return 'true';
-      return undefined;
-    });
-
-    await expect(
-      service.ensureProjectIsOpenForInvestment(mockProjectId),
-    ).rejects.toThrow(/provisioning previously failed/);
-  });
-
-  it('bypass mode: allows ROI checkout without projectOnchainId', async () => {
-    const { service, projectsRepo, configService } = createService();
-
-    projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({
-        status: ProjectStatus.FUNDING,
-        projectOnchainId: undefined,
-      }),
-    );
-    configService.get.mockImplementation((key: string) => {
-      if (key === 'ROI_REQUIRE_ONCHAIN_PROVISIONING') return 'false';
-      return undefined;
-    });
-
-    const result =
-      await service.ensureProjectIsOpenForInvestment(mockProjectId);
-    expect(result).toBeDefined();
-  });
-
-  it('strict mode: allows checkout when projectOnchainId is valid', async () => {
-    const { service, projectsRepo, configService } = createService();
-
-    projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({
-        status: ProjectStatus.FUNDING,
-        projectOnchainId: '987654321',
-      }),
-    );
-    configService.get.mockImplementation((key: string) => {
-      if (key === 'ROI_REQUIRE_ONCHAIN_PROVISIONING') return 'true';
-      return undefined;
-    });
-
-    const result =
-      await service.ensureProjectIsOpenForInvestment(mockProjectId);
-    expect(result).toBeDefined();
-  });
-
-  it('legacy APPROVED ROI projects without onchainId are blocked in strict mode', async () => {
-    const { service, projectsRepo, configService } = createService();
-
-    projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({
-        status: ProjectStatus.APPROVED,
-        projectOnchainId: undefined,
-      }),
-    );
-    configService.get.mockImplementation((key: string) => {
-      if (key === 'ROI_REQUIRE_ONCHAIN_PROVISIONING') return 'true';
-      return undefined;
-    });
-
-    await expect(
-      service.ensureProjectIsOpenForInvestment(mockProjectId),
-    ).rejects.toBeInstanceOf(BadRequestException);
-  });
-
-  it('legacy APPROVED ROI projects are allowed in bypass mode', async () => {
-    const { service, projectsRepo, configService } = createService();
-
-    projectsRepo.findById.mockResolvedValue(
-      roiProjectStub({
-        status: ProjectStatus.APPROVED,
-        projectOnchainId: undefined,
-      }),
-    );
-    configService.get.mockImplementation((key: string) => {
-      if (key === 'ROI_REQUIRE_ONCHAIN_PROVISIONING') return 'false';
-      return undefined;
-    });
-
-    const result =
-      await service.ensureProjectIsOpenForInvestment(mockProjectId);
-    expect(result).toBeDefined();
-  });
-});
-
-describe('ProjectsService — contribution eligibility', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('denies pending-review charity projects before contributions are accepted', async () => {
-    const { service, projectsRepo } = createService();
-    projectsRepo.findById.mockResolvedValue({
-      projectType: ProjectType.CHARITY,
-      status: ProjectStatus.PENDING_REVIEW,
-    });
-
-    await expect(
-      service.ensureProjectCanReceiveDonation(mockProjectId),
-    ).rejects.toThrow('not approved to receive contributions');
-  });
-
-  it('allows approved charity projects to receive contributions', async () => {
-    const { service, projectsRepo } = createService();
-    const project = {
-      projectType: ProjectType.CHARITY,
+describe('Creator-signed KEIBO provisioning', () => {
+  function fixture() {
+    const context = createService();
+    const project = roiProjectStub({
+      currency: 'USDC',
+      provisioningNonce: 7,
+      provisioningCreator: creatorWithWallet().primaryWallet,
+      provisioningEscrow: '0x0000000000000000000000000000000000000001',
+      provisioningCalldata: '0x1234',
+      fundingEndDate: new Date(Date.now() + 86400000),
       status: ProjectStatus.APPROVED,
-    };
-    projectsRepo.findById.mockResolvedValue(project);
-
+      onchainProvisioningStatus: OnchainProvisioningStatus.AWAITING_CREATOR,
+    });
+    context.projectsRepo.findById.mockResolvedValue(project);
+    context.usersRepo.findById.mockResolvedValue(creatorWithWallet());
+    context.configService.get.mockImplementation((key: string) =>
+      key === 'ROI_ALLOWED_USER_IDS'
+        ? mockCreatorId
+        : key === 'USDC_TOKEN_ADDRESS'
+          ? '0x0000000000000000000000000000000000000002'
+          : undefined,
+    );
+    context.milestonesRepo.findByProject.mockResolvedValue([
+      { payoutPercentage: 100 },
+    ]);
+    context.projectsRepo.updateById.mockResolvedValue(project);
+    return { ...context, project };
+  }
+  it('approval waits for the creator; no legacy NFT call or funding-success notification', async () => {
+    const c = fixture();
+    await c.service.decide(mockProjectId, {
+      finalStatus: ProjectStatus.APPROVED,
+    });
+    expect(c.viemNftClient.createProjectNFT).not.toHaveBeenCalled();
+    expect(c.viemNftClient.prepareCampaign).not.toHaveBeenCalled();
+    const updates = c.projectsRepo.updateById.mock.calls as unknown as [
+      string,
+      { $set: Record<string, unknown> },
+    ][];
+    expect(
+      updates.some(
+        ([id, update]) =>
+          id === mockProjectId &&
+          update.$set.status === ProjectStatus.APPROVED &&
+          update.$set.onchainProvisioningStatus ===
+            OnchainProvisioningStatus.AWAITING_CREATOR,
+      ),
+    ).toBe(true);
+    expect(c.notifications.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Campaign approved' }),
+    );
+  });
+  it('prepares creator-owned calldata with USDC units and exact milestones', async () => {
+    const c = fixture();
+    await c.service.prepareCreatorCampaign(mockProjectId, mockCreatorId);
+    expect(c.viemNftClient.prepareCampaign).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cap: 1000000000000n,
+        milestoneAmounts: [1000000000000n],
+        creator: creatorWithWallet().primaryWallet,
+      }),
+    );
+    expect(c.viemNftClient.createProjectNFT).not.toHaveBeenCalled();
+  });
+  it('rejects a non-owner before preparing any chain operation', async () => {
+    const c = fixture();
     await expect(
-      service.ensureProjectCanReceiveDonation(mockProjectId),
-    ).resolves.toBe(project);
+      c.service.prepareCreatorCampaign(
+        mockProjectId,
+        '507f1f77bcf86cd799439013',
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(c.viemNftClient.prepareCampaign).not.toHaveBeenCalled();
+  });
+  it('never converts a fiat target into USDC without an authoritative conversion', async () => {
+    const c = fixture();
+    c.project.currency = 'UGX';
+    await expect(
+      c.service.prepareCreatorCampaign(mockProjectId, mockCreatorId),
+    ).rejects.toThrow('USDC-denominated');
+  });
+  it('confirms campaign zero and notifies only after atomic FUNDING transition; retry is idempotent', async () => {
+    const c = fixture();
+    const email = jest
+      .spyOn(
+        c.service as unknown as ProjectEmailSender,
+        'sendProjectDecisionEmail',
+      )
+      .mockResolvedValue(undefined);
+    const hash = `0x${'a'.repeat(64)}` as const;
+    const funded = {
+      ...c.project,
+      status: ProjectStatus.FUNDING,
+      projectOnchainId: '0',
+      provisioningTransactionHash: hash,
+      provisioningEscrow: '0x0000000000000000000000000000000000000001',
+      onchainProvisioningStatus: OnchainProvisioningStatus.READY,
+    };
+    c.projectsRepo.confirmProvisioning.mockResolvedValue(funded);
+    expect(
+      await c.service.confirmCreatorCampaign(
+        mockProjectId,
+        mockCreatorId,
+        hash,
+      ),
+    ).toBe(funded);
+    expect(c.notifications.create).toHaveBeenCalledTimes(1);
+    expect(email).toHaveBeenCalledTimes(1);
+    expect(c.notifications.create).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Campaign approved' }),
+    );
+    c.projectsRepo.findById.mockResolvedValue(funded);
+    await c.service.confirmCreatorCampaign(mockProjectId, mockCreatorId, hash);
+    expect(c.viemNftClient.verifyCampaignCreation).toHaveBeenCalledTimes(1);
+    expect(c.notifications.create).toHaveBeenCalledTimes(1);
+    expect(email).toHaveBeenCalledTimes(1);
+    expect(email).toHaveBeenCalledWith(
+      creatorWithWallet().email,
+      expect.any(String),
+      c.project.name,
+      ProjectStatus.FUNDING,
+      ProjectType.ROI,
+    );
+    expect(c.viemNftClient.createProjectNFT).not.toHaveBeenCalled();
+  });
+  it('failed confirmation preserves diagnostics and cannot notify success', async () => {
+    const c = fixture();
+    c.viemNftClient.verifyCampaignCreation.mockRejectedValue(
+      new Error('invalid chain receipt'),
+    );
+    await expect(
+      c.service.confirmCreatorCampaign(
+        mockProjectId,
+        mockCreatorId,
+        `0x${'a'.repeat(64)}`,
+      ),
+    ).rejects.toThrow('invalid chain receipt');
+    expect(c.projectsRepo.confirmProvisioning).not.toHaveBeenCalled();
+    expect(c.notifications.create).not.toHaveBeenCalled();
+    expect(c.projectsRepo.updateById).toHaveBeenCalledWith(mockProjectId, {
+      $set: { onchainProvisioningError: 'invalid chain receipt' },
+    });
+  });
+  it.each([
+    ProjectStatus.PENDING_REVIEW,
+    ProjectStatus.APPROVED,
+    ProjectStatus.FUNDED,
+    ProjectStatus.CLOSED,
+    ProjectStatus.FUNDING_FAILED,
+  ])('rejects investment in %s even with an on-chain ID', async (status) => {
+    const c = fixture();
+    c.project.status = status;
+    await expect(
+      c.service.ensureProjectIsOpenForInvestment(mockProjectId),
+    ).rejects.toThrow('not accepting investments');
+  });
+  it('FUNDING requires READY evidence; chain campaign zero is valid', async () => {
+    const c = fixture();
+    Object.assign(c.project, {
+      status: ProjectStatus.FUNDING,
+      projectOnchainId: '0',
+      provisioningTransactionHash: '0xhash',
+      provisioningEscrow: '0xescrow',
+      onchainProvisioningStatus: OnchainProvisioningStatus.READY,
+    });
+    await expect(
+      c.service.ensureProjectIsOpenForInvestment(mockProjectId),
+    ).resolves.toBe(c.project);
+    c.project.onchainProvisioningStatus = OnchainProvisioningStatus.FAILED;
+    await expect(
+      c.service.ensureProjectIsOpenForInvestment(mockProjectId),
+    ).rejects.toThrow('confirmed KEIBO');
+  });
+  it('requires verified investor KYC and acceptance of current project terms', async () => {
+    const c = fixture();
+    Object.assign(c.project, {
+      status: ProjectStatus.FUNDING,
+      projectOnchainId: '0',
+      provisioningTransactionHash: '0xhash',
+      provisioningEscrow: '0xescrow',
+      onchainProvisioningStatus: OnchainProvisioningStatus.READY,
+      roiAgreements: [{ title: 'Risk terms', requiresAcceptance: true }],
+    });
+    await expect(
+      c.service.requireInvestorForCampaign(mockProjectId, mockCreatorId),
+    ).rejects.toThrow('Accept the current');
+    await expect(
+      c.service.requireInvestorForCampaign(mockProjectId, mockCreatorId, [
+        'campaign:0:Risk terms',
+      ]),
+    ).resolves.toMatchObject({
+      agreementSnapshot: [
+        { title: 'Risk terms', acceptanceKey: 'campaign:0:Risk terms' },
+      ],
+    });
+    c.usersRepo.findById.mockResolvedValue({
+      ...creatorWithWallet(),
+      kyc: { status: KYCStatus.PENDING },
+    });
+    await expect(
+      c.service.requireInvestorForCampaign(mockProjectId, mockCreatorId, [
+        'campaign:0:Risk terms',
+      ]),
+    ).rejects.toThrow('Verified KYC');
+  });
+
+  it('reuses the reserved nonce after refresh and asks for the original hash once mined', async () => {
+    const c = fixture();
+    c.viemNftClient.creatorNonce.mockResolvedValue(8);
+    const prepared = await c.service.prepareCreatorCampaign(
+      mockProjectId,
+      mockCreatorId,
+    );
+    expect(prepared).toMatchObject({ nonce: 7, requiresTransactionHash: true });
+    expect(c.projectsRepo.reserveProvisioningPlan).not.toHaveBeenCalled();
+  });
+  it('only releases a reserved nonce after verified revert evidence', async () => {
+    const c = fixture();
+    const hash = `0x${'a'.repeat(64)}` as const;
+    await expect(
+      c.service.retryRevertedCreatorCampaign(
+        mockProjectId,
+        mockCreatorId,
+        hash,
+      ),
+    ).resolves.toEqual({ retryAllowed: true });
+    expect(c.projectsRepo.resetRevertedProvisioning).toHaveBeenCalledWith(
+      mockProjectId,
+      7,
+    );
+    c.projectsRepo.resetRevertedProvisioning.mockClear();
+    c.viemNftClient.verifyRevertedCreation.mockRejectedValue(
+      new Error('not reverted'),
+    );
+    await expect(
+      c.service.retryRevertedCreatorCampaign(
+        mockProjectId,
+        mockCreatorId,
+        hash,
+      ),
+    ).rejects.toThrow('not reverted');
+    expect(c.projectsRepo.resetRevertedProvisioning).not.toHaveBeenCalled();
+  });
+
+  it.each([ProjectStatus.REJECTED, ProjectStatus.CHANGES_REQUESTED])(
+    'keeps %s notifications and never invokes legacy provisioning',
+    async (finalStatus) => {
+      const c = fixture();
+      await c.service.decide(mockProjectId, {
+        finalStatus,
+        reason: 'Fixture review reason',
+      });
+      expect(c.notifications.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title:
+            finalStatus === ProjectStatus.REJECTED
+              ? 'Campaign not approved'
+              : 'Campaign requires changes',
+        }),
+      );
+      expect(c.viemNftClient.createProjectNFT).not.toHaveBeenCalled();
+      expect(c.viemNftClient.prepareCampaign).not.toHaveBeenCalled();
+    },
+  );
+
+  it('repair never creates a legacy NFT or invents creator signing authority', async () => {
+    const c = fixture();
+    expect(
+      (await c.service.repairRoiProjectProvisioning(mockProjectId)).result,
+    ).toBe('FAILED');
+    expect(c.viemNftClient.createProjectNFT).not.toHaveBeenCalled();
   });
 });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Suite: repairRoiProjectProvisioning (single repair)
-// ─────────────────────────────────────────────────────────────────────────────
 
 describe('Public project query regressions', () => {
   it.each(['Test', 'Tes', 'tes', 'no-result', '.*'])(

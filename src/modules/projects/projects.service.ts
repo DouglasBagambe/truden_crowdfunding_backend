@@ -705,42 +705,31 @@ export class ProjectsService {
     }
 
     let finalStatus = dto.finalStatus;
+    if (
+      project.status === ProjectStatus.FUNDING &&
+      dto.finalStatus === ProjectStatus.APPROVED
+    )
+      return project;
     const extraSet: Record<string, unknown> = {};
 
     if (
       dto.finalStatus === ProjectStatus.APPROVED &&
       this.readProjectType(project) === ProjectType.ROI
     ) {
-      // Mark provisioning as PENDING immediately so admin can see it in-flight
-      await this.projectsRepo.updateById(projectId, {
-        $set: { onchainProvisioningStatus: OnchainProvisioningStatus.PENDING },
-      });
-
-      try {
-        const { projectOnchainId } =
-          await this.ensureProjectProvisionedOnChain(projectId);
+      await this.ensureCreatorEligible(
+        this.extractObjectIdString(project.creatorId, 'project.creatorId'),
+      );
+      // The contract assigns creator=msg.sender: approval cannot create the campaign using a platform signer.
+      if (
+        project.onchainProvisioningStatus === OnchainProvisioningStatus.READY &&
+        project.provisioningTransactionHash &&
+        project.provisioningEscrow
+      ) {
+        await this.ensureProjectProvisionedOnChain(projectId);
         finalStatus = ProjectStatus.FUNDING;
-        extraSet.projectOnchainId = projectOnchainId;
-      } catch (provisionErr: unknown) {
-        const errMsg =
-          provisionErr instanceof Error
-            ? provisionErr.message
-            : String(provisionErr);
-        this.logger.error(
-          `ROI on-chain provisioning failed for project ${projectId}: ${errMsg}`,
-        );
-        // Preserve the existing moderation status until provisioning succeeds.
-        await this.projectsRepo.updateById(projectId, {
-          $set: {
-            onchainProvisioningStatus: OnchainProvisioningStatus.FAILED,
-            onchainProvisioningError: errMsg,
-          },
-        });
-        // Re-throw so the HTTP response reflects the failure to the admin
-        throw new BadRequestException(
-          `Approval blocked: on-chain provisioning failed: ${errMsg} ` +
-            'Project status is unchanged. Resolve the provisioning error, then retry Approve.',
-        );
+      } else {
+        extraSet.onchainProvisioningStatus =
+          OnchainProvisioningStatus.AWAITING_CREATOR;
       }
     }
 
