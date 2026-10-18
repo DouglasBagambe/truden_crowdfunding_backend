@@ -239,16 +239,22 @@ export class EscrowWeb3Service {
       client.waitForTransactionReceipt({ hash, confirmations: 2 }),
       client.getTransaction({ hash }),
     ]);
-    if (
-      receipt.status !== 'success' ||
-      transaction.to?.toLowerCase() !== expected.to.toLowerCase() ||
-      transaction.from.toLowerCase() !== params.creator.toLowerCase() ||
-      transaction.input.toLowerCase() !== expected.data.toLowerCase() ||
-      transaction.value !== 0n ||
-      transaction.nonce !== expectedNonce
-    )
-      throw new ConflictException(
-        'Transaction does not prove the requested creator campaign',
+    const invalidProof = (reason: string) =>
+      new ConflictException(
+        `Transaction does not prove the requested creator campaign: ${reason}`,
+      );
+    if (receipt.status !== 'success') throw invalidProof('transaction reverted');
+    if (transaction.to?.toLowerCase() !== expected.to.toLowerCase())
+      throw invalidProof('escrow target mismatch');
+    if (transaction.from.toLowerCase() !== params.creator.toLowerCase())
+      throw invalidProof('creator sender mismatch');
+    if (transaction.input.toLowerCase() !== expected.data.toLowerCase())
+      throw invalidProof('campaign calldata mismatch');
+    if (transaction.value !== 0n)
+      throw invalidProof('unexpected native value');
+    if (transaction.nonce !== expectedNonce)
+      throw invalidProof(
+        `reserved nonce mismatch (expected ${expectedNonce}, mined ${transaction.nonce})`,
       );
     for (const log of receipt.logs) {
       if (log.address.toLowerCase() !== config.escrow.toLowerCase()) continue;
