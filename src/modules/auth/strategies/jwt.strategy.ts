@@ -46,24 +46,22 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         walletAddress?: string;
         roles?: JwtPayload['roles'];
         permissions?: JwtPayload['permissions'];
+        emailVerifiedAt?: string | Date | null;
       };
       return {
         sub: payload.sub,
         email: profile.email ?? payload.email,
+        emailVerified: Boolean(profile.emailVerifiedAt),
         primaryWallet: profile.primaryWallet ?? payload.primaryWallet,
         walletAddress:
           profile.walletAddress ??
           profile.primaryWallet ??
           payload.walletAddress ??
           payload.primaryWallet,
-        roles:
-          Array.isArray(profile.roles) && profile.roles.length > 0
-            ? profile.roles
-            : payload.roles,
-        permissions:
-          Array.isArray(profile.permissions) && profile.permissions.length > 0
-            ? profile.permissions
-            : payload.permissions,
+        roles: Array.isArray(profile.roles) ? profile.roles : [],
+        permissions: Array.isArray(profile.permissions)
+          ? profile.permissions
+          : [],
       };
     } catch {
       throw new UnauthorizedException('User not found or inactive');
