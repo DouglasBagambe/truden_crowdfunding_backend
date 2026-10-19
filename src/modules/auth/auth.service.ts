@@ -1656,7 +1656,8 @@ export class AuthService {
     user: UserDocument,
     countField: 'emailVerificationSendCount' | 'passwordResetSendCount',
     resetField:
-      'emailVerificationRateLimitResetAt' | 'passwordResetRateLimitResetAt',
+      | 'emailVerificationRateLimitResetAt'
+      | 'passwordResetRateLimitResetAt',
     limit: number,
     windowMs: number,
   ) {
@@ -1801,7 +1802,7 @@ export class AuthService {
       this.configService.get<string>('NODE_ENV') || process.env.NODE_ENV;
     const hasProviderConfiguration = Boolean(
       this.configService.get<string>('SENDGRID_API_KEY') &&
-      this.configService.get<string>('EMAIL_FROM'),
+        this.configService.get<string>('EMAIL_FROM'),
     );
     if (nodeEnv !== 'test' && !hasProviderConfiguration) {
       throw new BadRequestException(
