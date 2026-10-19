@@ -26,6 +26,7 @@ const client = (overrides: Record<string, unknown> = {}) => ({
     logs: [{ address: escrow, data: '0x', topics: [] }],
   }),
   getTransaction: jest.fn().mockResolvedValue({ to: escrow, value: 0n }),
+  call: jest.fn().mockResolvedValue({}),
   ...overrides,
 });
 
