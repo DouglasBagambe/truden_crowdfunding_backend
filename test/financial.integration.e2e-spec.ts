@@ -1,4 +1,6 @@
 import { CharityLedgerReadService } from '../src/modules/projects/services/charity-ledger-read.service';
+import { FinancialPayoutService } from '../src/modules/financial/financial-payout.service';
+import { FinancialPayoutWorker } from '../src/modules/financial/financial-payout.worker';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { createClient } from 'redis';
@@ -25,6 +27,9 @@ describe('financial PostgreSQL integration', () => {
   } as ConfigService;
   const database = new FinancialDatabase(config);
   const projectsService = {
+    getCharityWalletTransferEligibility: jest
+      .fn()
+      .mockResolvedValue({ creatorId: 'wallet-creator', currency: 'UGX' }),
     ensureProjectCanReceiveDonation: jest.fn().mockResolvedValue(undefined),
     requireInvestorForCampaign: jest.fn().mockResolvedValue({
       project: { currency: 'USDC' },
@@ -56,6 +61,185 @@ describe('financial PostgreSQL integration', () => {
     await database.query(
       'TRUNCATE financial_outbox, financial_inbox, financial_postings, financial_campaign_releases, financial_journals, financial_payment_intents, financial_reconciliations CASCADE',
     );
+  });
+
+  it('transfers settled charity funds without milestones and withdraws the combined Wallet exactly once', async () => {
+    const seed = async (
+      projectId: string,
+      amount: bigint,
+      state = 'settled',
+    ) => {
+      await database.query(
+        `INSERT INTO financial_payment_intents(project_id,contributor_id,amount_minor,currency,state,idempotency_key,correlation_id)
+        VALUES($1,'wallet-test-donor',$2,'UGX',$3,$4,$5)`,
+        [projectId, amount.toString(), state, randomUUID(), randomUUID()],
+      );
+      await financial.postJournal({
+        idempotencyKey: randomUUID(),
+        correlationId: randomUUID(),
+        description: 'Isolated test fixture',
+        lines: [
+          { account: 'asset:bank:UGX', debitMinor: amount, creditMinor: 0n },
+          {
+            account: `liability:campaign_escrow:${projectId}:UGX`,
+            debitMinor: 0n,
+            creditMinor: amount,
+          },
+        ],
+      });
+    };
+    const transfer = (projectId: string, key = randomUUID()) =>
+      financial.transferCharityToWallet({
+        projectId,
+        requesterId: 'wallet-creator',
+        idempotencyKey: key,
+        correlationId: randomUUID(),
+      });
+    const first = randomUUID(),
+      second = randomUUID(),
+      captured = randomUUID();
+    await seed(first, 10000n);
+    await seed(second, 20000n);
+    await seed(captured, 50000n, 'captured');
+    await expect(transfer(captured)).rejects.toThrow(/No settled/);
+    const key = randomUUID();
+    const moved = await transfer(first, key);
+    expect(moved).toMatchObject({
+      ownerProceedsMinor: '9500',
+      milestoneId: null,
+    });
+    expect(await transfer(first, key)).toMatchObject({
+      id: moved.id,
+      replayed: true,
+    });
+    await expect(transfer(first)).rejects.toThrow(/No settled/);
+    await transfer(second);
+    const users = {
+      findById: jest.fn().mockResolvedValue({
+        emailVerifiedAt: new Date(),
+        kycStatus: 'VERIFIED',
+        creatorVerification: { status: 'VERIFIED' },
+      }),
+    };
+    const provider = {
+      createTransfer: jest.fn().mockResolvedValue({
+        id: 'wallet-provider-transfer',
+        status: 'PENDING',
+      }),
+    };
+    const payouts = new FinancialPayoutService(
+      database,
+      users as never,
+      provider as never,
+    );
+    const dest = await database.query<{ id: string }>(
+      `INSERT INTO financial_payout_destinations(creator_id,provider,provider_recipient_id,destination_type,currency,masked_display,status,verified_at)
+      VALUES('wallet-creator','flutterwave',$1,'mobile_money','UGX','Test only','verified',now()) RETURNING id`,
+      [randomUUID()],
+    );
+    const request = {
+      creatorId: 'wallet-creator',
+      destinationId: dest.rows[0].id,
+      idempotencyKey: randomUUID(),
+      expectedAmountMinor: '28500',
+    };
+    expect((await payouts.wallet('wallet-creator')).balances).toMatchObject([
+      { currency: 'UGX', availableMinor: '28500', heldMinor: '0' },
+    ]);
+    await expect(
+      payouts.withdrawWallet({ ...request, expectedAmountMinor: '1' }),
+    ).rejects.toThrow(/balance changed/);
+    const payout = await payouts.withdrawWallet(request);
+    expect(await payouts.withdrawWallet(request)).toMatchObject({
+      id: payout.id,
+      replayed: true,
+    });
+    await expect(
+      payouts.withdrawWallet({ ...request, idempotencyKey: randomUUID() }),
+    ).rejects.toThrow(/No available/);
+    expect(provider.createTransfer).not.toHaveBeenCalled();
+    expect((await payouts.wallet('wallet-creator')).balances).toMatchObject([
+      { availableMinor: '0', heldMinor: '28500' },
+    ]);
+    const worker = new FinancialPayoutWorker(database, provider as never);
+    await worker.dispatch({ payoutId: payout.id });
+    await worker.dispatch({ payoutId: payout.id });
+    expect(provider.createTransfer).toHaveBeenCalledTimes(1);
+    expect(provider.createTransfer).toHaveBeenCalledWith(
+      expect.objectContaining({ amountMinor: 28500n, currency: 'UGX' }),
+    );
+    const callback = {
+      transferId: 'wallet-provider-transfer',
+      reference: payout.keiboReference,
+      amount: '28500',
+      currency: 'UGX',
+      status: 'SUCCESSFUL' as const,
+    };
+    await expect(
+      worker.callback({ ...callback, amount: '28000' }),
+    ).rejects.toThrow(/does not match/);
+    await worker.callback(callback);
+    await worker.callback(callback);
+    expect((await payouts.wallet('wallet-creator')).balances).toMatchObject([
+      { availableMinor: '0', heldMinor: '0', paidMinor: '28500' },
+    ]);
+    const paid = await database.query<{ count: string }>(
+      'SELECT COUNT(*)::text AS count FROM financial_journals WHERE idempotency_key=$1',
+      [`wallet-paid:${payout.id}`],
+    );
+    expect(paid.rows[0].count).toBe('1');
+    const balance = await database.query<{ sum: string }>(
+      `SELECT SUM(debit_minor-credit_minor)::text AS sum FROM financial_postings
+      WHERE journal_id=(SELECT id FROM financial_journals WHERE idempotency_key=$1)`,
+      [`wallet-paid:${payout.id}`],
+    );
+    expect(balance.rows[0].sum).toBe('0');
+    await seed(first, 1000n);
+    await transfer(first);
+    expect((await payouts.wallet('wallet-creator')).balances).toMatchObject([
+      { availableMinor: '950' },
+    ]);
+  });
+
+  it('serializes competing charity transfers so the campaign cannot be credited to Wallet twice', async () => {
+    const projectId = randomUUID();
+    await database.query(
+      `INSERT INTO financial_payment_intents(project_id,contributor_id,amount_minor,currency,state,idempotency_key,correlation_id)
+      VALUES($1,'test',10000,'UGX','settled',$2,$3)`,
+      [projectId, randomUUID(), randomUUID()],
+    );
+    await financial.postJournal({
+      idempotencyKey: randomUUID(),
+      correlationId: randomUUID(),
+      description: 'Concurrency fixture',
+      lines: [
+        { account: 'asset:bank:UGX', debitMinor: 10000n, creditMinor: 0n },
+        {
+          account: `liability:campaign_escrow:${projectId}:UGX`,
+          debitMinor: 0n,
+          creditMinor: 10000n,
+        },
+      ],
+    });
+    const results = await Promise.allSettled(
+      [1, 2].map(() =>
+        financial.transferCharityToWallet({
+          projectId,
+          requesterId: 'wallet-creator',
+          idempotencyKey: randomUUID(),
+          correlationId: randomUUID(),
+        }),
+      ),
+    );
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(
+      (
+        await database.query(
+          'SELECT id FROM financial_campaign_releases WHERE project_id=$1',
+          [projectId],
+        )
+      ).rowCount,
+    ).toBe(1);
   });
 
   it('migrates idempotently and persists full USDC currency plus investment agreement snapshot', async () => {

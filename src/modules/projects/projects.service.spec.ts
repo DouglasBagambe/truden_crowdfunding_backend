@@ -29,6 +29,75 @@ type ProjectEmailSender = {
 const mockProjectId = '507f1f77bcf86cd799439011';
 const mockCreatorId = '507f1f77bcf86cd799439012';
 
+describe('Charity Wallet eligibility without milestones', () => {
+  const verified = {
+    emailVerifiedAt: new Date(),
+    kycStatus: KYCStatus.VERIFIED,
+    creatorVerification: { status: CreatorVerificationStatus.VERIFIED },
+  };
+  it('allows the approved charity owner without looking up milestones', async () => {
+    const { service, projectsRepo, usersRepo, milestonesRepo } =
+      createService();
+    projectsRepo.findById.mockResolvedValue({
+      type: ProjectType.CHARITY,
+      creatorId: mockCreatorId,
+      status: ProjectStatus.APPROVED,
+      currency: 'UGX',
+    });
+    usersRepo.findById.mockResolvedValue(verified);
+    expect(
+      await service.getCharityWalletTransferEligibility(
+        mockProjectId,
+        mockCreatorId,
+      ),
+    ).toEqual({ creatorId: mockCreatorId, currency: 'UGX' });
+    expect(milestonesRepo.findByProject).not.toHaveBeenCalled();
+  });
+  it.each([
+    { creatorId: '507f1f77bcf86cd799439014' },
+    { status: ProjectStatus.PENDING_REVIEW },
+    { type: ProjectType.ROI },
+  ])(
+    'rejects campaign ownership, approval, or type violations %#',
+    async (override) => {
+      const { service, projectsRepo, usersRepo } = createService();
+      projectsRepo.findById.mockResolvedValue({
+        type: ProjectType.CHARITY,
+        creatorId: mockCreatorId,
+        status: ProjectStatus.APPROVED,
+        currency: 'UGX',
+        ...override,
+      });
+      usersRepo.findById.mockResolvedValue(verified);
+      await expect(
+        service.getCharityWalletTransferEligibility(
+          mockProjectId,
+          mockCreatorId,
+        ),
+      ).rejects.toThrow();
+    },
+  );
+  it.each([
+    { emailVerifiedAt: undefined },
+    { kycStatus: KYCStatus.PENDING },
+    { creatorVerification: { status: CreatorVerificationStatus.PENDING } },
+    { isBlocked: true },
+    { isActive: false },
+  ])('rejects ineligible creators %#', async (override) => {
+    const { service, projectsRepo, usersRepo } = createService();
+    projectsRepo.findById.mockResolvedValue({
+      type: ProjectType.CHARITY,
+      creatorId: mockCreatorId,
+      status: ProjectStatus.APPROVED,
+      currency: 'UGX',
+    });
+    usersRepo.findById.mockResolvedValue({ ...verified, ...override });
+    await expect(
+      service.getCharityWalletTransferEligibility(mockProjectId, mockCreatorId),
+    ).rejects.toThrow();
+  });
+});
+
 type ProjectsServiceDependencies = ConstructorParameters<
   typeof ProjectsService
 >;

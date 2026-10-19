@@ -102,6 +102,7 @@ describe('FinancialPayoutService', () => {
   it('creates payout request atomically from the release authority and never calls provider synchronously', async () => {
     const { service, client, flutterwave } = setup();
     client.query
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] })
       .mockResolvedValueOnce({
         rowCount: 1,
         rows: [
@@ -112,6 +113,7 @@ describe('FinancialPayoutService', () => {
           },
         ],
       })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
       .mockResolvedValueOnce({ rowCount: 0, rows: [] })
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'destination-1' }] })
       .mockResolvedValue({ rowCount: 1, rows: [] });
@@ -177,6 +179,7 @@ describe('FinancialPayoutService', () => {
   it('replays a duplicate request without a second transfer, job, or outbox record', async () => {
     const { service, client } = setup();
     client.query
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] })
       .mockResolvedValueOnce({
         rowCount: 1,
         rows: [
@@ -187,6 +190,7 @@ describe('FinancialPayoutService', () => {
           },
         ],
       })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
       .mockResolvedValueOnce({
         rowCount: 1,
         rows: [
@@ -205,7 +209,7 @@ describe('FinancialPayoutService', () => {
         idempotencyKey: 'key',
       }),
     ).resolves.toMatchObject({ id: 'payout-1', replayed: true });
-    expect(client.query).toHaveBeenCalledTimes(2);
+    expect(client.query).toHaveBeenCalledTimes(4);
   });
   it('returns read models without raw destination or provider payload', async () => {
     const { service, database } = setup();

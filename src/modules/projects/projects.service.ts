@@ -2379,6 +2379,46 @@ export class ProjectsService {
     return updated;
   }
 
+  async getCharityWalletTransferEligibility(
+    projectId: string,
+    requesterId: string,
+  ) {
+    this.ensureValidObjectId(projectId);
+    const project = await this.projectsRepo.findById(projectId);
+    if (!project) throw new NotFoundException('Project not found');
+    if (
+      this.normalizeProjectType(this.readProjectType(project)) !==
+      ProjectType.CHARITY
+    )
+      throw new BadRequestException(
+        'Only charity campaigns can transfer to Wallet',
+      );
+    const creatorId = this.extractObjectIdString(
+      project.creatorId,
+      'creatorId',
+    );
+    if (creatorId !== requesterId)
+      throw new ForbiddenException(
+        'Only the campaign creator can transfer funds',
+      );
+    if (project.status !== ProjectStatus.APPROVED)
+      throw new BadRequestException('Campaign approval is required');
+    await this.ensureCreatorEligible(creatorId);
+    const creator = await this.usersRepo.findById(creatorId);
+    if (
+      !creator?.emailVerifiedAt ||
+      creator.isBlocked ||
+      creator.isActive === false ||
+      ((creator.kyc && creator.kyc.status) || creator.kycStatus) !==
+        KYCStatus.VERIFIED ||
+      creator.creatorVerification?.status !== CreatorVerificationStatus.VERIFIED
+    )
+      throw new ForbiddenException(
+        'Active verified creator identity and email are required',
+      );
+    return { creatorId, currency: project.currency };
+  }
+
   async getCharityMilestoneReleaseEligibility(params: {
     projectId: string;
     milestoneId: string;

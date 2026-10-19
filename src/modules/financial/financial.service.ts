@@ -579,6 +579,113 @@ export class FinancialService {
     });
   }
 
+  async transferCharityToWallet(params: {
+    projectId: string;
+    requesterId: string;
+    idempotencyKey: string;
+    correlationId: string;
+  }) {
+    if (!params.idempotencyKey || params.idempotencyKey.length > 200)
+      throw new BadRequestException('A valid Idempotency-Key is required');
+    const eligible =
+      await this.projectsService.getCharityWalletTransferEligibility(
+        params.projectId,
+        params.requesterId,
+      );
+    const currency = assertCurrency(eligible.currency);
+    return this.database.transaction(async (client) => {
+      const account = `liability:campaign_escrow:${params.projectId}:${currency}`;
+      await this.lockLedgerAccount(client, account);
+      const prior = await client.query<
+        CampaignReleaseRow & { release_kind: string }
+      >('SELECT * FROM financial_campaign_releases WHERE idempotency_key=$1', [
+        params.idempotencyKey,
+      ]);
+      if (prior.rowCount) {
+        const row = prior.rows[0];
+        if (
+          row.project_id !== params.projectId ||
+          row.creator_id !== params.requesterId ||
+          row.release_kind !== 'charity_wallet'
+        )
+          throw new ConflictException(
+            'Idempotency-Key belongs to a different transfer',
+          );
+        return { ...this.serializeCampaignRelease(row), replayed: true };
+      }
+      // Captured funds are already in escrow, but ONLY settled funds may move.
+      // Subtract all historical releases so old and new paths cannot double-spend.
+      const totals = await client.query<{ available: string }>(
+        `
+        SELECT (COALESCE((SELECT SUM(amount_minor-COALESCE(provider_fee_minor,0))
+          FROM financial_payment_intents WHERE project_id=$1 AND currency=$2 AND state='settled'),0)
+          - COALESCE((SELECT SUM(gross_amount_minor) FROM financial_campaign_releases
+          WHERE project_id=$1 AND currency=$2),0))::text AS available`,
+        [params.projectId, currency],
+      );
+      const gross = BigInt(totals.rows[0]?.available || '0');
+      if (gross <= 0n)
+        throw new ConflictException(
+          'No settled campaign funds are available to transfer to Wallet',
+        );
+      await this.assertCreditBalance(client, account, gross);
+      const fee = calculateCampaignSuccessFee(gross);
+      const journal = await this.postJournalInTransaction(client, {
+        idempotencyKey: `wallet-transfer:${params.idempotencyKey}`,
+        correlationId: params.correlationId,
+        description: 'Settled charity funds transferred to creator Wallet',
+        lines: [
+          { account, debitMinor: gross, creditMinor: 0n },
+          {
+            account: `liability:campaign_owner_payable:${params.projectId}:${currency}`,
+            debitMinor: 0n,
+            creditMinor: fee.ownerProceedsMinor,
+          },
+          ...(fee.keiboFeeMinor > 0n
+            ? [
+                {
+                  account: `revenue:campaign_success_fee:${currency}`,
+                  debitMinor: 0n,
+                  creditMinor: fee.keiboFeeMinor,
+                },
+              ]
+            : []),
+        ],
+      });
+      const result = await client.query<CampaignReleaseRow>(
+        `
+        INSERT INTO financial_campaign_releases(project_id,milestone_id,creator_id,requested_by,currency,
+          gross_amount_minor,owner_proceeds_minor,success_fee_minor,ledger_journal_id,idempotency_key,release_kind)
+        VALUES($1,NULL,$2,$2,$3,$4,$5,$6,$7,$8,'charity_wallet') RETURNING *`,
+        [
+          params.projectId,
+          eligible.creatorId,
+          currency,
+          gross.toString(),
+          fee.ownerProceedsMinor.toString(),
+          fee.keiboFeeMinor.toString(),
+          journal.id,
+          params.idempotencyKey,
+        ],
+      );
+      await this.enqueue(
+        client,
+        'campaign.wallet.transferred',
+        result.rows[0].id,
+        params.correlationId,
+        {
+          projectId: params.projectId,
+          ledgerJournalId: journal.id,
+          externalPayoutStatus: 'not_started',
+        },
+      );
+      return {
+        ...this.serializeCampaignRelease(result.rows[0]),
+        replayed: false,
+      };
+    });
+  }
+
   async releaseApprovedCharityMilestone(params: {
     projectId: string;
     milestoneId: string;

@@ -62,6 +62,12 @@ class PayoutDestinationDto {
 class PayoutRequestDto {
   @IsString() destinationId!: string;
 }
+class WalletTransferDto {
+  @IsString() @Matches(/^[0-9a-fA-F]{24}$/) projectId!: string;
+}
+class WalletWithdrawalDto extends PayoutRequestDto {
+  @IsString() @Matches(/^[1-9]\d*$/) expectedAmountMinor!: string;
+}
 class ReceiptRevocationDto {
   @IsString() reason!: string;
 }
@@ -191,6 +197,34 @@ export class FinancialController {
       idempotencyKey: key,
     });
   }
+  @Get('wallet') wallet(@Request() req: { user: { sub: string } }) {
+    return this.payouts.wallet(req.user.sub);
+  }
+  @Post('wallet/transfers') transferToWallet(
+    @Body() dto: WalletTransferDto,
+    @Headers('idempotency-key') idempotencyKey: string,
+    @Request() req: { user: { sub: string } },
+  ) {
+    return this.financial.transferCharityToWallet({
+      projectId: dto.projectId,
+      requesterId: req.user.sub,
+      idempotencyKey,
+      correlationId: randomUUID(),
+    });
+  }
+  @Post('wallet/withdrawals') withdrawWallet(
+    @Body() dto: WalletWithdrawalDto,
+    @Headers('idempotency-key') idempotencyKey: string,
+    @Request() req: { user: { sub: string } },
+  ) {
+    return this.payouts.withdrawWallet({
+      creatorId: req.user.sub,
+      destinationId: dto.destinationId,
+      idempotencyKey,
+      expectedAmountMinor: dto.expectedAmountMinor,
+    });
+  }
+
   @Get('payouts') listPayouts(
     @Request() req: { user: { sub?: string; userId?: string } },
   ) {

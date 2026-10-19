@@ -85,4 +85,21 @@ ALTER TABLE financial_payment_intents ALTER COLUMN currency TYPE varchar(16) USI
 ALTER TABLE financial_payment_intents ADD COLUMN IF NOT EXISTS agreement_snapshot jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE financial_postings ALTER COLUMN currency TYPE varchar(16) USING trim(currency);
 ALTER TABLE financial_campaign_releases ALTER COLUMN currency TYPE varchar(16) USING trim(currency);
+-- Charity Wallet transfers have no milestone. Preserve historical release rows.
+ALTER TABLE financial_campaign_releases ALTER COLUMN milestone_id DROP NOT NULL;
+ALTER TABLE financial_campaign_releases ADD COLUMN IF NOT EXISTS release_kind text NOT NULL DEFAULT 'milestone';
+ALTER TABLE financial_payout_transfers ALTER COLUMN release_id DROP NOT NULL;
+ALTER TABLE financial_payout_transfers ADD COLUMN IF NOT EXISTS wallet_withdrawal boolean NOT NULL DEFAULT false;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='financial_payout_authority_kind') THEN
+    ALTER TABLE financial_payout_transfers ADD CONSTRAINT financial_payout_authority_kind
+      CHECK ((wallet_withdrawal AND release_id IS NULL) OR (NOT wallet_withdrawal AND release_id IS NOT NULL));
+  END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS financial_wallet_payout_allocations (
+  payout_id uuid NOT NULL REFERENCES financial_payout_transfers(id),
+  release_id uuid NOT NULL UNIQUE REFERENCES financial_campaign_releases(id),
+  amount_minor bigint NOT NULL CHECK (amount_minor > 0),
+  PRIMARY KEY (payout_id, release_id)
+);
 `;
