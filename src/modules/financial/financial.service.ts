@@ -235,8 +235,9 @@ export class FinancialService {
         amount_minor: string;
         currency: string;
         state: string;
+        capture_journal_id: string | null;
       }>(
-        `SELECT id, project_id, contributor_id, amount_minor, currency, state
+        `SELECT id, project_id, contributor_id, amount_minor, currency, state, capture_journal_id
          FROM financial_payment_intents WHERE id = $1 FOR UPDATE`,
         [params.paymentIntentId],
       );
@@ -249,6 +250,37 @@ export class FinancialService {
         );
       }
       const current = locked.rows[0];
+      const transactionHash = params.transactionHash.toLowerCase();
+      const eventIdentity = `Contributed:${transactionHash}:${params.projectOnchainId}:${params.investorWallet.toLowerCase()}:${current.amount_minor}`;
+      if (current.state === 'settled') {
+        const prior = await client.query<{ id: string }>(
+          `SELECT j.id FROM financial_chain_evidence e
+           JOIN financial_journals j ON j.id = $6
+           WHERE e.chain_id = $1 AND e.contract_address = $2
+             AND e.transaction_hash = $3 AND e.payment_intent_id = $4
+             AND e.event_identity = $5 AND j.idempotency_key = $7`,
+          [
+            config.chainId,
+            config.escrow.toLowerCase(),
+            transactionHash,
+            current.id,
+            eventIdentity,
+            current.capture_journal_id,
+            `chain-contribution:${config.chainId}:${transactionHash}`,
+          ],
+        );
+        if (!prior.rowCount) {
+          throw new ConflictException(
+            'Settled payment intent does not match this on-chain transaction',
+          );
+        }
+        return {
+          paymentIntentId: current.id,
+          ledgerJournalId: prior.rows[0].id,
+          transactionHash,
+          replayed: true,
+        };
+      }
       if (!['pending', 'authorized'].includes(current.state)) {
         throw new ConflictException(
           `Cannot settle on-chain payment from ${current.state}`,
@@ -304,7 +336,8 @@ export class FinancialService {
       return {
         paymentIntentId: current.id,
         ledgerJournalId: journal.id,
-        transactionHash: params.transactionHash,
+        transactionHash,
+        replayed: false,
       };
     });
   }

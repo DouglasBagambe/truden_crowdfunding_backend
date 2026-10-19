@@ -25,7 +25,7 @@ const client = (overrides: Record<string, unknown> = {}) => ({
     status: 'success',
     logs: [{ address: escrow, data: '0x', topics: [] }],
   }),
-  getTransaction: jest.fn().mockResolvedValue({ to: escrow }),
+  getTransaction: jest.fn().mockResolvedValue({ to: escrow, value: 0n }),
   ...overrides,
 });
 
@@ -82,6 +82,67 @@ describe('EscrowWeb3Service', () => {
         amount: 8n,
       }),
     ).resolves.toBe(false);
+  });
+
+  it('accepts a delegated contribution for campaign zero only with matching escrow evidence', async () => {
+    const runtime = client({
+      getTransaction: jest.fn().mockResolvedValue({
+        to: metamaskDelegationManager,
+        value: 0n,
+      }),
+    });
+    (viem.createPublicClient as jest.Mock).mockReturnValue(runtime);
+    (viem.decodeEventLog as jest.Mock).mockReturnValue({
+      eventName: 'Contributed',
+      args: { campaignId: 0n, contributor: investor, amount: 1000000n },
+    });
+    const service = new EscrowWeb3Service(config as never, signer as never);
+    const request = { hash, projectOnchainId: '0', investor, amount: 1000000n };
+    await expect(service.verifyDepositTx(request)).resolves.toBe(true);
+    await expect(
+      service.verifyDepositTx({ ...request, amount: 2n }),
+    ).resolves.toBe(false);
+    await expect(
+      service.verifyDepositTx({ ...request, investor: escrow }),
+    ).resolves.toBe(false);
+    await expect(
+      service.verifyDepositTx({ ...request, projectOnchainId: '1' }),
+    ).resolves.toBe(false);
+    runtime.waitForTransactionReceipt.mockResolvedValue({
+      status: 'reverted',
+      logs: [{ address: escrow, data: '0x', topics: [] }],
+    });
+    await expect(service.verifyDepositTx(request)).rejects.toThrow(
+      'Transaction did not succeed against KEIBO escrow',
+    );
+    runtime.waitForTransactionReceipt.mockResolvedValue({
+      status: 'success',
+      logs: [{ address: investor, data: '0x', topics: [] }],
+    });
+    await expect(service.verifyDepositTx(request)).rejects.toThrow(
+      'Missing Contributed',
+    );
+  });
+
+  it.each([
+    { to: investor, value: 0n },
+    { to: metamaskDelegationManager, value: 1n },
+    { to: escrow, value: 1n },
+  ])('rejects contribution target/value mismatch: %s', async (transaction) => {
+    (viem.createPublicClient as jest.Mock).mockReturnValue(
+      client({
+        getTransaction: jest.fn().mockResolvedValue(transaction),
+      }),
+    );
+    const service = new EscrowWeb3Service(config as never, signer as never);
+    await expect(
+      service.verifyDepositTx({
+        hash,
+        projectOnchainId: '0',
+        investor,
+        amount: 1000000n,
+      }),
+    ).rejects.toThrow('Transaction did not succeed against KEIBO escrow');
   });
 
   it('fails closed for wrong chain and missing deployed code', async () => {

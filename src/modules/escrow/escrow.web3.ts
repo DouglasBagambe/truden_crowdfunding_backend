@@ -277,8 +277,7 @@ export class EscrowWeb3Service {
     }
     if (transaction.from.toLowerCase() !== params.creator.toLowerCase())
       throw invalidProof('creator sender mismatch');
-    if (transaction.value !== 0n)
-      throw invalidProof('unexpected native value');
+    if (transaction.value !== 0n) throw invalidProof('unexpected native value');
     if (transaction.nonce !== expectedNonce)
       throw invalidProof(
         `reserved nonce mismatch (expected ${expectedNonce}, mined ${transaction.nonce})`,
@@ -526,7 +525,13 @@ export class EscrowWeb3Service {
       ]);
       if (
         receipt.status !== 'success' ||
-        transaction.to?.toLowerCase() !== config.escrow.toLowerCase()
+        (transaction.to?.toLowerCase() !== config.escrow.toLowerCase() &&
+          !(
+            expectedEvent === 'Contributed' &&
+            transaction.to?.toLowerCase() ===
+              METAMASK_DELEGATION_MANAGER.toLowerCase()
+          )) ||
+        (expectedEvent === 'Contributed' && transaction.value !== 0n)
       ) {
         throw new ConflictException(
           'Transaction did not succeed against KEIBO escrow',

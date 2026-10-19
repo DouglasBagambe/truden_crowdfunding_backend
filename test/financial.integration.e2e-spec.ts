@@ -84,6 +84,112 @@ describe('financial PostgreSQL integration', () => {
     ]);
   });
 
+  it('settles a mined USDC contribution once and rejects conflicting evidence on replay', async () => {
+    const wallet = '0x0000000000000000000000000000000000000002' as const;
+    const transactionHash = `0x${'a'.repeat(64)}` as const;
+    const onchain = new FinancialService(
+      database,
+      {
+        ...projectsService,
+        assertProjectOnchainId: jest.fn().mockResolvedValue(undefined),
+      } as never,
+      {
+        getRuntimeConfig: () => ({
+          chainId: 11155111,
+          escrow: '0x0000000000000000000000000000000000000001',
+        }),
+        verifyDepositTx: jest.fn().mockResolvedValue(true),
+      } as never,
+      {
+        findById: jest.fn().mockResolvedValue({ primaryWallet: wallet }),
+      } as never,
+    );
+    const input = {
+      projectId: 'usdc-replay-campaign',
+      contributorId: 'verified-investor',
+      currency: 'USDC',
+      amountMinor: 1000000n,
+      acceptedAgreements: ['terms:1'],
+      idempotencyKey: randomUUID(),
+      correlationId: randomUUID(),
+    };
+    const intent = await onchain.createPaymentIntent(input);
+    const request = {
+      paymentIntentId: intent.id,
+      contributorId: input.contributorId,
+      projectOnchainId: '0',
+      investorWallet: wallet,
+      transactionHash,
+      correlationId: randomUUID(),
+    };
+    const first = await onchain.settleVerifiedOnchainContribution(request);
+    expect(first.replayed).toBe(false);
+    // Once the journal exists, repeated settlement must not issue new events
+    // or financial effects. Mongo projection coverage remains separate.
+    const before = await database.query(
+      'SELECT count(*)::int AS count FROM financial_outbox',
+    );
+    for (let i = 0; i < 2; i++) {
+      expect(await onchain.settleVerifiedOnchainContribution(request)).toEqual({
+        ...first,
+        replayed: true,
+      });
+    }
+    expect(
+      (
+        await database.query(
+          'SELECT count(*)::int AS count FROM financial_outbox',
+        )
+      ).rows,
+    ).toEqual(before.rows);
+    expect(
+      (
+        await database.query(
+          'SELECT count(*)::int AS count FROM financial_chain_evidence WHERE payment_intent_id=$1',
+          [intent.id],
+        )
+      ).rows[0].count,
+    ).toBe(1);
+    expect(
+      (
+        await database.query(
+          'SELECT count(*)::int AS count FROM financial_journals WHERE id=$1',
+          [first.ledgerJournalId],
+        )
+      ).rows[0].count,
+    ).toBe(1);
+    expect(
+      (
+        await database.query(
+          'SELECT count(*)::int AS count FROM financial_postings WHERE journal_id=$1',
+          [first.ledgerJournalId],
+        )
+      ).rows[0].count,
+    ).toBe(2);
+    await expect(
+      onchain.settleVerifiedOnchainContribution({
+        ...request,
+        transactionHash: `0x${'b'.repeat(64)}`,
+      }),
+    ).rejects.toThrow('does not match this on-chain transaction');
+    const other = await onchain.createPaymentIntent({
+      ...input,
+      idempotencyKey: randomUUID(),
+    });
+    await expect(
+      onchain.settleVerifiedOnchainContribution({
+        ...request,
+        paymentIntentId: other.id,
+      }),
+    ).rejects.toThrow('already been reserved');
+    expect(
+      (await onchain.getPaymentIntent(intent.id, input.contributorId)).state,
+    ).toBe('settled');
+    expect(
+      (await onchain.getPaymentIntent(other.id, input.contributorId)).state,
+    ).toBe('pending');
+  });
+
   afterAll(async () => {
     await outbox.onModuleDestroy();
     if (redis.isOpen) await redis.quit();

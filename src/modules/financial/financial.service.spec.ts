@@ -377,4 +377,124 @@ describe('FinancialService contribution eligibility', () => {
     ).rejects.toThrow('not linked');
     expect(escrowWeb3.verifyDepositTx).not.toHaveBeenCalled();
   });
+
+  describe('on-chain settlement replay', () => {
+    const wallet = '0x0000000000000000000000000000000000000002' as const;
+    const transactionHash = `0x${'a'.repeat(64)}` as const;
+    const request = {
+      paymentIntentId: 'intent-1',
+      contributorId: 'investor-1',
+      projectOnchainId: '0',
+      investorWallet: wallet,
+      transactionHash,
+      correlationId: 'correlation-1',
+    };
+    function setup(state = 'pending', matchingEvidence = true) {
+      const context = createService();
+      const payment = {
+        id: 'intent-1',
+        project_id: 'project-1',
+        contributor_id: 'investor-1',
+        amount_minor: '1000000',
+        currency: 'USDC',
+        state,
+        capture_journal_id: state === 'settled' ? 'journal-1' : null,
+      };
+      context.database.query.mockResolvedValue({
+        rowCount: 1,
+        rows: [payment],
+      });
+      context.usersRepository.findById.mockResolvedValue({
+        primaryWallet: wallet,
+      });
+      context.escrowWeb3.verifyDepositTx.mockResolvedValue(true);
+      const query = jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('FROM financial_payment_intents'))
+          return Promise.resolve({ rowCount: 1, rows: [payment] });
+        if (sql.includes('JOIN financial_journals'))
+          return Promise.resolve({
+            rowCount: matchingEvidence ? 1 : 0,
+            rows: [{ id: 'journal-1' }],
+          });
+        if (sql.startsWith('SELECT id FROM financial_journals'))
+          return Promise.resolve({ rowCount: 0, rows: [] });
+        if (sql.includes('INSERT INTO financial_journals'))
+          return Promise.resolve({ rowCount: 1, rows: [{ id: 'journal-1' }] });
+        return Promise.resolve({ rowCount: 1, rows: [] });
+      });
+      context.database.transaction.mockImplementation(
+        (callback: (client: { query: jest.Mock }) => Promise<unknown>) =>
+          callback({ query }),
+      );
+      return { ...context, query };
+    }
+
+    it('settles a first valid contribution with one evidence row and one balanced journal', async () => {
+      const { service, query } = setup();
+      await expect(
+        service.settleVerifiedOnchainContribution(request),
+      ).resolves.toEqual({
+        paymentIntentId: 'intent-1',
+        ledgerJournalId: 'journal-1',
+        transactionHash,
+        replayed: false,
+      });
+      const sql = query.mock.calls.map(([statement]: [string]) => statement);
+      expect(
+        sql.filter((s) => s.includes('INSERT INTO financial_chain_evidence')),
+      ).toHaveLength(1);
+      expect(
+        sql.filter((s) => s.includes('INSERT INTO financial_journals')),
+      ).toHaveLength(1);
+      expect(
+        sql.filter((s) => s.includes('INSERT INTO financial_postings')),
+      ).toHaveLength(2);
+    });
+
+    it('returns the existing result on repeated settlement without journal, receipt or investment writes', async () => {
+      const { service, query } = setup('settled');
+      for (let i = 0; i < 2; i++) {
+        await expect(
+          service.settleVerifiedOnchainContribution(request),
+        ).resolves.toEqual({
+          paymentIntentId: 'intent-1',
+          ledgerJournalId: 'journal-1',
+          transactionHash,
+          replayed: true,
+        });
+      }
+      expect(
+        query.mock.calls.every(([sql]: [string]) =>
+          sql.trim().startsWith('SELECT'),
+        ),
+      ).toBe(true);
+      expect(query).toHaveBeenCalledWith(
+        expect.stringContaining('JOIN financial_journals'),
+        [
+          11155111,
+          '0x0000000000000000000000000000000000000001',
+          transactionHash,
+          'intent-1',
+          `Contributed:${transactionHash}:0:${wallet}:1000000`,
+          'journal-1',
+          `chain-contribution:11155111:${transactionHash}`,
+        ],
+      );
+    });
+
+    it('rejects a different transaction or missing settlement evidence without financial writes', async () => {
+      const { service, query } = setup('settled', false);
+      await expect(
+        service.settleVerifiedOnchainContribution({
+          ...request,
+          transactionHash: `0x${'b'.repeat(64)}`,
+        }),
+      ).rejects.toThrow('does not match this on-chain transaction');
+      expect(
+        query.mock.calls.every(([sql]: [string]) =>
+          sql.trim().startsWith('SELECT'),
+        ),
+      ).toBe(true);
+    });
+  });
 });
