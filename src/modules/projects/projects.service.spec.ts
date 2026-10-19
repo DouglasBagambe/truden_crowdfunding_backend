@@ -58,6 +58,8 @@ const createService = () => {
     deleteByProject: jest.fn(),
     findByProject: jest.fn(),
     findByIdForProject: jest.fn(),
+    submitForReview: jest.fn(),
+    review: jest.fn(),
   };
   const usersRepo = {
     findById: jest.fn(),
@@ -73,7 +75,9 @@ const createService = () => {
     findById: jest.fn(),
   };
   const configService = {
-    get: jest.fn(),
+    get: jest.fn((key: string) =>
+      key === 'INVESTMENTS_ENABLED' ? 'true' : undefined,
+    ),
   };
   const charityDonationsRepo = {
     listByProject: jest.fn().mockResolvedValue([]),
@@ -285,7 +289,11 @@ describe('ProjectsService — existing CRUD', () => {
     } = createService();
     usersRepo.findById.mockResolvedValue(creatorWithWallet());
     configService.get.mockImplementation((key: string) =>
-      key === 'ROI_ALLOWED_USER_IDS' ? mockCreatorId : undefined,
+      key === 'INVESTMENTS_ENABLED'
+        ? 'true'
+        : key === 'ROI_ALLOWED_USER_IDS'
+          ? mockCreatorId
+          : undefined,
     );
     const dto = {
       projectType: ProjectType.ROI,
@@ -472,7 +480,11 @@ describe('ProjectsService — existing CRUD', () => {
       kyc: { status: KYCStatus.PENDING },
     });
     configService.get.mockImplementation((key: string) =>
-      key === 'ROI_ALLOWED_USER_IDS' ? mockCreatorId : undefined,
+      key === 'INVESTMENTS_ENABLED'
+        ? 'true'
+        : key === 'ROI_ALLOWED_USER_IDS'
+          ? mockCreatorId
+          : undefined,
     );
     await expect(
       service.createProject(mockCreatorId, {
@@ -536,11 +548,13 @@ describe('Creator-signed KEIBO provisioning', () => {
     context.projectsRepo.findById.mockResolvedValue(project);
     context.usersRepo.findById.mockResolvedValue(creatorWithWallet());
     context.configService.get.mockImplementation((key: string) =>
-      key === 'ROI_ALLOWED_USER_IDS'
-        ? mockCreatorId
-        : key === 'USDC_TOKEN_ADDRESS'
-          ? '0x0000000000000000000000000000000000000002'
-          : undefined,
+      key === 'INVESTMENTS_ENABLED'
+        ? 'true'
+        : key === 'ROI_ALLOWED_USER_IDS'
+          ? mockCreatorId
+          : key === 'USDC_TOKEN_ADDRESS'
+            ? '0x0000000000000000000000000000000000000002'
+            : undefined,
     );
     context.milestonesRepo.findByProject.mockResolvedValue([
       { payoutPercentage: 100 },
@@ -860,5 +874,129 @@ describe('Public project query regressions', () => {
       creator: { firstName: 'Creator' },
     });
     expect(creator.email).toBe('private@example.test');
+  });
+});
+
+describe('Charity milestone evidence and review boundaries', () => {
+  const milestoneId = '507f1f77bcf86cd799439013';
+  const setup = () => {
+    const c = createService();
+    c.projectsRepo.findById.mockResolvedValue(
+      roiProjectStub({ projectType: ProjectType.CHARITY, currency: 'UGX' }),
+    );
+    c.milestonesRepo.findByIdForProject.mockResolvedValue({
+      status: MilestoneStatus.IN_REVIEW,
+      proofLinks: ['https://keibo.test/proof'],
+      payoutPercentage: 100,
+    });
+    c.milestonesRepo.findByProject.mockResolvedValue([
+      { payoutPercentage: 100 },
+    ]);
+    c.usersRepo.findById.mockResolvedValue(creatorWithWallet());
+    return c;
+  };
+  it('denies another creator before saving evidence', async () => {
+    const c = setup();
+    await expect(
+      c.service.submitCharityMilestone(
+        mockProjectId,
+        milestoneId,
+        '507f1f77bcf86cd799439014',
+        ['https://keibo.test/proof'],
+      ),
+    ).rejects.toThrow(ForbiddenException);
+    expect(c.milestonesRepo.submitForReview).not.toHaveBeenCalled();
+  });
+  it('requires a verified creator and an atomic transition into review', async () => {
+    const c = setup();
+    c.milestonesRepo.submitForReview.mockResolvedValue({
+      status: MilestoneStatus.IN_REVIEW,
+    });
+    await expect(
+      c.service.submitCharityMilestone(
+        mockProjectId,
+        milestoneId,
+        mockCreatorId,
+        ['https://keibo.test/proof'],
+      ),
+    ).resolves.toMatchObject({ status: MilestoneStatus.IN_REVIEW });
+    c.usersRepo.findById.mockResolvedValue({
+      ...creatorWithWallet(),
+      kycStatus: KYCStatus.PENDING,
+      kyc: { status: KYCStatus.PENDING },
+    });
+    await expect(
+      c.service.submitCharityMilestone(
+        mockProjectId,
+        milestoneId,
+        mockCreatorId,
+        ['https://keibo.test/proof'],
+      ),
+    ).rejects.toThrow();
+    expect(c.milestonesRepo.submitForReview).toHaveBeenCalledTimes(1);
+  });
+  it('refuses approval without submitted evidence', async () => {
+    const c = setup();
+    c.milestonesRepo.findByIdForProject.mockResolvedValue({ proofLinks: [] });
+    await expect(
+      c.service.reviewCharityMilestone(
+        mockProjectId,
+        milestoneId,
+        mockCreatorId,
+        'APPROVED',
+        'Evidence reviewed for test milestone',
+      ),
+    ).rejects.toThrow('Creator evidence is required');
+    expect(c.milestonesRepo.review).not.toHaveBeenCalled();
+  });
+  it('records reviewer identity/reason and refuses stale approval', async () => {
+    const c = setup();
+    c.milestonesRepo.review.mockResolvedValue({
+      status: MilestoneStatus.APPROVED,
+    });
+    await expect(
+      c.service.reviewCharityMilestone(
+        mockProjectId,
+        milestoneId,
+        mockCreatorId,
+        'APPROVED',
+        'Evidence reviewed for test milestone',
+      ),
+    ).resolves.toMatchObject({ status: MilestoneStatus.APPROVED });
+    expect(c.milestonesRepo.review).toHaveBeenCalledWith(
+      mockProjectId,
+      milestoneId,
+      MilestoneStatus.APPROVED,
+      mockCreatorId,
+      'Evidence reviewed for test milestone',
+    );
+    c.milestonesRepo.review.mockResolvedValue(null);
+    await expect(
+      c.service.reviewCharityMilestone(
+        mockProjectId,
+        milestoneId,
+        mockCreatorId,
+        'APPROVED',
+        'Evidence reviewed for test milestone',
+      ),
+    ).rejects.toThrow('awaiting review');
+  });
+});
+
+describe('Charity launch blocks investment campaign mutations', () => {
+  it('blocks an old ROI campaign update or approval while retaining its stored code/data', async () => {
+    const c = createService();
+    c.configService.get.mockReturnValue('false');
+    c.projectsRepo.findById.mockResolvedValue(roiProjectStub());
+    await expect(
+      c.service.updateProject(mockProjectId, mockCreatorId, {
+        name: 'Hidden ROI change',
+      } as UpdateProjectDto),
+    ).rejects.toThrow('Investments are unavailable');
+    await expect(
+      c.service.decide(mockProjectId, { finalStatus: ProjectStatus.APPROVED }),
+    ).rejects.toThrow('Investments are unavailable');
+    expect(c.projectsRepo.updateById).not.toHaveBeenCalled();
+    expect(c.projectsRepo.setStatus).not.toHaveBeenCalled();
   });
 });

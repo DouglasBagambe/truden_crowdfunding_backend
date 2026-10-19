@@ -1,3 +1,4 @@
+import { InvestmentLaunchGuard } from './common/guards/investment-launch.guard';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
@@ -68,6 +69,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     NotificationsModule,
   ],
   providers: [
+    { provide: APP_GUARD, useClass: InvestmentLaunchGuard },
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,

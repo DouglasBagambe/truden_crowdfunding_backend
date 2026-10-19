@@ -1,3 +1,4 @@
+import { decimalToMinor } from './providers/provider-adapter';
 import { ConflictException, Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import { FinancialDatabase } from './financial.database';
@@ -99,6 +100,16 @@ export class FinancialPayoutWorker {
     const result = await this.provider.getTransferStatus(
       payout.provider_transfer_id,
     );
+    if (
+      result.id !== payout.provider_transfer_id ||
+      result.reference !== payout.keibo_reference ||
+      result.currency !== payout.currency ||
+      decimalToMinor(result.amount, result.currency) !==
+        BigInt(payout.amount_minor)
+    )
+      throw new ConflictException(
+        'Provider payout evidence does not match the authoritative transfer',
+      );
     await this.database.transaction(async (client) => {
       if (result.status === 'SUCCESSFUL')
         return this.transition(

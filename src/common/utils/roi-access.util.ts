@@ -1,3 +1,4 @@
+import { investmentsEnabled } from './product-features.util';
 import { ConfigService } from '@nestjs/config';
 
 function parseAllowedIds(rawValue?: string): string[] {
@@ -35,6 +36,7 @@ export function hasBackendRoiAccess(
   userId?: string | null,
   configService?: ConfigService,
 ): boolean {
+  if (!investmentsEnabled(configService)) return false;
   const allowedIds = getAllowedRoiUserIds(configService);
   if (isPublicRoiAccessMode(configService) || allowedIds.includes('*')) {
     return true;

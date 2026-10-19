@@ -34,6 +34,11 @@ export class Milestone {
   @Prop({ type: [String], default: [] })
   proofLinks!: string[];
 
+  @Prop({ type: Date }) submittedAt?: Date;
+  @Prop({ type: Date }) reviewedAt?: Date;
+  @Prop({ type: String }) reviewedBy?: string;
+  @Prop({ type: String }) reviewReason?: string;
+
   @Prop({ type: Date })
   createdAt?: Date;
 

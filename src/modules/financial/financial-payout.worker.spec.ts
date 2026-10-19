@@ -116,7 +116,13 @@ describe('FinancialPayoutWorker', () => {
     'uses one terminal event for repeated %s reconciliation',
     async (status) => {
       const { worker, provider, client } = setup();
-      provider.getTransferStatus.mockResolvedValue({ status });
+      provider.getTransferStatus.mockResolvedValue({
+        status,
+        id: 'transfer-1',
+        reference: 'KEIBO-PAYOUT-release-1',
+        amount: '9500',
+        currency: 'UGX',
+      });
       await worker.reconcile({ payoutId: 'payout-1' });
       const updates = client.query.mock.calls.filter(([sql]: [string]) =>
         sql.includes('COALESCE'),
@@ -132,7 +138,13 @@ describe('FinancialPayoutWorker', () => {
   );
   it('allows an authoritative SUCCESSFUL result to correct a previous failed state', async () => {
     const { worker, provider, client } = setup(payout('failed'));
-    provider.getTransferStatus.mockResolvedValue({ status: 'SUCCESSFUL' });
+    provider.getTransferStatus.mockResolvedValue({
+      status: 'SUCCESSFUL',
+      id: 'transfer-1',
+      reference: 'KEIBO-PAYOUT-release-1',
+      amount: '9500',
+      currency: 'UGX',
+    });
     await worker.reconcile({ payoutId: 'payout-1' });
     expect(client.query).toHaveBeenCalledWith(
       expect.stringContaining('state=$2'),
@@ -143,7 +155,13 @@ describe('FinancialPayoutWorker', () => {
     'reschedules non-terminal reconciliation status %s',
     async (status) => {
       const { worker, provider, client } = setup();
-      provider.getTransferStatus.mockResolvedValue({ status });
+      provider.getTransferStatus.mockResolvedValue({
+        status,
+        id: 'transfer-1',
+        reference: 'KEIBO-PAYOUT-release-1',
+        amount: '9500',
+        currency: 'UGX',
+      });
       await worker.reconcile({ payoutId: 'payout-1' });
       expect(client.query).toHaveBeenCalledWith(
         expect.stringContaining('financial_jobs'),
@@ -153,7 +171,13 @@ describe('FinancialPayoutWorker', () => {
   );
   it('retries unknown provider state rather than inventing a terminal payout state', async () => {
     const { worker, provider } = setup();
-    provider.getTransferStatus.mockResolvedValue({ status: 'UNKNOWN' });
+    provider.getTransferStatus.mockResolvedValue({
+      status: 'UNKNOWN',
+      id: 'transfer-1',
+      reference: 'KEIBO-PAYOUT-release-1',
+      amount: '9500',
+      currency: 'UGX',
+    });
     await expect(
       worker.reconcile({ payoutId: 'payout-1' }),
     ).rejects.toMatchObject({ code: 'RPC_PENDING' });
@@ -187,5 +211,19 @@ describe('FinancialPayoutWorker', () => {
         status: 'SUCCESSFUL',
       }),
     ).rejects.toThrow('does not match');
+  });
+  it('refuses to mark a payout paid using mismatched provider transfer evidence', async () => {
+    const { worker, provider, database } = setup();
+    provider.getTransferStatus.mockResolvedValue({
+      status: 'SUCCESSFUL',
+      id: 'another-transfer',
+      reference: 'KEIBO-PAYOUT-release-1',
+      amount: '9500',
+      currency: 'UGX',
+    });
+    await expect(worker.reconcile({ payoutId: 'payout-1' })).rejects.toThrow(
+      'does not match',
+    );
+    expect(database.transaction).not.toHaveBeenCalled();
   });
 });

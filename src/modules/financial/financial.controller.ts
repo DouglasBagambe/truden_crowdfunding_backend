@@ -1,3 +1,5 @@
+import { FlutterwaveV4PayoutAdapter } from './providers/flutterwave-v4-payout.adapter';
+import { ConfigService } from '@nestjs/config';
 import {
   Body,
   Controller,
@@ -76,7 +78,21 @@ export class FinancialController {
     private readonly payouts: FinancialPayoutService,
     private readonly payoutWorker: FinancialPayoutWorker,
     private readonly receipts: FinancialReceiptService,
+    private readonly payoutProvider: FlutterwaveV4PayoutAdapter,
+    private readonly config: ConfigService,
   ) {}
+
+  @Public()
+  @Get('availability')
+  availability() {
+    return {
+      donationsConfigured: Boolean(
+        this.config.get<string>('DPO_COMPANY_TOKEN')?.trim(),
+      ),
+      payoutsConfigured: this.payoutProvider.configured(),
+      payoutEnvironment: this.payoutProvider.environment(),
+    };
+  }
 
   @Post('payment-intents')
   createIntent(

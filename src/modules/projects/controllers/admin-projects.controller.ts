@@ -1,3 +1,5 @@
+import { CurrentUser } from '../../../common/decorators/current-user.decorator';
+import { ReviewCharityMilestoneDto } from '../dto/charity-milestone-review.dto';
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { ApiTags } from '../../../common/swagger.decorators';
 import { Permissions } from '../../../common/decorators/permissions.decorator';
@@ -12,7 +14,25 @@ import { RequestAttachmentDto } from '../dto/request-attachment.dto';
 @ApiTags('Admin Projects')
 @Controller('admin/projects')
 export class AdminProjectsController {
-  constructor(private readonly projectsService: ProjectsService) { }
+  constructor(private readonly projectsService: ProjectsService) {}
+
+  @RoleMetadataOr(UserRole.ADMIN, UserRole.APPROVER)
+  @Permissions(Permission.APPROVE_PROJECTS)
+  @Post(':id/milestones/:milestoneId/decision')
+  reviewCharityMilestone(
+    @Param('id') id: string,
+    @Param('milestoneId') milestoneId: string,
+    @CurrentUser('sub') reviewerId: string,
+    @Body() dto: ReviewCharityMilestoneDto,
+  ) {
+    return this.projectsService.reviewCharityMilestone(
+      id,
+      milestoneId,
+      reviewerId,
+      dto.decision,
+      dto.reason,
+    );
+  }
 
   @RoleMetadataOr(UserRole.ADMIN, UserRole.APPROVER)
   @Permissions(Permission.REVIEW_PROJECTS)

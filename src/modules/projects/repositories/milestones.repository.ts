@@ -1,3 +1,4 @@
+import { MilestoneStatus } from '../../../common/enums/milestone-status.enum';
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -20,6 +21,53 @@ export class MilestonesRepository {
         projectId,
       })),
     );
+  }
+
+  submitForReview(
+    projectId: string,
+    milestoneId: string,
+    proofLinks: string[],
+  ) {
+    return this.milestoneModel
+      .findOneAndUpdate(
+        {
+          _id: milestoneId,
+          projectId,
+          status: { $in: [MilestoneStatus.PLANNED, MilestoneStatus.REJECTED] },
+        },
+        {
+          $set: {
+            proofLinks,
+            status: MilestoneStatus.IN_REVIEW,
+            submittedAt: new Date(),
+          },
+        },
+        { new: true },
+      )
+      .exec();
+  }
+
+  review(
+    projectId: string,
+    milestoneId: string,
+    decision: MilestoneStatus,
+    reviewedBy: string,
+    reviewReason: string,
+  ) {
+    return this.milestoneModel
+      .findOneAndUpdate(
+        { _id: milestoneId, projectId, status: MilestoneStatus.IN_REVIEW },
+        {
+          $set: {
+            status: decision,
+            reviewedBy,
+            reviewReason,
+            reviewedAt: new Date(),
+          },
+        },
+        { new: true },
+      )
+      .exec();
   }
 
   deleteByProject(projectId: string) {

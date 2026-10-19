@@ -1,3 +1,4 @@
+import { FlutterwaveV4AuthService } from './flutterwave-v4-auth.service';
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
@@ -14,7 +15,31 @@ export class FlutterwaveV4PayoutAdapter {
   constructor(
     private readonly config: ConfigService,
     private readonly http: HttpService,
+    private readonly auth: FlutterwaveV4AuthService,
   ) {}
+  private useV3(): boolean {
+    return this.config.get<string>('FLUTTERWAVE_PAYOUT_API_VERSION') === '3';
+  }
+  environment(): 'test' | 'live' | 'unknown' {
+    if (!this.useV3())
+      return this.baseUrl() === 'https://developersandbox-api.flutterwave.com'
+        ? 'test'
+        : 'unknown';
+    const key = this.config.get<string>('FLUTTERWAVE_SECRET_KEY')?.trim() || '';
+    return key.startsWith('FLWSECK_TEST-')
+      ? 'test'
+      : key.startsWith('FLWSECK-')
+        ? 'live'
+        : 'unknown';
+  }
+  configured(): boolean {
+    return this.useV3()
+      ? Boolean(this.config.get<string>('FLUTTERWAVE_SECRET_KEY')?.trim())
+      : Boolean(
+          this.config.get<string>('FLUTTERWAVE_V4_CLIENT_ID')?.trim() &&
+            this.config.get<string>('FLUTTERWAVE_V4_CLIENT_SECRET')?.trim(),
+        );
+  }
   async createRecipient(input: {
     type: 'bank' | 'mobile_money';
     accountNumber: string;
@@ -22,6 +47,31 @@ export class FlutterwaveV4PayoutAdapter {
     accountName?: string;
     idempotencyKey: string;
   }) {
+    if (this.useV3()) {
+      const result = await this.post(
+        '/beneficiaries',
+        {
+          account_bank: input.bankOrNetwork,
+          account_number: input.accountNumber,
+          beneficiary_name: input.accountName,
+          currency: 'UGX',
+        },
+        input.idempotencyKey,
+      );
+      const id = this.scalar(result.id);
+      if (!/^\d+$/.test(id))
+        throw new ServiceUnavailableException(
+          'Flutterwave returned no beneficiary identifier',
+        );
+      return {
+        id,
+        metadata: {
+          network: input.bankOrNetwork,
+          status: 'ACTIVE',
+          apiVersion: '3',
+        },
+      };
+    }
     const result = await this.post(
       '/transfers/recipients',
       input.type === 'bank'
@@ -64,6 +114,53 @@ export class FlutterwaveV4PayoutAdapter {
     narration: string;
     idempotencyKey: string;
   }) {
+    if (this.useV3()) {
+      if (
+        !/^\d+$/.test(input.recipientId) ||
+        input.currency !== 'UGX' ||
+        input.amountMinor <= 0n ||
+        input.amountMinor > BigInt(Number.MAX_SAFE_INTEGER)
+      )
+        throw new ServiceUnavailableException(
+          'Payout destination or amount is invalid for the configured provider',
+        );
+      const recipientResponse = await firstValueFrom(
+        this.http.get(
+          `${this.baseUrl()}/beneficiaries/${encodeURIComponent(input.recipientId)}`,
+          { headers: await this.headers(), timeout: 15_000 },
+        ),
+      );
+      const recipient = this.data(recipientResponse.data);
+      const bank = this.scalar(recipient.bank_code ?? recipient.account_bank);
+      const number = this.scalar(recipient.account_number);
+      if (!bank || !number)
+        throw new ServiceUnavailableException(
+          'Flutterwave beneficiary details are incomplete',
+        );
+      const result = await this.post(
+        '/transfers',
+        {
+          beneficiary: Number(input.recipientId),
+          account_bank: bank,
+          account_number: number,
+          beneficiary_name: this.scalar(
+            recipient.full_name ?? recipient.beneficiary_name,
+          ),
+          amount: Number(input.amountMinor),
+          currency: 'UGX',
+          debit_currency: 'UGX',
+          reference: input.reference,
+          narration: input.narration,
+        },
+        input.idempotencyKey,
+      );
+      const id = this.scalar(result.id);
+      if (!/^\d+$/.test(id))
+        throw new ServiceUnavailableException(
+          'Flutterwave returned no transfer identifier',
+        );
+      return { id, status: this.status(this.scalar(result.status)) };
+    }
     const result = await this.post(
       '/transfers',
       {
@@ -91,7 +188,8 @@ export class FlutterwaveV4PayoutAdapter {
     try {
       const response = await firstValueFrom(
         this.http.get(`${this.baseUrl()}/transfers/${encodeURIComponent(id)}`, {
-          headers: this.headers(),
+          headers: await this.headers(),
+          timeout: 15_000,
         }),
       );
       const data = this.data(response.data);
@@ -124,7 +222,8 @@ export class FlutterwaveV4PayoutAdapter {
     try {
       const response = await firstValueFrom(
         this.http.post(`${this.baseUrl()}${path}`, body, {
-          headers: this.headers(idempotencyKey),
+          headers: await this.headers(idempotencyKey),
+          timeout: 15_000,
         }),
       );
       return this.data(response.data);
@@ -132,19 +231,22 @@ export class FlutterwaveV4PayoutAdapter {
       throw this.providerError(error);
     }
   }
-  private headers(idempotencyKey?: string) {
-    const key = this.config.get<string>('FLUTTERWAVE_SECRET_KEY')?.trim();
-    if (!key)
+  private async headers(idempotencyKey?: string) {
+    const token = this.useV3()
+      ? this.config.get<string>('FLUTTERWAVE_SECRET_KEY')?.trim()
+      : await this.auth.accessToken();
+    if (!token)
       throw new ServiceUnavailableException(
         'Flutterwave payout provider is not configured',
       );
     return {
-      Authorization: `Bearer ${key}`,
+      Authorization: `Bearer ${token}`,
       'X-Trace-Id': randomUUID(),
       ...(idempotencyKey ? { 'X-Idempotency-Key': idempotencyKey } : {}),
     };
   }
   private baseUrl() {
+    if (this.useV3()) return 'https://api.flutterwave.com/v3';
     return (
       this.config
         .get<string>('FLUTTERWAVE_V4_BASE_URL')

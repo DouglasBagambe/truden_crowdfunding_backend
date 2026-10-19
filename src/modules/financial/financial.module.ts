@@ -1,7 +1,8 @@
+import { FlutterwaveV4AuthService } from './providers/flutterwave-v4-auth.service';
+import { FinancialDatabaseModule } from './financial-database.module';
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { FinancialController } from './financial.controller';
-import { FinancialDatabase } from './financial.database';
 import { FinancialService } from './financial.service';
 import { DpoFinancialAdapter } from './providers/dpo-financial.adapter';
 import { FlutterwaveFinancialAdapter } from './providers/flutterwave-financial.adapter';
@@ -26,6 +27,7 @@ import { KeiboInvestmentReceiptService } from '../investments/services/keibo-inv
 
 @Module({
   imports: [
+    FinancialDatabaseModule,
     ProjectsModule,
     UsersModule,
     HttpModule,
@@ -35,10 +37,10 @@ import { KeiboInvestmentReceiptService } from '../investments/services/keibo-inv
   ],
   controllers: [FinancialController],
   providers: [
-    FinancialDatabase,
     FinancialService,
     FlutterwaveFinancialAdapter,
     FlutterwaveV4PayoutAdapter,
+    FlutterwaveV4AuthService,
     DpoFinancialAdapter,
     FinancialProjectionService,
     FinancialOutboxService,

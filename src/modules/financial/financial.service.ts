@@ -100,9 +100,14 @@ export class FinancialService {
         );
       agreementSnapshot = eligibility.agreementSnapshot;
     } else {
-      await this.projectsService.ensureProjectCanReceiveDonation(
-        input.projectId,
-      );
+      const project =
+        await this.projectsService.ensureProjectCanReceiveDonation(
+          input.projectId,
+        );
+      if (project?.currency && project.currency.toUpperCase() !== currency)
+        throw new BadRequestException(
+          'Intent currency must match the campaign',
+        );
     }
     if (!input.idempotencyKey || input.idempotencyKey.length > 200) {
       throw new BadRequestException('A valid Idempotency-Key is required');

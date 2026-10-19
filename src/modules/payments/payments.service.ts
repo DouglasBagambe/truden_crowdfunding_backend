@@ -236,6 +236,14 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       dto.projectId,
     );
     const currency = (dto.currency || 'UGX').toUpperCase();
+    if (
+      projectType === 'CHARITY' &&
+      project.currency &&
+      project.currency.toUpperCase() !== currency
+    )
+      throw new BadRequestException(
+        'Donation currency must match the campaign',
+      );
     if (projectType === 'CHARITY') {
       await this.projectsService.ensureProjectCanReceiveDonation(dto.projectId);
     } else {

@@ -1,3 +1,10 @@
+import { Optional } from '@nestjs/common';
+import {
+  CharityLedgerReadService,
+  charityMajorAmount,
+  type CharityLedgerTotal,
+} from './services/charity-ledger-read.service';
+import { investmentsEnabled } from '../../common/utils/product-features.util';
 import {
   BadRequestException,
   ConflictException,
@@ -89,6 +96,7 @@ export class ProjectsService {
     private readonly notifications: NotificationsService,
     @InjectModel(Investment.name)
     private readonly investmentModel: Model<InvestmentDocument>,
+    @Optional() private readonly charityLedger?: CharityLedgerReadService,
   ) {}
 
   async findByOnchainId(projectOnchainId: string) {
@@ -276,6 +284,13 @@ export class ProjectsService {
     const currentType = this.normalizeProjectType(
       this.readProjectType(project),
     );
+    if (
+      !investmentsEnabled(this.configService) &&
+      (currentType === ProjectType.ROI || dto.type === ProjectType.ROI)
+    )
+      throw new ForbiddenException(
+        'Investments are unavailable during the charity launch.',
+      );
     if (
       this.extractObjectIdString(project.creatorId, 'creatorId') !== creatorId
     ) {
@@ -482,7 +497,9 @@ export class ProjectsService {
     }
     const safeLimit = Math.max(1, Math.min(100, Number(limit) || 50));
 
-    // Fetch from CharityDonationsRepository
+    if (this.charityLedger)
+      return this.charityLedger.donors(projectId, safeLimit);
+    // Legacy read is retained for deployments without the ledger read provider.
     const items = await this.charityDonationsRepo.listByProject(
       projectId,
       safeLimit,
@@ -534,7 +551,14 @@ export class ProjectsService {
   }
 
   async listMyProjects(creatorId: string) {
-    return this.projectsRepo.findByCreator(creatorId);
+    const projects = await this.projectsRepo.findByCreator(creatorId);
+    return this.withLedgerProgress(
+      projects.filter(
+        (project) =>
+          investmentsEnabled(this.configService) ||
+          this.readProjectType(project) !== ProjectType.ROI,
+      ),
+    );
   }
 
   async listPublicProjects(query: QueryProjectsDto, userId?: string) {
@@ -589,8 +613,8 @@ export class ProjectsService {
       ),
       this.projectsRepo.count(filter),
     ]);
-    const projectsWithProgress = projects.map((proj) =>
-      this.stripCreatorEmail(this.withProgress(proj)),
+    const projectsWithProgress = (await this.withLedgerProgress(projects)).map(
+      (project) => this.stripCreatorEmail(project),
     );
     return { projects: projectsWithProgress, total, page, pageSize };
   }
@@ -648,15 +672,28 @@ export class ProjectsService {
   }
 
   async listAllProjectsForAdmin() {
-    return this.projectsRepo.query({}, 500, 0);
+    const projects = await this.projectsRepo.query(
+      investmentsEnabled(this.configService)
+        ? {}
+        : { projectType: ProjectType.CHARITY },
+      500,
+      0,
+    );
+    return this.withLedgerProgress(projects);
   }
 
   async listPendingProjects() {
-    return this.projectsRepo.query(
-      { status: ProjectStatus.PENDING_REVIEW },
+    const projects = await this.projectsRepo.query(
+      {
+        status: ProjectStatus.PENDING_REVIEW,
+        ...(!investmentsEnabled(this.configService)
+          ? { projectType: ProjectType.CHARITY }
+          : {}),
+      },
       100,
       0,
     );
+    return this.withLedgerProgress(projects);
   }
 
   async addVerificationLog(projectId: string, dto: CreateVerificationLogDto) {
@@ -692,6 +729,13 @@ export class ProjectsService {
     this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
+    if (
+      !investmentsEnabled(this.configService) &&
+      this.readProjectType(project) === ProjectType.ROI
+    )
+      throw new ForbiddenException(
+        'Investments are unavailable during the charity launch.',
+      );
     if (
       ![
         ProjectStatus.APPROVED,
@@ -905,7 +949,11 @@ export class ProjectsService {
       }
     }
 
-    return { project: this.withProgress(project, creatorData), milestones };
+    const [withProgress] = await this.withLedgerProgress(
+      [project],
+      creatorData,
+    );
+    return { project: withProgress, milestones };
   }
 
   async ensureProjectExists(projectId: string): Promise<ProjectDocument> {
@@ -918,6 +966,10 @@ export class ProjectsService {
   }
 
   async ensureProjectIsOpenForInvestment(projectId: string) {
+    if (!investmentsEnabled(this.configService))
+      throw new ForbiddenException(
+        'Investments are unavailable during the charity launch.',
+      );
     this.ensureValidObjectId(projectId);
     const project = await this.projectsRepo.findById(projectId);
     if (!project) {
@@ -1145,7 +1197,12 @@ export class ProjectsService {
 
   async prepareCreatorCampaign(projectId: string, userId: string) {
     const { params, project } = await this.campaignCreation(projectId, userId);
-    let prepared;
+    let prepared: {
+      to: string;
+      chainId: number;
+      account: string;
+      data: string;
+    };
     try {
       prepared = await this.campaignEscrow.prepareCampaign(params);
     } catch (error: unknown) {
@@ -1547,6 +1604,50 @@ export class ProjectsService {
 
   async getDonationsByUser(userId: string): Promise<InvestmentView[]> {
     this.ensureValidObjectId(userId);
+    if (this.charityLedger) {
+      const payments = await this.charityLedger.donationsByUser(userId);
+      const projectIds = [
+        ...new Set(payments.map((payment) => payment.project_id)),
+      ];
+      const projects = await Promise.all(
+        projectIds.map((id) => this.projectsRepo.findById(id)),
+      );
+      const byId = new Map(
+        projects
+          .filter(
+            (project) =>
+              project && this.readProjectType(project) === ProjectType.CHARITY,
+          )
+          .map((project) => [String(project!._id), project!]),
+      );
+      return payments.flatMap((payment) => {
+        const project = byId.get(payment.project_id);
+        if (!project) return [];
+        return [
+          {
+            id: payment.id,
+            projectId: payment.project_id,
+            investorId: userId,
+            amount: charityMajorAmount(payment.amount_minor, payment.currency),
+            currency: payment.currency,
+            status: InvestmentStatus.Active,
+            txHash: null,
+            createdAt: payment.created_at,
+            updatedAt: payment.updated_at,
+            project: {
+              id: payment.project_id,
+              title: project.name,
+              name: project.name,
+              category: project.category,
+              projectType: ProjectType.CHARITY,
+              type: ProjectType.CHARITY,
+              creatorId: String(project.creatorId),
+              imageUrl: project.imageUrl,
+            },
+          },
+        ];
+      });
+    }
     const donations = await this.charityDonationsRepo.findByUserId(
       new Types.ObjectId(userId),
     );
@@ -2062,6 +2163,47 @@ export class ProjectsService {
     }
   }
 
+  private async withLedgerProgress(
+    projects: ProjectDocument[],
+    creatorOverride?: {
+      _id: string;
+      firstName?: string;
+      lastName?: string;
+      email?: string;
+    },
+  ) {
+    const charityIds = projects
+      .filter(
+        (project) => this.readProjectType(project) === ProjectType.CHARITY,
+      )
+      .map((project) => String(project._id));
+    const totals = this.charityLedger
+      ? await this.charityLedger.totals(charityIds)
+      : [];
+    return projects.map((project) => {
+      const ledgerTotal = totals.find(
+        (total) =>
+          total.project_id === String(project._id) &&
+          total.currency === (project.currency || 'UGX'),
+      );
+      const isLedgerCharity =
+        this.charityLedger &&
+        this.readProjectType(project) === ProjectType.CHARITY;
+      return this.withProgress(
+        project,
+        creatorOverride,
+        isLedgerCharity
+          ? (ledgerTotal ?? {
+              project_id: String(project._id),
+              currency: project.currency || 'UGX',
+              amount_minor: '0',
+              backer_count: '0',
+            })
+          : undefined,
+      );
+    });
+  }
+
   private withProgress(
     project: ProjectDocument,
     creatorOverride?: {
@@ -2070,10 +2212,17 @@ export class ProjectsService {
       lastName?: string;
       email?: string;
     },
+    ledgerTotal?: CharityLedgerTotal,
   ) {
     const obj = project.toObject() as unknown as UnknownRecord;
     const target = project.targetAmount || 0;
-    const raised = project.raisedAmount || 0;
+    const raised = ledgerTotal
+      ? charityMajorAmount(ledgerTotal.amount_minor, ledgerTotal.currency)
+      : project.raisedAmount || 0;
+    if (ledgerTotal) {
+      obj.raisedAmount = raised;
+      obj.backerCount = Number(ledgerTotal.backer_count);
+    }
     const progressPct = target > 0 ? Math.min(100, (raised / target) * 100) : 0;
 
     // Use explicit creatorOverride first, then fall back to populated creatorId
@@ -2138,11 +2287,96 @@ export class ProjectsService {
     const project = await this.projectsRepo.findById(projectId);
     if (!project) throw new NotFoundException('Project not found');
     if (
+      !investmentsEnabled(this.configService) &&
+      this.readProjectType(project) === ProjectType.ROI
+    )
+      throw new NotFoundException('Project not found');
+    if (
       this.extractObjectIdString(project.creatorId, 'creatorId') !== ownerId
     ) {
       throw new ForbiddenException('You can only view your own project');
     }
     return this.getProjectWithMilestones(projectId);
+  }
+
+  private async charityMilestoneForReview(
+    projectId: string,
+    milestoneId: string,
+  ) {
+    this.ensureValidObjectId(projectId);
+    this.ensureValidObjectId(milestoneId);
+    const [project, milestone, schedule] = await Promise.all([
+      this.projectsRepo.findById(projectId),
+      this.milestonesRepo.findByIdForProject(projectId, milestoneId),
+      this.milestonesRepo.findByProject(projectId),
+    ]);
+    if (!project || !milestone)
+      throw new NotFoundException('Campaign milestone not found');
+    if (
+      this.readProjectType(project) !== ProjectType.CHARITY ||
+      project.status !== ProjectStatus.APPROVED
+    )
+      throw new BadRequestException('An approved charity campaign is required');
+    this.assertCharityMilestoneSchedule(schedule);
+    return { project, milestone };
+  }
+
+  async submitCharityMilestone(
+    projectId: string,
+    milestoneId: string,
+    creatorId: string,
+    proofLinks: string[],
+  ) {
+    const { project } = await this.charityMilestoneForReview(
+      projectId,
+      milestoneId,
+    );
+    if (
+      this.extractObjectIdString(project.creatorId, 'creatorId') !== creatorId
+    )
+      throw new ForbiddenException(
+        'Only the campaign creator can submit milestone evidence',
+      );
+    await this.ensureCreatorEligible(creatorId);
+    const updated = await this.milestonesRepo.submitForReview(
+      projectId,
+      milestoneId,
+      proofLinks,
+    );
+    if (!updated)
+      throw new ConflictException(
+        'Milestone is already under review or approved',
+      );
+    return updated;
+  }
+
+  async reviewCharityMilestone(
+    projectId: string,
+    milestoneId: string,
+    reviewerId: string,
+    decision: 'APPROVED' | 'REJECTED',
+    reason: string,
+  ) {
+    const { milestone } = await this.charityMilestoneForReview(
+      projectId,
+      milestoneId,
+    );
+    if (!milestone.proofLinks?.length)
+      throw new BadRequestException(
+        'Creator evidence is required before milestone review',
+      );
+    const updated = await this.milestonesRepo.review(
+      projectId,
+      milestoneId,
+      decision === 'APPROVED'
+        ? MilestoneStatus.APPROVED
+        : MilestoneStatus.REJECTED,
+      reviewerId,
+      reason.trim(),
+    );
+    if (!updated)
+      throw new ConflictException('Milestone must be awaiting review');
+    return updated;
   }
 
   async getCharityMilestoneReleaseEligibility(params: {

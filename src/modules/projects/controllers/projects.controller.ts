@@ -1,3 +1,4 @@
+import { SubmitCharityMilestoneDto } from '../dto/charity-milestone-review.dto';
 import { IsString, Matches } from 'class-validator';
 import type { Hash } from 'viem';
 import {
@@ -48,6 +49,11 @@ export class ProjectsController {
     @Body() dto: CreateProjectDto,
   ) {
     return this.projectsService.createProject(creatorId, dto);
+  }
+
+  @Get('donations/me')
+  getMyDonations(@CurrentUser('sub') userId: string) {
+    return this.projectsService.getDonationsByUser(userId);
   }
 
   @Get('me')
@@ -122,6 +128,22 @@ export class ProjectsController {
     @Body() dto: UpdateProjectDto,
   ) {
     return this.projectsService.updateProject(id, creatorId, dto);
+  }
+
+  @Post(':id/milestones/:milestoneId/submit')
+  @UseGuards(EmailVerifiedGuard)
+  submitCharityMilestone(
+    @Param('id') id: string,
+    @Param('milestoneId') milestoneId: string,
+    @CurrentUser('sub') creatorId: string,
+    @Body() dto: SubmitCharityMilestoneDto,
+  ) {
+    return this.projectsService.submitCharityMilestone(
+      id,
+      milestoneId,
+      creatorId,
+      dto.proofLinks,
+    );
   }
 
   @Post(':id/submit')

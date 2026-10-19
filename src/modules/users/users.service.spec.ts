@@ -11,7 +11,11 @@ describe('UsersService canonical profile capabilities', () => {
   const repository = { findById: jest.fn(), addRole: jest.fn() };
   const config = {
     get: jest.fn((key: string) =>
-      key === 'ROI_ALLOWED_USER_IDS' ? userId : undefined,
+      key === 'INVESTMENTS_ENABLED'
+        ? 'true'
+        : key === 'ROI_ALLOWED_USER_IDS'
+          ? userId
+          : undefined,
     ),
   } as unknown as ConfigService;
 

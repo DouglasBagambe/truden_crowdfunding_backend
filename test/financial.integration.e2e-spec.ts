@@ -1,3 +1,4 @@
+import { CharityLedgerReadService } from '../src/modules/projects/services/charity-ledger-read.service';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { createClient } from 'redis';
@@ -44,6 +45,7 @@ describe('financial PostgreSQL integration', () => {
     undefined as never,
   );
   const outbox = new FinancialOutboxService(database, config);
+  const charityReads = new CharityLedgerReadService(database);
   const redis = createClient({ url: redisUrl });
 
   beforeAll(async () => {
@@ -261,6 +263,22 @@ describe('financial PostgreSQL integration', () => {
       "SELECT SUM(credit_minor)::text AS credit FROM financial_postings WHERE account = 'liability:campaign_escrow:project-1:UGX'",
     );
     expect(escrow.rows[0].credit).toBe('9700');
+    const expectedTotal = [
+      {
+        project_id: 'project-1',
+        currency: 'UGX',
+        amount_minor: '9700',
+        backer_count: '1',
+      },
+    ];
+    expect(await charityReads.totals(['project-1'])).toEqual(expectedTotal);
+    expect(await charityReads.totals(['project-1'])).toEqual(expectedTotal);
+    expect(await charityReads.donationsByUser('user-1')).toHaveLength(1);
+    expect(await charityReads.donationsByUser('another-user')).toHaveLength(0);
+    expect(await charityReads.donors('project-1', 50)).toMatchObject([
+      { id: intent.id, donorName: 'Anonymous', amount: 10000, currency: 'UGX' },
+    ]);
+    expect(await charityReads.totals(['unknown-project'])).toEqual([]);
     expect(await outbox.publishNext()).toEqual({ published: true });
     const stream = await redis.xRange('keibo:financial-events', '-', '+');
     expect(stream.some((entry) => entry.message.outboxId)).toBe(true);
@@ -328,6 +346,8 @@ describe('financial PostgreSQL integration', () => {
     expect(await financial.processNextInboxEvent()).toEqual({
       processed: true,
     });
+    expect(await charityReads.totals(['project-ordering'])).toEqual([]);
+    expect(await charityReads.donationsByUser('user-ordering')).toEqual([]);
 
     const state = await database.query<{ state: string }>(
       'SELECT state FROM financial_payment_intents WHERE id = $1',

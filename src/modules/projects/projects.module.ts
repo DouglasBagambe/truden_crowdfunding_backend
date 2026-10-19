@@ -1,3 +1,5 @@
+import { FinancialDatabaseModule } from '../financial/financial-database.module';
+import { CharityLedgerReadService } from './services/charity-ledger-read.service';
 import {
   SavedProject,
   SavedProjectSchema,
@@ -54,6 +56,7 @@ import {
 
 @Module({
   imports: [
+    FinancialDatabaseModule,
     UsersModule,
     NotificationsModule,
     MongooseModule.forFeature([
@@ -88,6 +91,7 @@ import {
     AdminAttachmentsController,
   ],
   providers: [
+    CharityLedgerReadService,
     SavedProjectsService,
     ProjectsService,
     ProjectsRepository,
