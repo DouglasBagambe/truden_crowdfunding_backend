@@ -133,7 +133,7 @@ export class DpoService {
         CompanyRef: companyRef || `KEIBO-${projectId}-${Date.now()}`,
         RedirectURL: redirectUrl,
         BackURL: backUrl,
-        CompanyRefUnique: 0,
+        CompanyRefUnique: 1,
         PTL: 60, // 60 minute payment time limit
         PaymentDate: paymentDate,
         Description: description,

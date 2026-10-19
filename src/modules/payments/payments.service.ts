@@ -1731,6 +1731,17 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
    * Initialize a DPO payment (step 1: get transaction token).
    * Returns the token plus charge instructions when method=mobile_money.
    */
+  private dpoRedirectUrl(token: string): string {
+    const configured =
+      this.configService.get<string>('DPO_PAYMENT_URL')?.trim() ||
+      'https://secure.3gdirectpay.com/payv3.php';
+    const url = new URL(configured);
+    if (url.protocol !== 'https:')
+      throw new BadRequestException('DPO checkout URL must use HTTPS');
+    url.searchParams.set('ID', token);
+    return url.toString();
+  }
+
   async initializeDPOPayment(
     dto: {
       projectId: string;
@@ -1827,8 +1838,22 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     // Use separate endpoint so we can handle both cases cleanly.
     const backUrl = `${backendUrl}/api/payments/dpo/webhook`;
 
-    const txRef = `DPO-${Date.now()}-${randomUUID()}`;
-    const companyRef = `KEIBO-${dto.projectId}-${Date.now()}`;
+    // One stable merchant reference per ledger intent prevents a retry from
+    // producing a second payable provider session for the same donation.
+    const txRef = `DPO-${dto.paymentIntentId}`;
+    const companyRef = `KEIBO-${dto.paymentIntentId}`;
+    this.dpoRedirectUrl('configuration-check');
+    const existing = await this.paymentTransactionModel.findOne({
+      flutterwaveReference: txRef,
+    });
+    if (existing?.dpoToken) {
+      return {
+        token: existing.dpoToken,
+        redirectUrl: this.dpoRedirectUrl(existing.dpoToken),
+        status: existing.status,
+        quote,
+      };
+    }
     const token = (
       await this.dpoService.createToken(
         dto.projectId,
@@ -1887,7 +1912,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     // Return the DPO hosted payment page URL — frontend redirects user here
     return {
       token,
-      redirectUrl: `https://secure.3gdirectpay.com/payv3.php?ID=${token}`,
+      redirectUrl: this.dpoRedirectUrl(token),
       status: PaymentStatus.Pending,
       quote,
     };
