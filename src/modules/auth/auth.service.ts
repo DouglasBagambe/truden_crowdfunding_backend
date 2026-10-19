@@ -1,3 +1,4 @@
+import { emailDeliveryFailure } from '../../common/utils/email-delivery-error.util';
 import { KycService } from '../kyc/kyc.service';
 import {
   Injectable,
@@ -98,6 +99,11 @@ export class AuthService {
 
   async register(registerDto: RegisterDto, ipAddress?: string) {
     const { email, password, firstName, lastName, role } = registerDto;
+    if (role && role !== UserRole.INVESTOR) {
+      throw new BadRequestException(
+        'Account roles cannot be selected during public registration',
+      );
+    }
     this.enforceRateLimit('register', email, 3, 10 * 60 * 1000);
     this.enforceRateLimitForIp('register', ipAddress, 20, 10 * 60 * 1000);
     const shouldBypassEmailVerification =
@@ -127,7 +133,7 @@ export class AuthService {
       emailVerificationSentAt: undefined,
       emailVerificationSendCount: 0,
       emailVerificationRateLimitResetAt: undefined,
-      roles: role ? [role] : [UserRole.INVESTOR],
+      roles: [UserRole.INVESTOR],
       isActive: true,
       isBlocked: false,
       profile: {
@@ -1518,8 +1524,10 @@ export class AuthService {
       });
       this.logger.debug('Verification email sent');
       return true;
-    } catch {
-      this.logger.warn('Verification email delivery failed');
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Verification email delivery failed (${emailDeliveryFailure(error)}; configured=${Boolean(apiKey && from)})`,
+      );
       if (strictDelivery) {
         throw new BadRequestException(
           'Failed to send verification email. Please try again.',
@@ -1648,8 +1656,7 @@ export class AuthService {
     user: UserDocument,
     countField: 'emailVerificationSendCount' | 'passwordResetSendCount',
     resetField:
-      | 'emailVerificationRateLimitResetAt'
-      | 'passwordResetRateLimitResetAt',
+      'emailVerificationRateLimitResetAt' | 'passwordResetRateLimitResetAt',
     limit: number,
     windowMs: number,
   ) {
@@ -1794,7 +1801,7 @@ export class AuthService {
       this.configService.get<string>('NODE_ENV') || process.env.NODE_ENV;
     const hasProviderConfiguration = Boolean(
       this.configService.get<string>('SENDGRID_API_KEY') &&
-        this.configService.get<string>('EMAIL_FROM'),
+      this.configService.get<string>('EMAIL_FROM'),
     );
     if (nodeEnv !== 'test' && !hasProviderConfiguration) {
       throw new BadRequestException(

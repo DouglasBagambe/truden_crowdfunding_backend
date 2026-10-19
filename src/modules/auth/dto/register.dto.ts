@@ -2,30 +2,32 @@ import {
   IsEmail,
   IsString,
   MinLength,
-  IsEnum,
+  IsIn,
   Matches,
   IsOptional,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { UserRole } from '../../../common/enums/role.enum';
-import { ApiProperty, ApiPropertyOptional } from '../../../common/swagger.decorators';
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+} from '../../../common/swagger.decorators';
 
 export class RegisterDto {
   @ApiProperty()
   @IsEmail()
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
   email!: string;
 
   @ApiProperty()
   @IsString()
   @MinLength(8)
-  @Matches(
-    /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s]).{8,}$/,
-    {
-      message:
-        'Password must be at least 8 characters and include upper, lower, number, and special character',
-    },
-  )
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s]).{8,}$/, {
+    message:
+      'Password must be at least 8 characters and include upper, lower, number, and special character',
+  })
   password!: string;
 
   @ApiPropertyOptional()
@@ -38,8 +40,8 @@ export class RegisterDto {
   @IsOptional()
   lastName?: string;
 
-  @ApiPropertyOptional({ enum: UserRole })
-  @IsEnum(UserRole)
+  @ApiPropertyOptional({ enum: [UserRole.INVESTOR] })
+  @IsIn([UserRole.INVESTOR])
   @IsOptional()
   role?: UserRole;
 }

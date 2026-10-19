@@ -220,6 +220,16 @@ describe('AuthService email verification (codes)', () => {
     } as Record<string, unknown>);
   });
 
+  it.each(Object.values(UserRole).filter((role) => role !== UserRole.INVESTOR))(
+    'rejects public registration selecting %s before creating a user',
+    async (role) => {
+      await expect(
+        service.register({ email, password: 'TestPassword9!', role }),
+      ).rejects.toThrow('Account roles cannot be selected');
+      expect(userModel.create).not.toHaveBeenCalled();
+    },
+  );
+
   it('fails closed when first-time verification email delivery is unavailable', async () => {
     configService.get.mockImplementation(((key: string) =>
       key === 'NODE_ENV' ? 'development' : undefined) as never);
