@@ -376,7 +376,7 @@ export class FinancialService {
     });
   }
 
-  async processNextInboxEvent(): Promise<{
+  async processNextInboxEvent(event?: Pick<ProviderEvent, 'provider' | 'providerEventId'>): Promise<{
     processed: boolean;
     deadLettered?: boolean;
   }> {
@@ -387,7 +387,9 @@ export class FinancialService {
         payload: ProviderEvent;
       }>(
         `SELECT id, attempts, payload FROM financial_inbox WHERE status = 'pending' AND next_attempt_at <= now()
+         AND ($1::text IS NULL OR (provider = $1 AND provider_event_id = $2))
          ORDER BY received_at FOR UPDATE SKIP LOCKED LIMIT 1`,
+        [event?.provider ?? null, event?.providerEventId ?? null],
       );
       if (!next.rowCount) return { processed: false };
       const item = next.rows[0];

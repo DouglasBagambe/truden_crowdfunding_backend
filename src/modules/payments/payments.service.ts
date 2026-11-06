@@ -60,6 +60,8 @@ import type { UserDocument } from '../users/schemas/user.schema';
 export class PaymentsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PaymentsService.name);
   private payoutReconciliationTimer?: NodeJS.Timeout;
+  private dpoReconciliationTimer?: NodeJS.Timeout;
+  private reconcilingDpo = false;
 
   constructor(
     @InjectModel(PaymentTransaction.name)
@@ -447,9 +449,62 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     this.payoutReconciliationTimer = setInterval(() => {
       void this.reconcileProcessingPayouts();
     }, 60_000);
+    if (this.dpoFinancialAdapter.isConfigured()) {
+      this.dpoReconciliationTimer = setInterval(() => {
+        void this.reconcilePendingDpoPayments();
+      }, 60_000);
+      this.dpoReconciliationTimer.unref();
+    }
+  }
+
+  private async reconcilePendingDpoPayments() {
+    if (this.reconcilingDpo) return;
+    this.reconcilingDpo = true;
+    try {
+      const now = new Date();
+      const recoveryWindowMs = 7 * 24 * 60 * 60 * 1000;
+      for (let count = 0; count < 10; count += 1) {
+        const transaction = await this.paymentTransactionModel.findOneAndUpdate(
+          {
+            provider: PaymentProvider.DPO,
+            status: PaymentStatus.Pending,
+            dpoToken: { $type: 'string', $ne: '' },
+            'metadata.paymentIntentId': { $type: 'string', $ne: '' },
+            createdAt: {
+              $gte: new Date(now.getTime() - recoveryWindowMs),
+              $lte: new Date(now.getTime() - 60_000),
+            },
+            $or: [
+              { dpoVerifyAfter: { $exists: false } },
+              { dpoVerifyAfter: { $lte: now } },
+            ],
+          },
+          { $set: { dpoVerifyAfter: new Date(now.getTime() + 15 * 60_000) } },
+          { sort: { dpoVerifyAfter: 1, createdAt: 1 }, timestamps: false },
+        );
+        if (!transaction?.dpoToken) break;
+        try {
+          const result = await this.verifyDPOPayment(transaction.dpoToken);
+          if (['901', '904'].includes(result.verify.status)) {
+            await this.paymentTransactionModel.updateOne(
+              { _id: transaction._id, status: PaymentStatus.Pending },
+              { $set: { dpoVerifyAfter: new Date(now.getTime() + recoveryWindowMs) } },
+              { timestamps: false },
+            );
+          }
+        } catch {
+          this.logger.warn(`Could not reconcile DPO checkout ${transaction.id}`);
+        }
+      }
+    } catch {
+      this.logger.error('DPO checkout reconciliation could not query pending payments');
+    } finally {
+      this.reconcilingDpo = false;
+    }
   }
 
   onModuleDestroy() {
+    if (this.dpoReconciliationTimer) clearInterval(this.dpoReconciliationTimer);
     if (this.payoutReconciliationTimer) {
       clearInterval(this.payoutReconciliationTimer);
       this.payoutReconciliationTimer = undefined;
@@ -1936,9 +1991,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     }
 
     const verify = await this.dpoService.verifyToken(token);
-    this.logger.log(
-      `DPO payment verification completed with provider status ${verify.status}`,
-    );
+
     const rawPaymentIntentId = (
       transaction.metadata as Record<string, unknown> | undefined
     )?.paymentIntentId;
@@ -1950,13 +2003,13 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       );
     }
     if (verify.status === '000') {
-      await this.financialService.acceptProviderEvent(
-        this.dpoFinancialAdapter.fromVerifiedToken({
-          token,
-          paymentIntentId,
-          evidence: verify,
-        }),
-      );
+      const event = this.dpoFinancialAdapter.fromVerifiedToken({
+        token,
+        paymentIntentId,
+        evidence: verify,
+      });
+      await this.financialService.acceptProviderEvent(event);
+      await this.financialService.processNextInboxEvent(event);
     }
     const contributorId = transaction.userId?.toString();
     if (!contributorId) {
@@ -1966,6 +2019,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       paymentIntentId,
       contributorId,
     );
+    if (['captured', 'settled'].includes(intent.state)) {
+      await this.markTransactionSuccessful(String(transaction._id));
+    }
     return {
       status: intent.state,
       paymentIntentId,
@@ -1981,8 +2037,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
    * Handle DPO server-to-server webhook / BackURL callback.
    */
   async handleDPOWebhook(payload: Record<string, string>) {
-    const token = payload.TransactionToken ?? payload.token;
-    if (!token) return { received: true };
+    const token = [payload.TransactionToken, payload.TransToken, payload.ID, payload.token]
+      .find((value) => typeof value === 'string' && value.trim())?.trim();
+    if (!token) throw new BadRequestException('DPO callback is missing its transaction token');
     const result = await this.verifyDPOPayment(token);
     return { received: true, status: result.status };
   }

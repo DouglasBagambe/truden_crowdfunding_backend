@@ -232,49 +232,21 @@ export class PaymentsController {
   @ApiOperation({ summary: 'DPO BackURL / ReturnURL redirect handler (GET)' })
   async handleDPOWebhookGet(@Query() query: Record<string, string>) {
     const frontendUrl = this.getFrontendUrl();
-
-    // DPO sends the token as 'TransactionToken' in query string on BackURL calls
-    const token = query.TransactionToken || query.token || query.ID;
-    const projectId =
-      query.CompanyRef?.split('-')?.[1] || query.projectId || '';
-
-    try {
-      if (token) {
-        // Try to verify the payment — DPO may call BackURL for both success and cancel
-        const result = await this.paymentsService.verifyDPOPayment(token);
-
-        const status = String(result.status).toLowerCase();
-        if (['captured', 'settled', 'released'].includes(status)) {
-          // Payment confirmed — send user to success page with token for frontend verify
-          return {
-            url: `${frontendUrl}/payment/result?status=success&projectId=${projectId}`,
-          };
-        } else if (status === 'cancelled') {
-          return {
-            url: `${frontendUrl}/payment/result?status=cancelled&projectId=${projectId}`,
-          };
-        } else if (status === 'failed') {
-          return {
-            url: `${frontendUrl}/payment/result?status=failed&projectId=${projectId}`,
-          };
-        }
-        // Pending/processing/provider uncertainty should stay pending, never hard-fail here.
-        return {
-          url: `${frontendUrl}/payment/result?status=pending&projectId=${projectId}`,
-        };
-      }
-    } catch (err) {
-      this.logger.error('Error in DPO GET Webhook handler:', err);
-      if (token) {
-        return {
-          url: `${frontendUrl}/payment/result?status=pending&projectId=${projectId}`,
-        };
+    const token = [query.TransactionToken, query.TransToken, query.ID, query.token]
+      .find((value) => typeof value === 'string' && value.trim())?.trim();
+    const projectId = [query.projectId, typeof query.CompanyRef === 'string' ? query.CompanyRef.split('-')[1] : undefined]
+      .find((value) => typeof value === 'string' && /^[a-f\d]{24}$/i.test(value));
+    const params = new URLSearchParams({ status: token ? 'pending' : 'cancelled' });
+    if (projectId) params.set('projectId', projectId);
+    if (token) {
+      params.set('TransactionToken', token);
+      try {
+        await this.paymentsService.verifyDPOPayment(token);
+      } catch {
+        this.logger.warn('DPO return verification is still pending');
       }
     }
-
-    return {
-      url: `${frontendUrl}/payment/result?status=cancelled&projectId=${projectId}`,
-    };
+    return { url: `${frontendUrl}/payment/result?${params}` };
   }
 
   @Get('transaction/:id')

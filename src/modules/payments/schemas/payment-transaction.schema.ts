@@ -86,6 +86,9 @@ export class PaymentTransaction {
     @Prop({ type: String, index: true })
     dpoToken?: string;
 
+    @Prop({ type: Date })
+    dpoVerifyAfter?: Date;
+
     // Card specific
     @Prop({ type: String })
     cardLast4?: string;
