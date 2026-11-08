@@ -11,6 +11,7 @@ const payout = (state = 'pending') => ({
   idempotency_key: 'stable-key',
   provider_recipient_id: 'recipient-1',
   destination_status: 'verified',
+  destination_environment: 'live',
   destination_creator: 'creator-1',
   creator_id: 'creator-1',
   release_creator: 'creator-1',
@@ -89,6 +90,7 @@ describe('FinancialPayoutWorker', () => {
   );
   it.each([
     'destination_status',
+    'destination_environment',
     'destination_creator',
     'release_creator',
     'amount_minor',

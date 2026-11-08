@@ -18,6 +18,7 @@ type PayoutRow = {
   state: string;
   provider_transfer_id: string | null;
   destination_status: string;
+  destination_environment: string | null;
   destination_creator: string;
   creator_id: string;
   release_creator: string;
@@ -45,7 +46,7 @@ export class FinancialPayoutWorker {
   async dispatch(payload: Record<string, unknown>) {
     const payoutId = this.payoutId(payload);
     const row = await this.database.query<PayoutRow>(
-      `SELECT p.*,d.provider_recipient_id,d.status AS destination_status,d.creator_id AS destination_creator,
+      `SELECT p.*,d.provider_recipient_id,d.status AS destination_status,d.provider_metadata->>'environment' AS destination_environment,d.creator_id AS destination_creator,
         CASE WHEN p.wallet_withdrawal THEN w.release_creator ELSE r.creator_id END AS release_creator,
         CASE WHEN p.wallet_withdrawal THEN w.owner_proceeds_minor ELSE r.owner_proceeds_minor::text END AS owner_proceeds_minor,
         CASE WHEN p.wallet_withdrawal THEN w.release_currency ELSE r.currency END AS release_currency
@@ -69,6 +70,7 @@ export class FinancialPayoutWorker {
       return;
     if (
       payout.destination_status !== 'verified' ||
+      payout.destination_environment !== 'live' ||
       payout.destination_creator !== payout.creator_id ||
       payout.release_creator !== payout.creator_id ||
       payout.amount_minor !== payout.owner_proceeds_minor ||

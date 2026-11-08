@@ -50,7 +50,10 @@ export class FinancialPayoutService {
         recipient.id,
         input.type,
         masked,
-        JSON.stringify(recipient.metadata),
+        JSON.stringify({
+          ...recipient.metadata,
+          environment: this.flutterwave.environment(),
+        }),
       ],
     );
     return {
@@ -126,7 +129,7 @@ export class FinancialPayoutService {
       if (exists.rowCount) return { ...exists.rows[0], replayed: true };
       this.flutterwave.assertLivePayoutReady();
       const dest = await client.query(
-        `SELECT id FROM financial_payout_destinations WHERE id=$1 AND creator_id=$2 AND status='verified' AND disabled_at IS NULL FOR UPDATE`,
+        `SELECT id FROM financial_payout_destinations WHERE id=$1 AND creator_id=$2 AND status='verified' AND disabled_at IS NULL AND provider_metadata->>'environment'='live' FOR UPDATE`,
         [input.destinationId, input.creatorId],
       );
       if (!dest.rowCount)
@@ -248,7 +251,7 @@ export class FinancialPayoutService {
       this.flutterwave.assertLivePayoutReady();
       const dest = await client.query<{ currency: string }>(
         `SELECT currency FROM financial_payout_destinations
-        WHERE id=$1 AND creator_id=$2 AND status='verified' AND disabled_at IS NULL FOR UPDATE`,
+        WHERE id=$1 AND creator_id=$2 AND status='verified' AND disabled_at IS NULL AND provider_metadata->>'environment'='live' FOR UPDATE`,
         [input.destinationId, input.creatorId],
       );
       if (!dest.rowCount)

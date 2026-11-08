@@ -134,8 +134,8 @@ describe('financial PostgreSQL integration', () => {
       provider as never,
     );
     const dest = await database.query<{ id: string }>(
-      `INSERT INTO financial_payout_destinations(creator_id,provider,provider_recipient_id,destination_type,currency,masked_display,status,verified_at)
-      VALUES('wallet-creator','flutterwave',$1,'mobile_money','UGX','Test only','verified',now()) RETURNING id`,
+      `INSERT INTO financial_payout_destinations(creator_id,provider,provider_recipient_id,destination_type,currency,masked_display,provider_metadata,status,verified_at)
+      VALUES('wallet-creator','flutterwave',$1,'mobile_money','UGX','Test only','{"environment":"live"}'::jsonb,'verified',now()) RETURNING id`,
       [randomUUID()],
     );
     const request = {
