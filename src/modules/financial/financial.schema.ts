@@ -39,6 +39,17 @@ CREATE TABLE IF NOT EXISTS financial_reconciliations (
   provider_total_minor bigint NOT NULL, ledger_total_minor bigint NOT NULL, difference_minor bigint NOT NULL,
   evidence_reference text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS financial_provider_settlements (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  payment_intent_id uuid NOT NULL UNIQUE REFERENCES financial_payment_intents(id),
+  provider text NOT NULL CHECK(provider = 'dpo'),
+  currency varchar(16) NOT NULL,
+  net_amount_minor bigint NOT NULL CHECK(net_amount_minor > 0),
+  evidence_reference text NOT NULL,
+  settled_at timestamptz NOT NULL,
+  recorded_by text NOT NULL,
+  recorded_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS financial_campaign_releases (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id text NOT NULL, milestone_id text NOT NULL,
   creator_id text NOT NULL, requested_by text NOT NULL, currency char(3) NOT NULL,

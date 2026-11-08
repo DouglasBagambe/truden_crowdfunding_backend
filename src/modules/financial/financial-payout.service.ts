@@ -124,6 +124,7 @@ export class FinancialPayoutService {
         [input.releaseId],
       );
       if (exists.rowCount) return { ...exists.rows[0], replayed: true };
+      this.flutterwave.assertLivePayoutReady();
       const dest = await client.query(
         `SELECT id FROM financial_payout_destinations WHERE id=$1 AND creator_id=$2 AND status='verified' AND disabled_at IS NULL FOR UPDATE`,
         [input.destinationId, input.creatorId],
@@ -244,6 +245,7 @@ export class FinancialPayoutService {
           replayed: true,
         };
       }
+      this.flutterwave.assertLivePayoutReady();
       const dest = await client.query<{ currency: string }>(
         `SELECT currency FROM financial_payout_destinations
         WHERE id=$1 AND creator_id=$2 AND status='verified' AND disabled_at IS NULL FOR UPDATE`,

@@ -30,6 +30,7 @@ const setup = (row = payout()) => {
     ),
   };
   const provider = {
+    assertLivePayoutReady: jest.fn(),
     createTransfer: jest
       .fn()
       .mockResolvedValue({ id: 'transfer-1', status: 'PENDING' }),

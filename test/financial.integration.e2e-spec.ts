@@ -122,6 +122,7 @@ describe('financial PostgreSQL integration', () => {
       }),
     };
     const provider = {
+      assertLivePayoutReady: jest.fn(),
       createTransfer: jest.fn().mockResolvedValue({
         id: 'wallet-provider-transfer',
         status: 'PENDING',
@@ -374,6 +375,69 @@ describe('financial PostgreSQL integration', () => {
     expect(
       (await onchain.getPaymentIntent(other.id, input.contributorId)).state,
     ).toBe('pending');
+  });
+
+  it('reconciles a DPO donation into transferable funds exactly once', async () => {
+    const projectId = 'dpo-settlement-ready';
+    const intent = await financial.createPaymentIntent({
+      projectId,
+      contributorId: 'dpo-donor',
+      amountMinor: 516n,
+      currency: 'UGX',
+      idempotencyKey: 'dpo-settlement-ready',
+      correlationId: randomUUID(),
+    });
+    await financial.acceptProviderEvent({
+      provider: 'dpo',
+      providerEventId: 'captured-dpo-ready',
+      eventType: 'captured',
+      paymentIntentId: intent.id,
+      amountMinor: 516n,
+      currency: 'UGX',
+      providerFeeMinor: 16n,
+      receivedAt: new Date(),
+    });
+    await financial.processNextInboxEvent({
+      provider: 'dpo',
+      providerEventId: 'captured-dpo-ready',
+    });
+    const transfer = {
+      projectId,
+      requesterId: 'wallet-creator',
+      idempotencyKey: 'dpo-wallet-ready',
+      correlationId: randomUUID(),
+    };
+    await expect(financial.transferCharityToWallet(transfer)).rejects.toThrow(
+      'No settled campaign funds',
+    );
+    const settlement = {
+      paymentIntentId: intent.id,
+      currency: 'UGX',
+      netAmountMinor: '500',
+      evidenceReference: 'verified-bank-record-dpo-ready',
+      settledAt: new Date().toISOString(),
+      recordedBy: 'admin-1',
+    };
+    await expect(
+      financial.recordDpoSettlement(settlement),
+    ).resolves.toMatchObject({ replayed: false, state: 'settled' });
+    await expect(
+      financial.recordDpoSettlement(settlement),
+    ).resolves.toMatchObject({ replayed: true });
+    const release = await financial.transferCharityToWallet(transfer);
+    expect(release).toMatchObject({
+      grossAmountMinor: '500',
+      ownerProceedsMinor: '475',
+      successFeeMinor: '25',
+    });
+    await expect(
+      financial.transferCharityToWallet(transfer),
+    ).resolves.toMatchObject({ replayed: true });
+    const history = await database.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM financial_provider_settlements WHERE payment_intent_id=$1',
+      [intent.id],
+    );
+    expect(history.rows[0].count).toBe('1');
   });
 
   afterAll(async () => {

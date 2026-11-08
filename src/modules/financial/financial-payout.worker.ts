@@ -62,7 +62,11 @@ export class FinancialPayoutWorker {
     if (!row.rowCount)
       throw Object.assign(new Error('Payout not found'), { code: 'NOT_FOUND' });
     const payout = row.rows[0];
-    if (payout.state === 'paid' || payout.provider_transfer_id) return;
+    if (
+      ['paid', 'failed'].includes(payout.state) ||
+      payout.provider_transfer_id
+    )
+      return;
     if (
       payout.destination_status !== 'verified' ||
       payout.destination_creator !== payout.creator_id ||
@@ -73,6 +77,7 @@ export class FinancialPayoutWorker {
       throw Object.assign(new Error('Payout authority validation failed'), {
         code: 'PAYOUT_VALIDATION_FAILED',
       });
+    this.provider.assertLivePayoutReady();
     const transfer = await this.provider.createTransfer({
       recipientId: payout.provider_recipient_id,
       amountMinor: BigInt(payout.amount_minor),
