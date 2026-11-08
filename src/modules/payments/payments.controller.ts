@@ -232,11 +232,25 @@ export class PaymentsController {
   @ApiOperation({ summary: 'DPO BackURL / ReturnURL redirect handler (GET)' })
   async handleDPOWebhookGet(@Query() query: Record<string, string>) {
     const frontendUrl = this.getFrontendUrl();
-    const token = [query.TransactionToken, query.TransToken, query.ID, query.token]
-      .find((value) => typeof value === 'string' && value.trim())?.trim();
-    const projectId = [query.projectId, typeof query.CompanyRef === 'string' ? query.CompanyRef.split('-')[1] : undefined]
-      .find((value) => typeof value === 'string' && /^[a-f\d]{24}$/i.test(value));
-    const params = new URLSearchParams({ status: token ? 'pending' : 'cancelled' });
+    const token = [
+      query.TransactionToken,
+      query.TransToken,
+      query.ID,
+      query.token,
+    ]
+      .find((value) => typeof value === 'string' && value.trim())
+      ?.trim();
+    const projectId = [
+      query.projectId,
+      typeof query.CompanyRef === 'string'
+        ? query.CompanyRef.split('-')[1]
+        : undefined,
+    ].find(
+      (value) => typeof value === 'string' && /^[a-f\d]{24}$/i.test(value),
+    );
+    const params = new URLSearchParams({
+      status: token ? 'pending' : 'cancelled',
+    });
     if (projectId) params.set('projectId', projectId);
     if (token) {
       params.set('TransactionToken', token);

@@ -488,16 +488,24 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
           if (['901', '904'].includes(result.verify.status)) {
             await this.paymentTransactionModel.updateOne(
               { _id: transaction._id, status: PaymentStatus.Pending },
-              { $set: { dpoVerifyAfter: new Date(now.getTime() + recoveryWindowMs) } },
+              {
+                $set: {
+                  dpoVerifyAfter: new Date(now.getTime() + recoveryWindowMs),
+                },
+              },
               { timestamps: false },
             );
           }
         } catch {
-          this.logger.warn(`Could not reconcile DPO checkout ${transaction.id}`);
+          this.logger.warn(
+            `Could not reconcile DPO checkout ${transaction.id}`,
+          );
         }
       }
     } catch {
-      this.logger.error('DPO checkout reconciliation could not query pending payments');
+      this.logger.error(
+        'DPO checkout reconciliation could not query pending payments',
+      );
     } finally {
       this.reconcilingDpo = false;
     }
@@ -2037,9 +2045,18 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
    * Handle DPO server-to-server webhook / BackURL callback.
    */
   async handleDPOWebhook(payload: Record<string, string>) {
-    const token = [payload.TransactionToken, payload.TransToken, payload.ID, payload.token]
-      .find((value) => typeof value === 'string' && value.trim())?.trim();
-    if (!token) throw new BadRequestException('DPO callback is missing its transaction token');
+    const token = [
+      payload.TransactionToken,
+      payload.TransToken,
+      payload.ID,
+      payload.token,
+    ]
+      .find((value) => typeof value === 'string' && value.trim())
+      ?.trim();
+    if (!token)
+      throw new BadRequestException(
+        'DPO callback is missing its transaction token',
+      );
     const result = await this.verifyDPOPayment(token);
     return { received: true, status: result.status };
   }
