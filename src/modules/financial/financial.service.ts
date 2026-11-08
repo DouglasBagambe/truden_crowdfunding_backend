@@ -376,7 +376,9 @@ export class FinancialService {
     });
   }
 
-  async processNextInboxEvent(event?: Pick<ProviderEvent, 'provider' | 'providerEventId'>): Promise<{
+  async processNextInboxEvent(
+    event?: Pick<ProviderEvent, 'provider' | 'providerEventId'>,
+  ): Promise<{
     processed: boolean;
     deadLettered?: boolean;
   }> {
@@ -441,6 +443,108 @@ export class FinancialService {
     return this.database.transaction((client) =>
       this.postJournalInTransaction(client, params),
     );
+  }
+
+  async recordDpoSettlement(input: {
+    paymentIntentId: string;
+    netAmountMinor: string;
+    currency: string;
+    evidenceReference: string;
+    settledAt: string;
+    recordedBy: string;
+  }) {
+    const net = asMinor(input.netAmountMinor);
+    const currency = assertCurrency(input.currency);
+    const evidenceReference = input.evidenceReference.trim();
+    const settledAt = new Date(input.settledAt);
+    if (
+      !input.recordedBy ||
+      evidenceReference.length < 3 ||
+      evidenceReference.length > 200 ||
+      !Number.isFinite(settledAt.getTime()) ||
+      settledAt.getTime() > Date.now()
+    )
+      throw new BadRequestException(
+        'Valid completed settlement evidence is required',
+      );
+    return this.database.transaction(async (client) => {
+      const payment = await client.query<{
+        id: string;
+        state: string;
+        provider: string;
+        currency: string;
+        amount_minor: string;
+        provider_fee_minor: string | null;
+        created_at: Date;
+      }>('SELECT * FROM financial_payment_intents WHERE id=$1 FOR UPDATE', [
+        input.paymentIntentId,
+      ]);
+      const intent = payment.rows[0];
+      if (!intent || intent.provider !== 'dpo' || intent.currency !== currency)
+        throw new ConflictException(
+          'Settlement does not match a captured DPO payment',
+        );
+      if (
+        net !==
+        BigInt(intent.amount_minor) - BigInt(intent.provider_fee_minor ?? '0')
+      )
+        throw new ConflictException(
+          'Settlement net amount does not match the captured payment',
+        );
+      if (settledAt.getTime() < new Date(intent.created_at).getTime())
+        throw new ConflictException('Settlement predates the payment');
+      const prior = await client.query<{
+        evidence_reference: string;
+        settled_at: Date;
+        recorded_by: string;
+      }>(
+        'SELECT * FROM financial_provider_settlements WHERE payment_intent_id=$1',
+        [intent.id],
+      );
+      if (prior.rowCount) {
+        const row = prior.rows[0];
+        if (
+          row.evidence_reference !== evidenceReference ||
+          new Date(row.settled_at).getTime() !== settledAt.getTime()
+        )
+          throw new ConflictException(
+            'Payment already has different settlement evidence',
+          );
+        return {
+          paymentIntentId: intent.id,
+          state: intent.state,
+          replayed: true,
+        };
+      }
+      if (intent.state !== 'captured')
+        throw new ConflictException(
+          'Only captured payments can be reconciled as settled',
+        );
+      await client.query(
+        `INSERT INTO financial_provider_settlements
+         (payment_intent_id,provider,currency,net_amount_minor,evidence_reference,settled_at,recorded_by)
+         VALUES($1,'dpo',$2,$3,$4,$5,$6)`,
+        [
+          intent.id,
+          currency,
+          net.toString(),
+          evidenceReference,
+          settledAt,
+          input.recordedBy,
+        ],
+      );
+      await this.applyProviderEvent(client, {
+        provider: 'dpo',
+        providerEventId: `settlement:${intent.id}`,
+        eventType: 'settled',
+        paymentIntentId: intent.id,
+        amountMinor: BigInt(intent.amount_minor),
+        currency,
+        providerFeeMinor: BigInt(intent.provider_fee_minor ?? '0'),
+        receivedAt: new Date(),
+      });
+      return { paymentIntentId: intent.id, state: 'settled', replayed: false };
+    });
   }
 
   async reconcile(params: {
@@ -923,9 +1027,11 @@ export class FinancialService {
       if (payment.state === 'settled') return;
       if (payment.state !== 'captured')
         throw new Error(`Cannot settle payment from ${payment.state}`);
-      await this.projectsService.ensureProjectCanReceiveDonation(
-        payment.project_id,
-      );
+      if (event.provider !== 'dpo') {
+        await this.projectsService.ensureProjectCanReceiveDonation(
+          payment.project_id,
+        );
+      }
       const journal = await this.postJournalInTransaction(client, {
         idempotencyKey: `settlement:${event.provider}:${event.providerEventId}`,
         correlationId: randomUUID(),
@@ -933,9 +1039,18 @@ export class FinancialService {
         lines: [
           {
             account: `asset:bank:${payment.currency}`,
-            debitMinor: gross,
+            debitMinor: event.provider === 'dpo' ? campaignAllocation : gross,
             creditMinor: 0n,
           },
+          ...(event.provider === 'dpo' && providerFee > 0n
+            ? [
+                {
+                  account: `liability:provider_cost:${event.provider}:${payment.currency}`,
+                  debitMinor: providerFee,
+                  creditMinor: 0n,
+                },
+              ]
+            : []),
           {
             account: `asset:provider_receivable:${event.provider}:${payment.currency}`,
             debitMinor: 0n,
@@ -981,7 +1096,10 @@ export class FinancialService {
       ];
       if (providerFee > 0n) {
         lines.splice(1, 0, {
-          account: `liability:provider_cost:${event.provider}:${payment.currency}`,
+          account:
+            payment.state === 'settled' && event.provider === 'dpo'
+              ? `expense:provider_refund_cost:${event.provider}:${payment.currency}`
+              : `liability:provider_cost:${event.provider}:${payment.currency}`,
           debitMinor: providerFee,
           creditMinor: 0n,
         });

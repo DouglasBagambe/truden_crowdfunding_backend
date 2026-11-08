@@ -16,6 +16,8 @@ const setup = () => {
   };
   const users = { findById: jest.fn().mockResolvedValue(verifiedUser) };
   const flutterwave = {
+    assertLivePayoutReady: jest.fn(),
+    environment: jest.fn().mockReturnValue('live'),
     createRecipient: jest.fn().mockResolvedValue({
       id: 'recipient-1',
       metadata: { network: 'MTN', status: 'ACTIVE' },

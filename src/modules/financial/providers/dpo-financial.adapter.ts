@@ -47,9 +47,10 @@ export class DpoFinancialAdapter {
     const grossMinor = decimalToMinor(evidence.amount, currency);
     // DPO can report sub-shilling fees. Allocate only whole UGX to the campaign.
     const netAmount = evidence.netAmount?.trim();
-    const fractionalUgx = currency === 'UGX' && netAmount
-      ? /^(\d+)\.(\d*[1-9]\d*)$/.exec(netAmount)
-      : null;
+    const fractionalUgx =
+      currency === 'UGX' && netAmount
+        ? /^(\d+)\.(\d*[1-9]\d*)$/.exec(netAmount)
+        : null;
     const netMinor = netAmount
       ? decimalToMinor(fractionalUgx?.[1] ?? netAmount, currency)
       : grossMinor;

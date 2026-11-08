@@ -334,4 +334,31 @@ describe('FlutterwaveV4PayoutAdapter', () => {
     expect(adapter('FLWSECK-real-key').environment()).toBe('live');
     expect(adapter('unknown-key').environment()).toBe('unknown');
   });
+  it.each(['FLWSECK_TEST-sandbox', 'unknown-key', ''])(
+    'blocks real withdrawals for %s',
+    (key) => {
+      const adapter = new FlutterwaveV4PayoutAdapter(
+        config({
+          FLUTTERWAVE_PAYOUT_API_VERSION: '3',
+          FLUTTERWAVE_SECRET_KEY: key,
+        }),
+        http() as never,
+        {} as never,
+      );
+      expect(() => adapter.assertLivePayoutReady()).toThrow(
+        'Live withdrawals require',
+      );
+    },
+  );
+  it('accepts a configured v3 live account for the live payout check', () => {
+    const adapter = new FlutterwaveV4PayoutAdapter(
+      config({
+        FLUTTERWAVE_PAYOUT_API_VERSION: '3',
+        FLUTTERWAVE_SECRET_KEY: 'FLWSECK-live-fixture',
+      }),
+      http() as never,
+      {} as never,
+    );
+    expect(() => adapter.assertLivePayoutReady()).not.toThrow();
+  });
 });

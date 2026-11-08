@@ -40,6 +40,13 @@ export class FlutterwaveV4PayoutAdapter {
             this.config.get<string>('FLUTTERWAVE_V4_CLIENT_SECRET')?.trim(),
         );
   }
+  assertLivePayoutReady(): void {
+    if (this.environment() !== 'live' || !this.configured()) {
+      throw new ServiceUnavailableException(
+        'Live withdrawals require a configured live Flutterwave account',
+      );
+    }
+  }
   async createRecipient(input: {
     type: 'bank' | 'mobile_money';
     accountNumber: string;

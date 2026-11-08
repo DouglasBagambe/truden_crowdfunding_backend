@@ -14,6 +14,10 @@ import {
 import { randomUUID } from 'crypto';
 import {
   IsArray,
+  IsUUID,
+  IsISO8601,
+  MinLength,
+  MaxLength,
   IsOptional,
   ArrayMaxSize,
   IsEthereumAddress,
@@ -46,6 +50,13 @@ class ReconcileDto {
   @IsString() @Matches(/^[A-Za-z]{3}$/) currency!: string;
   @IsString() @Matches(/^\d+$/) providerTotalMinor!: string;
   @IsString() evidenceReference!: string;
+}
+class RecordDpoSettlementDto {
+  @IsUUID() paymentIntentId!: string;
+  @IsString() @Matches(/^[1-9]\d*$/) netAmountMinor!: string;
+  @IsString() @Matches(/^[A-Za-z]{3}$/) currency!: string;
+  @IsString() @MinLength(3) @MaxLength(200) evidenceReference!: string;
+  @IsISO8601() settledAt!: string;
 }
 class SubmitOnchainContributionDto {
   @IsString() paymentIntentId!: string;
@@ -97,6 +108,9 @@ export class FinancialController {
       ),
       payoutsConfigured: this.payoutProvider.configured(),
       payoutEnvironment: this.payoutProvider.environment(),
+      realWithdrawalsConfigured:
+        this.payoutProvider.configured() &&
+        this.payoutProvider.environment() === 'live',
     };
   }
 
@@ -313,6 +327,18 @@ export class FinancialController {
     return this.financial.acceptProviderEvent(
       this.flutterwave.verifyAndNormalize(payload, signature),
     );
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Post('settlements/dpo')
+  recordDpoSettlement(
+    @Body() dto: RecordDpoSettlementDto,
+    @Request() request: { user: { sub?: string; userId?: string } },
+  ) {
+    const recordedBy = request.user?.sub ?? request.user?.userId;
+    if (!recordedBy)
+      throw new ForbiddenException('Authenticated administrator is required');
+    return this.financial.recordDpoSettlement({ ...dto, recordedBy });
   }
 
   @Roles(UserRole.ADMIN)
