@@ -17,6 +17,7 @@ export interface DpoVerifyResult {
   amount?: string;
   currency?: string;
   netAmount?: string;
+  settlementDate?: string;
   vatAmount?: string;
 }
 
@@ -258,6 +259,7 @@ export class DpoService {
       amount: this.value(result.TransactionAmount),
       currency: this.value(result.TransactionCurrency),
       netAmount: this.value(result.TransactionNetAmount),
+      settlementDate: this.value(result.TransactionSettlementDate),
       vatAmount: this.value(result.VATAmount),
     };
   }

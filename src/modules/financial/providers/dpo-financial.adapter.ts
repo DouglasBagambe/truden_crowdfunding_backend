@@ -42,7 +42,25 @@ export class DpoFinancialAdapter {
         'DPO verification evidence has no net settlement amount',
       );
     }
+    if (!this.hasCompletedSettlement(params.evidence)) {
+      throw new ForbiddenException('DPO settlement date has not completed');
+    }
     return this.fromEvidence(params, 'settled');
+  }
+
+  hasCompletedSettlement(evidence: DpoVerifyResult): boolean {
+    const match = /^(\d{4})[-/](\d{2})[-/](\d{2})$/.exec(
+      evidence.settlementDate?.trim() ?? '',
+    );
+    if (!match) return false;
+    const [, year, month, day] = match;
+    const date = new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+    return (
+      Number.isFinite(date.getTime()) &&
+      date.toISOString().slice(0, 10) === `${year}-${month}-${day}` &&
+      date.getTime() <= Date.now() &&
+      Boolean(evidence.netAmount?.trim())
+    );
   }
 
   private fromEvidence(
