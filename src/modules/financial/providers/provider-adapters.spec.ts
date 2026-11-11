@@ -57,6 +57,7 @@ describe('financial provider adapters', () => {
           message: 'verified',
           amount: '516.00',
           netAmount: '500.77',
+          settlementDate: '2026/01/01',
           currency: 'UGX',
         },
       }),
@@ -88,6 +89,41 @@ describe('financial provider adapters', () => {
       }),
     ).toThrow('no net settlement amount');
   });
+
+  it.each([undefined, '', '2099/01/01', '2026/02/31', '2026/13/01'])(
+    'does not settle paid donations with an incomplete or invalid date: %s',
+    (settlementDate) => {
+      const adapter = new DpoFinancialAdapter(
+        config({
+          DPO_COMPANY_TOKEN: 'local-test-token',
+          DPO_API_URL: 'https://sandbox-provider.invalid/api',
+        }),
+      );
+      const evidence = {
+        status: '000',
+        message: 'paid',
+        amount: '516',
+        netAmount: '500.78',
+        currency: 'UGX',
+        settlementDate,
+      };
+      expect(
+        adapter.fromVerifiedToken({
+          token: 'token',
+          paymentIntentId: 'intent',
+          evidence,
+        }),
+      ).toMatchObject({ eventType: 'captured' });
+      expect(adapter.hasCompletedSettlement(evidence)).toBe(false);
+      expect(() =>
+        adapter.fromVerifiedSettlement({
+          token: 'token',
+          paymentIntentId: 'intent',
+          evidence,
+        }),
+      ).toThrow('settlement date has not completed');
+    },
+  );
 });
 
 describe('DPO missing configuration', () => {
