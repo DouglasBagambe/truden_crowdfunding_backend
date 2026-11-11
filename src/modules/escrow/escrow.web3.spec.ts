@@ -20,6 +20,7 @@ const metamaskDelegationManager =
 const client = (overrides: Record<string, unknown> = {}) => ({
   getChainId: jest.fn().mockResolvedValue(11155111),
   getCode: jest.fn().mockResolvedValue('0x1234'),
+  call: jest.fn().mockResolvedValue({ data: '0x' }),
   readContract: jest.fn(),
   waitForTransactionReceipt: jest.fn().mockResolvedValue({
     status: 'success',

@@ -12,6 +12,7 @@ const http = () => ({ post: jest.fn(), get: jest.fn() });
 describe('FlutterwaveV4PayoutAdapter', () => {
   const values = {
     FLUTTERWAVE_SECRET_KEY: 'secret-not-to-log',
+    FLUTTERWAVE_PAYOUTS_ENABLED: 'true',
     FLUTTERWAVE_WEBHOOK_SECRET: 'webhook-secret',
     BACKEND_URL: 'https://api.keibo.test',
     FLUTTERWAVE_V4_BASE_URL: 'https://flutterwave.test/',

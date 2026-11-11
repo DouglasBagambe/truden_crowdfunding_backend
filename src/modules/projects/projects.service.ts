@@ -1145,7 +1145,7 @@ export class ProjectsService {
 
   async prepareCreatorCampaign(projectId: string, userId: string) {
     const { params, project } = await this.campaignCreation(projectId, userId);
-    let prepared;
+    let prepared: Awaited<ReturnType<EscrowWeb3Service['prepareCampaign']>>;
     try {
       prepared = await this.campaignEscrow.prepareCampaign(params);
     } catch (error: unknown) {

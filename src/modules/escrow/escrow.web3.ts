@@ -277,8 +277,7 @@ export class EscrowWeb3Service {
     }
     if (transaction.from.toLowerCase() !== params.creator.toLowerCase())
       throw invalidProof('creator sender mismatch');
-    if (transaction.value !== 0n)
-      throw invalidProof('unexpected native value');
+    if (transaction.value !== 0n) throw invalidProof('unexpected native value');
     if (transaction.nonce !== expectedNonce)
       throw invalidProof(
         `reserved nonce mismatch (expected ${expectedNonce}, mined ${transaction.nonce})`,

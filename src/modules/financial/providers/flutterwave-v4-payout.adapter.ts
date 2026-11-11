@@ -15,6 +15,11 @@ export class FlutterwaveV4PayoutAdapter {
     private readonly config: ConfigService,
     private readonly http: HttpService,
   ) {}
+  assertDispatchEnabled(): void {
+    if (this.config.get<string>('FLUTTERWAVE_PAYOUTS_ENABLED') !== 'true') {
+      throw new ServiceUnavailableException('Flutterwave payouts are disabled');
+    }
+  }
   async createRecipient(input: {
     type: 'bank' | 'mobile_money';
     accountNumber: string;
@@ -64,6 +69,7 @@ export class FlutterwaveV4PayoutAdapter {
     narration: string;
     idempotencyKey: string;
   }) {
+    this.assertDispatchEnabled();
     const result = await this.post(
       '/transfers',
       {

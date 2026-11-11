@@ -1,3 +1,4 @@
+import { decimalToMinor } from './providers/provider-adapter';
 import { ConflictException, Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import { FinancialDatabase } from './financial.database';
@@ -49,7 +50,11 @@ export class FinancialPayoutWorker {
     if (!row.rowCount)
       throw Object.assign(new Error('Payout not found'), { code: 'NOT_FOUND' });
     const payout = row.rows[0];
-    if (payout.state === 'paid' || payout.provider_transfer_id) return;
+    if (
+      ['paid', 'failed'].includes(payout.state) ||
+      payout.provider_transfer_id
+    )
+      return;
     if (
       payout.destination_status !== 'verified' ||
       payout.destination_creator !== payout.creator_id ||
@@ -99,6 +104,23 @@ export class FinancialPayoutWorker {
     const result = await this.provider.getTransferStatus(
       payout.provider_transfer_id,
     );
+    if (['SUCCESSFUL', 'FAILED'].includes(result.status)) {
+      const evidenceMatches =
+        result.id === payout.provider_transfer_id &&
+        result.reference === payout.keibo_reference &&
+        result.currency === payout.currency &&
+        result.amount &&
+        decimalToMinor(result.amount, result.currency) ===
+          BigInt(payout.amount_minor);
+      if (!evidenceMatches) {
+        throw Object.assign(
+          new Error('Provider payout evidence does not match transfer'),
+          {
+            code: 'PAYOUT_VALIDATION_FAILED',
+          },
+        );
+      }
+    }
     await this.database.transaction(async (client) => {
       if (result.status === 'SUCCESSFUL')
         return this.transition(

@@ -38,15 +38,15 @@ describe('financial provider adapters', () => {
       evidence: {
         status: '000',
         message: 'verified',
-        amount: '10300',
-        netAmount: '10000',
+        amount: '516.00',
+        netAmount: '500.77',
         currency: 'UGX',
       },
     });
     expect(event).toMatchObject({
       eventType: 'captured',
-      amountMinor: 10_300n,
-      providerFeeMinor: 300n,
+      amountMinor: 516n,
+      providerFeeMinor: 16n,
     });
   });
 });

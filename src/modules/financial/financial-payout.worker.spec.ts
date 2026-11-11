@@ -17,6 +17,12 @@ const payout = (state = 'pending') => ({
   owner_proceeds_minor: '9500',
   release_currency: 'UGX',
 });
+const verifiedTransfer = {
+  id: 'transfer-1',
+  reference: 'KEIBO-PAYOUT-release-1',
+  currency: 'UGX',
+  amount: '9500.00',
+};
 const setup = (row = payout()) => {
   const client = {
     query: jest
@@ -116,7 +122,10 @@ describe('FinancialPayoutWorker', () => {
     'uses one terminal event for repeated %s reconciliation',
     async (status) => {
       const { worker, provider, client } = setup();
-      provider.getTransferStatus.mockResolvedValue({ status });
+      provider.getTransferStatus.mockResolvedValue({
+        ...verifiedTransfer,
+        status,
+      });
       await worker.reconcile({ payoutId: 'payout-1' });
       const updates = client.query.mock.calls.filter(([sql]: [string]) =>
         sql.includes('COALESCE'),
@@ -132,18 +141,38 @@ describe('FinancialPayoutWorker', () => {
   );
   it('allows an authoritative SUCCESSFUL result to correct a previous failed state', async () => {
     const { worker, provider, client } = setup(payout('failed'));
-    provider.getTransferStatus.mockResolvedValue({ status: 'SUCCESSFUL' });
+    provider.getTransferStatus.mockResolvedValue({
+      ...verifiedTransfer,
+      status: 'SUCCESSFUL',
+    });
     await worker.reconcile({ payoutId: 'payout-1' });
     expect(client.query).toHaveBeenCalledWith(
       expect.stringContaining('state=$2'),
       expect.arrayContaining(['payout-1', 'paid', 'SUCCESSFUL']),
     );
   });
+  it('rejects a successful provider response for a different amount', async () => {
+    const { worker, provider, database } = setup();
+    provider.getTransferStatus.mockResolvedValue({
+      ...verifiedTransfer,
+      amount: '500',
+      status: 'SUCCESSFUL',
+    });
+    await expect(
+      worker.reconcile({ payoutId: 'payout-1' }),
+    ).rejects.toMatchObject({
+      code: 'PAYOUT_VALIDATION_FAILED',
+    });
+    expect(database.transaction).not.toHaveBeenCalled();
+  });
   it.each(['PENDING', 'PROCESSING'] as const)(
     'reschedules non-terminal reconciliation status %s',
     async (status) => {
       const { worker, provider, client } = setup();
-      provider.getTransferStatus.mockResolvedValue({ status });
+      provider.getTransferStatus.mockResolvedValue({
+        ...verifiedTransfer,
+        status,
+      });
       await worker.reconcile({ payoutId: 'payout-1' });
       expect(client.query).toHaveBeenCalledWith(
         expect.stringContaining('financial_jobs'),
