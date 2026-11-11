@@ -48,6 +48,45 @@ describe('financial provider adapters', () => {
       amountMinor: 516n,
       providerFeeMinor: 16n,
     });
+    expect(
+      adapter.fromVerifiedSettlement({
+        token: 'provider-token',
+        paymentIntentId: 'intent-id',
+        evidence: {
+          status: '000',
+          message: 'verified',
+          amount: '516.00',
+          netAmount: '500.77',
+          currency: 'UGX',
+        },
+      }),
+    ).toMatchObject({
+      providerEventId: 'verified-settlement:provider-token',
+      eventType: 'settled',
+      amountMinor: 516n,
+      providerFeeMinor: 16n,
+    });
+  });
+
+  it('refuses to make DPO funds available without a provider net amount', () => {
+    const adapter = new DpoFinancialAdapter(
+      config({
+        DPO_COMPANY_TOKEN: 'local-test-token',
+        DPO_API_URL: 'https://sandbox-provider.invalid/api',
+      }),
+    );
+    expect(() =>
+      adapter.fromVerifiedSettlement({
+        token: 'provider-token',
+        paymentIntentId: 'intent-id',
+        evidence: {
+          status: '000',
+          message: 'verified',
+          amount: '516.00',
+          currency: 'UGX',
+        },
+      }),
+    ).toThrow('no net settlement amount');
   });
 });
 

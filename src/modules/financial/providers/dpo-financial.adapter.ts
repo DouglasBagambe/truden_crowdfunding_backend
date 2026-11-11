@@ -29,6 +29,30 @@ export class DpoFinancialAdapter {
     paymentIntentId: string;
     evidence: DpoVerifyResult;
   }): ProviderEvent {
+    return this.fromEvidence(params, 'captured');
+  }
+
+  fromVerifiedSettlement(params: {
+    token: string;
+    paymentIntentId: string;
+    evidence: DpoVerifyResult;
+  }): ProviderEvent {
+    if (!params.evidence.netAmount?.trim()) {
+      throw new ForbiddenException(
+        'DPO verification evidence has no net settlement amount',
+      );
+    }
+    return this.fromEvidence(params, 'settled');
+  }
+
+  private fromEvidence(
+    params: {
+      token: string;
+      paymentIntentId: string;
+      evidence: DpoVerifyResult;
+    },
+    eventType: 'captured' | 'settled',
+  ): ProviderEvent {
     if (!this.isConfigured())
       throw new ServiceUnavailableException('DPO adapter is disabled');
     const { evidence } = params;
@@ -59,8 +83,11 @@ export class DpoFinancialAdapter {
     }
     return {
       provider: this.provider,
-      providerEventId: `verified-token:${params.token}`,
-      eventType: 'captured',
+      providerEventId:
+        eventType === 'captured'
+          ? `verified-token:${params.token}`
+          : `verified-settlement:${params.token}`,
+      eventType,
       paymentIntentId: params.paymentIntentId,
       amountMinor: grossMinor,
       currency,
