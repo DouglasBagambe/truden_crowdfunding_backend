@@ -2011,13 +2011,23 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       );
     }
     if (verify.status === '000') {
-      const event = this.dpoFinancialAdapter.fromVerifiedToken({
+      const evidence = {
         token,
         paymentIntentId,
         evidence: verify,
-      });
-      await this.financialService.acceptProviderEvent(event);
-      await this.financialService.processNextInboxEvent(event);
+      };
+      const captured = this.dpoFinancialAdapter.fromVerifiedToken(evidence);
+      await this.financialService.acceptProviderEvent(captured);
+      await this.financialService.processNextInboxEvent(captured);
+
+      // KEIBO treats DPO's successful verifyToken response plus its provider-
+      // calculated net amount as the authoritative availability signal. This
+      // keeps the campaign credit and Wallet availability in one idempotent
+      // provider-evidence path, including mobile-money payments that never
+      // return through the browser.
+      const settled = this.dpoFinancialAdapter.fromVerifiedSettlement(evidence);
+      await this.financialService.acceptProviderEvent(settled);
+      await this.financialService.processNextInboxEvent(settled);
     }
     const contributorId = transaction.userId?.toString();
     if (!contributorId) {
