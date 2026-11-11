@@ -467,7 +467,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         const transaction = await this.paymentTransactionModel.findOneAndUpdate(
           {
             provider: PaymentProvider.DPO,
-            status: PaymentStatus.Pending,
+            status: {
+              $in: [PaymentStatus.Pending, PaymentStatus.Successful],
+            },
             dpoToken: { $type: 'string', $ne: '' },
             'metadata.paymentIntentId': { $type: 'string', $ne: '' },
             createdAt: {
@@ -485,9 +487,12 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         if (!transaction?.dpoToken) break;
         try {
           const result = await this.verifyDPOPayment(transaction.dpoToken);
-          if (['901', '904'].includes(result.verify.status)) {
+          if (
+            result.status === 'settled' ||
+            ['901', '904'].includes(result.verify.status)
+          ) {
             await this.paymentTransactionModel.updateOne(
-              { _id: transaction._id, status: PaymentStatus.Pending },
+              { _id: transaction._id },
               {
                 $set: {
                   dpoVerifyAfter: new Date(now.getTime() + recoveryWindowMs),
