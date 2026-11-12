@@ -210,6 +210,18 @@ export class FlutterwaveV4PayoutAdapter {
         status: this.status(this.scalar(data.status)),
         amount: this.scalar(data.amount),
         currency: this.scalar(data.destination_currency ?? data.currency),
+        ...(this.status(this.scalar(data.status)) === 'FAILED'
+          ? {
+              failureMessage: new PayoutProviderError(
+                {
+                  response: {
+                    data: { message: data.complete_message ?? data.message },
+                  },
+                },
+                'transfer execution',
+              ).message,
+            }
+          : {}),
       };
     } catch (error) {
       throw new PayoutProviderError(error, 'transfer status lookup');
