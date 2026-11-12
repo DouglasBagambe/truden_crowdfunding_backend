@@ -472,10 +472,24 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             },
             dpoToken: { $type: 'string', $ne: '' },
             'metadata.paymentIntentId': { $type: 'string', $ne: '' },
+            'metadata.dpoSettlementReconciled': { $ne: true },
             createdAt: {
-              $gte: new Date(now.getTime() - recoveryWindowMs),
               $lte: new Date(now.getTime() - 60_000),
             },
+            // Abandoned pending checkouts have a bounded recovery window, but
+            // paid donations must remain eligible until bank settlement arrives.
+            $and: [
+              {
+                $or: [
+                  { status: PaymentStatus.Successful },
+                  {
+                    createdAt: {
+                      $gte: new Date(now.getTime() - recoveryWindowMs),
+                    },
+                  },
+                ],
+              },
+            ],
             $or: [
               { dpoVerifyAfter: { $exists: false } },
               { dpoVerifyAfter: { $lte: now } },
@@ -487,10 +501,17 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         if (!transaction?.dpoToken) break;
         try {
           const result = await this.verifyDPOPayment(transaction.dpoToken);
-          if (
-            result.status === 'settled' ||
-            ['901', '904'].includes(result.verify.status)
-          ) {
+          if (['settled', 'released'].includes(result.status)) {
+            // This is a recovery checkpoint, not settlement evidence. It may
+            // only be written after the financial ledger confirms settlement.
+            await this.paymentTransactionModel.updateOne(
+              { _id: transaction._id },
+              { $set: { 'metadata.dpoSettlementReconciled': true } },
+              { timestamps: false },
+            );
+            continue;
+          }
+          if (['901', '904'].includes(result.verify.status)) {
             await this.paymentTransactionModel.updateOne(
               { _id: transaction._id },
               {
