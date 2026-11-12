@@ -4,6 +4,7 @@ import { FinancialDatabase } from './financial.database';
 import type { PoolClient } from 'pg';
 import { FinancialPayoutWorker } from './financial-payout.worker';
 import { FinancialReceiptWorker } from './financial-receipt.worker';
+import { PayoutProviderError } from './providers/payout-provider.error';
 
 export type FinancialJobType =
   | 'payout.dispatch.requested'
@@ -91,12 +92,23 @@ export class FinancialJobsService {
           dead ? 'dead_letter' : 'retry',
           delay,
           this.errorCode(error),
-          this.safeMessage(error),
+          this.safeMessage(error, job.job_type),
           this.workerId,
         ],
       );
       this.logger.warn(
-        `Financial job ${job.id} ${dead ? 'dead-lettered' : 'scheduled for retry'}`,
+        JSON.stringify({
+          jobId: job.id,
+          aggregateId: job.aggregate_id,
+          jobType: job.job_type,
+          status: dead ? 'dead_letter' : 'retry',
+          code: job.job_type.startsWith('payout.')
+            ? error instanceof PayoutProviderError
+              ? error.code
+              : 'PAYOUT_PROCESSING_ERROR'
+            : this.errorCode(error),
+          message: this.safeMessage(error, job.job_type),
+        }),
       );
       return { processed: false, deadLettered: dead };
     }
@@ -133,7 +145,11 @@ export class FinancialJobsService {
       ? String((error as { code: string }).code)
       : 'JOB_HANDLER_ERROR';
   }
-  private safeMessage(error: unknown) {
+  private safeMessage(error: unknown, type: FinancialJobType) {
+    if (type.startsWith('payout.'))
+      return error instanceof PayoutProviderError
+        ? error.message
+        : 'Payout processing stopped. Internal validation or persistence failed; admin investigation is required.';
     return (
       error instanceof Error ? error.message : 'Financial job failed'
     ).slice(0, 500);

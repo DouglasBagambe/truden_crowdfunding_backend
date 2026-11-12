@@ -134,6 +134,10 @@ export class FinancialPayoutService {
       );
       if (!dest.rowCount)
         throw new ConflictException('Verified payout destination not found');
+      this.assertMinimum(
+        BigInt(rel.rows[0].owner_proceeds_minor),
+        rel.rows[0].currency,
+      );
       const id = randomUUID(),
         ref = `KEIBO-PAYOUT-${input.releaseId}`;
       await client.query(
@@ -281,6 +285,7 @@ export class FinancialPayoutService {
         throw new ConflictException(
           'Wallet balance changed. Refresh and review the withdrawal again.',
         );
+      this.assertMinimum(amount, currency);
       const id = randomUUID(),
         ref = `KEIBO-WALLET-${id}`;
       await client.query(
@@ -334,10 +339,10 @@ export class FinancialPayoutService {
       created_at: Date;
       masked_display: string;
     }>(
-      `SELECT p.id,p.release_id,p.amount_minor,p.currency,p.state,p.keibo_reference,p.created_at,d.masked_display FROM financial_payout_transfers p JOIN financial_payout_destinations d ON d.id=p.payout_destination_id WHERE p.creator_id=$1 ORDER BY p.created_at DESC`,
+      `${this.payoutReadQuery()} WHERE p.creator_id=$1 ORDER BY p.created_at DESC`,
       [creatorId],
     );
-    return r.rows;
+    return r.rows.map((row) => this.payoutDiagnostic(row));
   }
   async getPayout(creatorId: string, id: string) {
     const r = await this.database.query<{
@@ -349,11 +354,74 @@ export class FinancialPayoutService {
       keibo_reference: string;
       created_at: Date;
       masked_display: string;
-    }>(
-      `SELECT p.id,p.release_id,p.amount_minor,p.currency,p.state,p.keibo_reference,p.created_at,d.masked_display FROM financial_payout_transfers p JOIN financial_payout_destinations d ON d.id=p.payout_destination_id WHERE p.id=$1 AND p.creator_id=$2`,
-      [id, creatorId],
-    );
+    }>(`${this.payoutReadQuery()} WHERE p.id=$1 AND p.creator_id=$2`, [
+      id,
+      creatorId,
+    ]);
     if (!r.rowCount) throw new NotFoundException('Payout not found');
-    return r.rows[0];
+    return this.payoutDiagnostic(r.rows[0]);
+  }
+
+  private assertMinimum(amount: bigint, currency: string) {
+    if (currency === 'UGX' && amount < 1000n)
+      throw new ConflictException(
+        'Flutterwave withdrawals require at least UGX 1,000. No funds were reserved. Transfer fees are separate.',
+      );
+  }
+
+  private payoutReadQuery() {
+    return `SELECT p.id,p.release_id,p.amount_minor,p.currency,p.state,p.keibo_reference,p.created_at,d.masked_display,
+      j.status AS job_status,j.job_type,j.last_error_code,j.last_error_message_safe
+      FROM financial_payout_transfers p JOIN financial_payout_destinations d ON d.id=p.payout_destination_id
+      LEFT JOIN LATERAL (SELECT status,job_type,last_error_code,last_error_message_safe FROM financial_jobs
+        WHERE aggregate_type='payout_transfer' AND aggregate_id=p.id::text
+        ORDER BY updated_at DESC,created_at DESC,id DESC LIMIT 1) j ON true`;
+  }
+
+  private payoutDiagnostic<T extends { state: string }>(row: T) {
+    const {
+      job_status,
+      job_type,
+      last_error_code,
+      last_error_message_safe,
+      ...payout
+    } = row as T & {
+      job_status?: string;
+      job_type?: string;
+      last_error_code?: string;
+      last_error_message_safe?: string;
+    };
+    const stopped =
+      row.state !== 'paid' &&
+      row.state !== 'failed' &&
+      job_status === 'dead_letter';
+    const retrying =
+      row.state !== 'paid' && row.state !== 'failed' && job_status === 'retry';
+    return {
+      ...payout,
+      processingStatus: stopped
+        ? 'review_required'
+        : retrying
+          ? 'retry_scheduled'
+          : row.state,
+      ...(stopped || retrying
+        ? {
+            failureStage:
+              job_type === 'payout.reconcile.requested'
+                ? 'provider_status_verification'
+                : 'provider_submission',
+            errorCode:
+              last_error_code === 'PROVIDER_PERMANENT' ||
+              last_error_code === 'PROVIDER_RETRYABLE'
+                ? last_error_code
+                : 'PAYOUT_PROCESSING_ERROR',
+            errorMessage:
+              last_error_message_safe?.startsWith('Flutterwave ') &&
+              last_error_message_safe.includes(' failed')
+                ? last_error_message_safe
+                : 'Payout processing stopped without detailed provider diagnostics. Admin review is required before another attempt.',
+          }
+        : {}),
+    };
   }
 }

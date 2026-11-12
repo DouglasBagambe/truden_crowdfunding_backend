@@ -37,6 +37,110 @@ const setup = () => {
 };
 
 describe('FinancialPayoutService', () => {
+  it.each(['475', '999'])(
+    'rejects below-minimum wallet withdrawal %s before any reservation or job',
+    async (amount) => {
+      const { service, client } = setup();
+      client.query
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ currency: 'UGX' }] })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [{ id: 'release', owner_proceeds_minor: amount }],
+        });
+      await expect(
+        service.withdrawWallet({
+          creatorId: 'creator-1',
+          destinationId: 'dest',
+          idempotencyKey: 'key',
+          expectedAmountMinor: amount,
+        }),
+      ).rejects.toThrow('at least UGX 1,000');
+      expect(
+        client.query.mock.calls.some(([sql]: [string]) =>
+          /^\s*(INSERT|UPDATE|DELETE)\b/.test(sql),
+        ),
+      ).toBe(false);
+    },
+  );
+  it('accepts the minimum wallet amount and queues it without calling the provider', async () => {
+    const { service, client } = setup();
+    client.query
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ currency: 'UGX' }] })
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ id: 'release', owner_proceeds_minor: '1000' }],
+      })
+      .mockResolvedValue({ rowCount: 1, rows: [] });
+    await expect(
+      service.withdrawWallet({
+        creatorId: 'creator-1',
+        destinationId: 'dest',
+        idempotencyKey: 'key',
+        expectedAmountMinor: '1000',
+      }),
+    ).resolves.toMatchObject({ state: 'pending', amountMinor: '1000' });
+  });
+  it.each(['pending', 'processing', 'paid', 'failed'])(
+    'reports job failure independently of ledger state %s',
+    async (state) => {
+      const { service, database } = setup();
+      database.query.mockResolvedValue({
+        rowCount: 1,
+        rows: [
+          {
+            id: 'payout',
+            state,
+            job_status: 'dead_letter',
+            job_type: 'payout.dispatch.requested',
+            last_error_code: 'PROVIDER_PERMANENT',
+            last_error_message_safe:
+              'Flutterwave transfer submission failed (HTTP 400): Amount is below the provider minimum.',
+          },
+        ],
+      });
+      const result = await service.getPayout('creator-1', 'payout');
+      expect(result.state).toBe(state);
+      expect(result.processingStatus).toBe(
+        ['paid', 'failed'].includes(state) ? state : 'review_required',
+      );
+      expect(result).not.toHaveProperty('last_error_message_safe');
+      expect(result).not.toHaveProperty('job_status');
+      if (state === 'pending')
+        expect(result).toMatchObject({
+          failureStage: 'provider_submission',
+          errorMessage: expect.stringContaining('HTTP 400') as unknown,
+        });
+    },
+  );
+  it('does not invent the reason for an older stopped payout or expose an untrusted job error', async () => {
+    const { service, database } = setup();
+    database.query.mockResolvedValue({
+      rowCount: 1,
+      rows: [
+        {
+          id: 'payout',
+          state: 'pending',
+          job_status: 'dead_letter',
+          last_error_code: 'oops',
+          last_error_message_safe: 'Bearer private-value',
+        },
+      ],
+    });
+    const result = await service.listPayouts('creator-1');
+    expect(result[0]).toMatchObject({
+      processingStatus: 'review_required',
+      errorCode: 'PAYOUT_PROCESSING_ERROR',
+      errorMessage: expect.stringContaining(
+        'without detailed provider diagnostics',
+      ) as unknown,
+    });
+    expect(JSON.stringify(result)).not.toContain('private-value');
+    expect(database.query).toHaveBeenCalledTimes(1);
+  });
   it.each([
     undefined,
     { ...verifiedUser, emailVerifiedAt: undefined },
