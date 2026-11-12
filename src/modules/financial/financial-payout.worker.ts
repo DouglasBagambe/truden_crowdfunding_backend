@@ -40,8 +40,16 @@ export class FinancialPayoutWorker {
   verifyWebhookSignature(
     raw: Buffer | undefined,
     signature: string | undefined,
+    verificationHash?: string,
   ) {
-    return this.provider.verifyWebhookSignature(raw, signature);
+    return this.provider.verifyWebhookSignature(
+      raw,
+      signature,
+      verificationHash,
+    );
+  }
+  supportsWebhookEvent(body: Record<string, unknown>) {
+    return this.provider.supportsWebhookEvent(body);
   }
   async dispatch(payload: Record<string, unknown>) {
     const payoutId = this.payoutId(payload);
@@ -173,7 +181,7 @@ export class FinancialPayoutWorker {
       input.currency !== 'UGX'
     )
       throw new ConflictException('Malformed payout callback');
-    await this.database.transaction(async (client) => {
+    const payoutId = await this.database.transaction(async (client) => {
       const row = await client.query<PayoutRow>(
         'SELECT * FROM financial_payout_transfers WHERE keibo_reference=$1 FOR UPDATE',
         [input.reference],
@@ -188,35 +196,11 @@ export class FinancialPayoutWorker {
       )
         throw new ConflictException('Payout callback does not match transfer');
       if (payout.state === 'paid') return;
-      if (input.status === 'SUCCESSFUL')
-        return this.transition(
-          client,
-          payout.id,
-          'paid',
-          input.status,
-          'payout.paid',
-          'paid_at',
-        );
-      if (input.status === 'FAILED')
-        return this.transition(
-          client,
-          payout.id,
-          'failed',
-          input.status,
-          'payout.failed',
-          'failed_at',
-        );
-      if (input.status === 'PROCESSING') {
-        const updated = await client.query(
-          `UPDATE financial_payout_transfers SET state='processing',provider_status=$2,updated_at=now() WHERE id=$1 AND state='pending' RETURNING id`,
-          [payout.id, input.status],
-        );
-        if (updated.rowCount)
-          await this.outbox(client, 'payout.processing', payout.id, {
-            payoutId: payout.id,
-          });
-      }
+      return payout.id;
     });
+    // A webhook is a notification, not authoritative evidence of payment.
+    // Reuse API reconciliation, including its identity/amount/currency checks.
+    if (payoutId) await this.reconcile({ payoutId });
     return { accepted: true };
   }
   private payoutId(payload: Record<string, unknown> | undefined) {

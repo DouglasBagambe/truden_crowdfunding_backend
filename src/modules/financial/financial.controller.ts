@@ -4,6 +4,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Headers,
   Param,
   Post,
@@ -135,13 +136,21 @@ export class FinancialController {
   @Public()
   @CsrfExempt()
   @Post('payouts/flutterwave/callback')
+  @HttpCode(200)
   async flutterwavePayoutCallback(
     @Body() body: Record<string, unknown>,
     @Headers('flutterwave-signature') signature: string | undefined,
     @Request() request: { rawBody?: Buffer },
+    @Headers('verif-hash') verificationHash?: string,
   ) {
     const raw = request.rawBody;
-    if (!this.payoutWorker.verifyWebhookSignature(raw, signature))
+    if (
+      !this.payoutWorker.verifyWebhookSignature(
+        raw,
+        signature,
+        verificationHash,
+      )
+    )
       throw new ForbiddenException(
         'Invalid Flutterwave payout webhook signature',
       );
@@ -149,7 +158,7 @@ export class FinancialController {
       body.data && typeof body.data === 'object'
         ? (body.data as Record<string, unknown>)
         : {};
-    if (body.type !== 'transfer.disburse')
+    if (!this.payoutWorker.supportsWebhookEvent(body))
       throw new ServiceUnavailableException(
         'Unsupported Flutterwave payout event',
       );

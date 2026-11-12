@@ -185,6 +185,50 @@ describe('FinancialPayoutWorker', () => {
       worker.reconcile({ payoutId: 'payout-1' }),
     ).rejects.toMatchObject({ code: 'RPC_PENDING' });
   });
+  it('rechecks the provider rather than trusting a successful callback', async () => {
+    const { worker, provider, client } = setup();
+    client.query.mockResolvedValueOnce({ rowCount: 1, rows: [payout()] });
+    provider.getTransferStatus.mockResolvedValue({
+      id: 'transfer-1',
+      reference: 'KEIBO-PAYOUT-release-1',
+      amount: '9500',
+      currency: 'UGX',
+      status: 'PENDING',
+    });
+    await worker.callback({
+      transferId: 'transfer-1',
+      reference: 'KEIBO-PAYOUT-release-1',
+      amount: '9500',
+      currency: 'UGX',
+      status: 'SUCCESSFUL',
+    });
+    expect(provider.getTransferStatus).toHaveBeenCalledWith('transfer-1');
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('COALESCE'),
+      expect.any(Array),
+    );
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringContaining('state=$2'),
+      ['payout-1', 'pending', 'PENDING'],
+    );
+  });
+  it('does not change the ledger when callback provider verification fails', async () => {
+    const { worker, provider, client } = setup();
+    client.query.mockResolvedValueOnce({ rowCount: 1, rows: [payout()] });
+    provider.getTransferStatus.mockRejectedValue(
+      new Error('Provider unavailable'),
+    );
+    await expect(
+      worker.callback({
+        transferId: 'transfer-1',
+        reference: 'KEIBO-PAYOUT-release-1',
+        amount: '9500',
+        currency: 'UGX',
+        status: 'SUCCESSFUL',
+      }),
+    ).rejects.toThrow('Provider unavailable');
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
   it('correlates callback data and never regresses PAID', async () => {
     const { worker, database, client } = setup(payout('paid'));
     database.transaction.mockImplementation(

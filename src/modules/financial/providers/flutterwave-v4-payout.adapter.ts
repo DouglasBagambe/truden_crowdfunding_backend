@@ -156,6 +156,7 @@ export class FlutterwaveV4PayoutAdapter {
           amount: Number(input.amountMinor),
           currency: 'UGX',
           debit_currency: 'UGX',
+          callback_url: this.callbackUrl(),
           reference: input.reference,
           narration: input.narration,
         },
@@ -214,16 +215,29 @@ export class FlutterwaveV4PayoutAdapter {
   verifyWebhookSignature(
     raw: Buffer | undefined,
     signature: string | undefined,
+    verificationHash?: string,
   ) {
     const secret = this.config
       .get<string>('FLUTTERWAVE_WEBHOOK_SECRET')
       ?.trim();
-    if (!raw || !signature || !secret) return false;
+    if (!secret) return false;
+    if (this.useV3()) {
+      if (!verificationHash) return false;
+      const expected = Buffer.from(secret);
+      const got = Buffer.from(verificationHash);
+      return got.length === expected.length && timingSafeEqual(got, expected);
+    }
+    if (!raw || !signature) return false;
     const expected = Buffer.from(
       createHmac('sha256', secret).update(raw).digest('base64'),
     );
     const got = Buffer.from(signature);
     return got.length === expected.length && timingSafeEqual(got, expected);
+  }
+  supportsWebhookEvent(body: Record<string, unknown>): boolean {
+    return this.useV3()
+      ? body.event === 'transfer.completed'
+      : body.type === 'transfer.disburse';
   }
   private async post(path: string, body: unknown, idempotencyKey: string) {
     try {
