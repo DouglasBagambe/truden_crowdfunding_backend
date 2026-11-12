@@ -156,6 +156,7 @@ export class FlutterwaveV4PayoutAdapter {
           amount: Number(input.amountMinor),
           currency: 'UGX',
           debit_currency: 'UGX',
+          callback_url: this.callbackUrl(),
           reference: input.reference,
           narration: input.narration,
         },

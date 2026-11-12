@@ -355,6 +355,8 @@ describe('FlutterwaveV4PayoutAdapter', () => {
         beneficiary: 123,
         amount: 950,
         currency: 'UGX',
+        callback_url:
+          'https://api.keibo.test/api/financial/payouts/flutterwave/callback',
         reference: 'unique-keibo-reference',
       }),
       expect.any(Object),
