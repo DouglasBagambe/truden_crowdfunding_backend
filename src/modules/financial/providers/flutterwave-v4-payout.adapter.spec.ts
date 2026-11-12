@@ -246,6 +246,65 @@ describe('FlutterwaveV4PayoutAdapter', () => {
     expect(adapter.verifyWebhookSignature(undefined, signature)).toBe(false);
     expect(adapter.verifyWebhookSignature(raw, undefined)).toBe(false);
   });
+  it('reports beneficiary lookup failure without attempting the transfer or leaking provider details', async () => {
+    const client = http();
+    client.get.mockReturnValue(
+      throwError(() => ({
+        response: {
+          status: 401,
+          data: { message: 'secret FLWSECK-private 256771234567' },
+        },
+      })),
+    );
+    const adapter = new FlutterwaveV4PayoutAdapter(
+      config({ ...values, FLUTTERWAVE_PAYOUT_API_VERSION: '3' }),
+      client as never,
+      {} as never,
+    );
+    await expect(
+      adapter.createTransfer({
+        recipientId: '123',
+        amountMinor: 1900n,
+        currency: 'UGX',
+        reference: 'ref',
+        narration: 'payout',
+        idempotencyKey: 'key',
+      }),
+    ).rejects.toMatchObject({
+      message:
+        'Flutterwave beneficiary lookup failed (HTTP 401): API authentication was rejected.',
+      code: 'PROVIDER_PERMANENT',
+    });
+    expect(client.post).not.toHaveBeenCalled();
+  });
+  it('returns safe execution failure details after a successful status lookup', async () => {
+    const client = http();
+    client.get.mockReturnValue(
+      of({
+        data: {
+          data: {
+            id: 'transfer',
+            status: 'FAILED',
+            complete_message: 'Insufficient balance for 256771234567',
+            amount: 1900,
+            currency: 'UGX',
+          },
+        },
+      }),
+    );
+    const adapter = new FlutterwaveV4PayoutAdapter(
+      config(values),
+      client as never,
+      { accessToken: jest.fn().mockResolvedValue('local') } as never,
+    );
+    const result = await adapter.getTransferStatus('transfer');
+    expect(result).toMatchObject({
+      status: 'FAILED',
+      failureMessage:
+        'Flutterwave transfer execution failed: Insufficient provider payout balance or fee coverage.',
+    });
+    expect(JSON.stringify(result)).not.toContain('256771234567');
+  });
   it('requires the v3 verification hash and v3 event without accepting a v4 signature', () => {
     const adapter = new FlutterwaveV4PayoutAdapter(
       config({ ...values, FLUTTERWAVE_PAYOUT_API_VERSION: '3' }),

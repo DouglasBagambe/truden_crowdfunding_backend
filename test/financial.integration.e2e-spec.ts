@@ -163,6 +163,26 @@ describe('financial PostgreSQL integration', () => {
     expect((await payouts.wallet('wallet-creator')).balances).toMatchObject([
       { availableMinor: '0', heldMinor: '28500' },
     ]);
+    // Isolated database fixture: operational failure must not release reserved funds.
+    await database.query(
+      `UPDATE financial_jobs SET status='dead_letter',last_error_code='PROVIDER_PERMANENT',
+        last_error_message_safe='Flutterwave transfer submission failed (HTTP 400): Insufficient provider payout balance or fee coverage.'
+        WHERE aggregate_type='payout_transfer' AND aggregate_id=$1`,
+      [payout.id],
+    );
+    expect(await payouts.getPayout('wallet-creator', payout.id)).toMatchObject({
+      state: 'pending',
+      processingStatus: 'review_required',
+      errorCode: 'PROVIDER_PERMANENT',
+      failureStage: 'provider_submission',
+      errorMessage: expect.stringContaining('HTTP 400') as unknown,
+    });
+    expect((await payouts.wallet('wallet-creator')).balances).toMatchObject([
+      { availableMinor: '0', heldMinor: '28500' },
+    ]);
+    await expect(
+      payouts.getPayout('different-creator', payout.id),
+    ).rejects.toThrow('Payout not found');
     const worker = new FinancialPayoutWorker(database, provider as never);
     await worker.dispatch({ payoutId: payout.id });
     await worker.dispatch({ payoutId: payout.id });
@@ -192,6 +212,10 @@ describe('financial PostgreSQL integration', () => {
     expect((await payouts.wallet('wallet-creator')).balances).toMatchObject([
       { availableMinor: '0', heldMinor: '0', paidMinor: '28500' },
     ]);
+    expect(await payouts.getPayout('wallet-creator', payout.id)).toMatchObject({
+      state: 'paid',
+      processingStatus: 'paid',
+    });
     const paid = await database.query<{ count: string }>(
       'SELECT COUNT(*)::text AS count FROM financial_journals WHERE idempotency_key=$1',
       [`wallet-paid:${payout.id}`],
@@ -207,6 +231,16 @@ describe('financial PostgreSQL integration', () => {
     await transfer(first);
     expect((await payouts.wallet('wallet-creator')).balances).toMatchObject([
       { availableMinor: '950' },
+    ]);
+    await expect(
+      payouts.withdrawWallet({
+        ...request,
+        idempotencyKey: randomUUID(),
+        expectedAmountMinor: '950',
+      }),
+    ).rejects.toThrow('at least UGX 1,000');
+    expect((await payouts.wallet('wallet-creator')).balances).toMatchObject([
+      { availableMinor: '950', heldMinor: '0' },
     ]);
   });
 

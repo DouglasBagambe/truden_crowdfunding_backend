@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import { firstValueFrom } from 'rxjs';
+import { PayoutProviderError } from './payout-provider.error';
 export type PayoutProviderStatus =
   | 'PENDING'
   | 'PROCESSING'
@@ -136,7 +137,9 @@ export class FlutterwaveV4PayoutAdapter {
           `${this.baseUrl()}/beneficiaries/${encodeURIComponent(input.recipientId)}`,
           { headers: await this.headers(), timeout: 15_000 },
         ),
-      );
+      ).catch((error: unknown) => {
+        throw new PayoutProviderError(error, 'beneficiary lookup');
+      });
       const recipient = this.data(recipientResponse.data);
       const bank = this.scalar(recipient.bank_code ?? recipient.account_bank);
       const number = this.scalar(recipient.account_number);
@@ -207,9 +210,21 @@ export class FlutterwaveV4PayoutAdapter {
         status: this.status(this.scalar(data.status)),
         amount: this.scalar(data.amount),
         currency: this.scalar(data.destination_currency ?? data.currency),
+        ...(this.status(this.scalar(data.status)) === 'FAILED'
+          ? {
+              failureMessage: new PayoutProviderError(
+                {
+                  response: {
+                    data: { message: data.complete_message ?? data.message },
+                  },
+                },
+                'transfer execution',
+              ).message,
+            }
+          : {}),
       };
     } catch (error) {
-      throw this.providerError(error);
+      throw new PayoutProviderError(error, 'transfer status lookup');
     }
   }
   verifyWebhookSignature(
@@ -247,9 +262,24 @@ export class FlutterwaveV4PayoutAdapter {
           timeout: 15_000,
         }),
       );
+      const responseBody: unknown = response.data;
+      if (
+        responseBody &&
+        typeof responseBody === 'object' &&
+        'status' in responseBody &&
+        responseBody.status === 'error'
+      )
+        throw new PayoutProviderError(
+          { response: { status: response.status, data: responseBody } },
+          path === '/transfers' ? 'transfer submission' : 'recipient creation',
+        );
       return this.data(response.data);
     } catch (error) {
-      throw this.providerError(error);
+      if (error instanceof PayoutProviderError) throw error;
+      throw new PayoutProviderError(
+        error,
+        path === '/transfers' ? 'transfer submission' : 'recipient creation',
+      );
     }
   }
   private async headers(idempotencyKey?: string) {
@@ -294,30 +324,6 @@ export class FlutterwaveV4PayoutAdapter {
     return obj.data && typeof obj.data === 'object'
       ? (obj.data as Record<string, unknown>)
       : obj;
-  }
-  private providerError(error: unknown): Error {
-    const candidate = error as {
-      code?: unknown;
-      response?: { status?: unknown };
-    };
-    const status =
-      typeof candidate.response?.status === 'number'
-        ? candidate.response.status
-        : undefined;
-    const retryable =
-      status === 429 ||
-      (typeof status === 'number' && status >= 500) ||
-      ['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN'].includes(
-        String(candidate.code),
-      );
-    return Object.assign(
-      new Error(
-        retryable
-          ? 'Flutterwave payout provider is temporarily unavailable'
-          : 'Flutterwave payout provider rejected the request',
-      ),
-      { code: retryable ? 'PROVIDER_RETRYABLE' : 'PROVIDER_PERMANENT' },
-    );
   }
   private scalar(value: unknown) {
     return typeof value === 'string' || typeof value === 'number'

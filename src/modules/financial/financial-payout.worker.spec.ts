@@ -131,6 +131,14 @@ describe('FinancialPayoutWorker', () => {
         sql.includes('COALESCE'),
       );
       expect(updates).toHaveLength(1);
+      if (status === 'FAILED')
+        expect(client.query).toHaveBeenCalledWith(
+          expect.stringContaining("failure_code='PROVIDER_TRANSFER_FAILED'"),
+          expect.arrayContaining([
+            'payout-1',
+            expect.stringContaining('Provider confirmed failure') as unknown,
+          ]),
+        );
       expect(client.query).toHaveBeenCalledWith(
         expect.stringContaining('financial_outbox'),
         expect.arrayContaining([

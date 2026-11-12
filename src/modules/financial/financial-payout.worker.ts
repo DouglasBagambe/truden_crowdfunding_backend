@@ -149,7 +149,15 @@ export class FinancialPayoutWorker {
           'payout.paid',
           'paid_at',
         );
-      if (result.status === 'FAILED')
+      if (result.status === 'FAILED') {
+        await client.query(
+          `UPDATE financial_payout_transfers SET failure_code='PROVIDER_TRANSFER_FAILED',failure_message_safe=$2 WHERE id=$1 AND state<>'paid'`,
+          [
+            payout.id,
+            result.failureMessage ??
+              'Flutterwave transfer execution failed: Provider confirmed failure without a detailed reason.',
+          ],
+        );
         return this.transition(
           client,
           payout.id,
@@ -158,6 +166,7 @@ export class FinancialPayoutWorker {
           'payout.failed',
           'failed_at',
         );
+      }
       if (result.status === 'UNKNOWN')
         throw Object.assign(new Error('Provider status unknown'), {
           code: 'RPC_PENDING',
