@@ -109,12 +109,12 @@ describe('DPO delayed-settlement recovery', () => {
       expect.objectContaining({
         status: { $in: [PaymentStatus.Pending, PaymentStatus.Successful] },
         'metadata.dpoSettlementReconciled': { $ne: true },
-        createdAt: { $lte: expect.any(Date) },
+        createdAt: { $lte: expect.any(Date) as unknown },
         $and: [
           {
             $or: [
               { status: PaymentStatus.Successful },
-              { createdAt: { $gte: expect.any(Date) } },
+              { createdAt: { $gte: expect.any(Date) as unknown } },
             ],
           },
         ],
@@ -172,7 +172,7 @@ describe('DPO delayed-settlement recovery', () => {
     await reconcile(c.service);
     expect(c.transactions.updateOne).toHaveBeenCalledWith(
       { _id: 'checkout' },
-      { $set: { dpoVerifyAfter: expect.any(Date) } },
+      { $set: { dpoVerifyAfter: expect.any(Date) as unknown } },
       { timestamps: false },
     );
   });
