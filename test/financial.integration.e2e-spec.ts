@@ -127,6 +127,7 @@ describe('financial PostgreSQL integration', () => {
         id: 'wallet-provider-transfer',
         status: 'PENDING',
       }),
+      getTransferStatus: jest.fn(),
     };
     const payouts = new FinancialPayoutService(
       database,
@@ -176,6 +177,13 @@ describe('financial PostgreSQL integration', () => {
       currency: 'UGX',
       status: 'SUCCESSFUL' as const,
     };
+    provider.getTransferStatus.mockResolvedValue({
+      id: callback.transferId,
+      reference: callback.reference,
+      amount: callback.amount,
+      currency: callback.currency,
+      status: callback.status,
+    });
     await expect(
       worker.callback({ ...callback, amount: '28000' }),
     ).rejects.toThrow(/does not match/);

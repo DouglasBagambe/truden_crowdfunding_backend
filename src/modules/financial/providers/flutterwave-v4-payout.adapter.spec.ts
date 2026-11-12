@@ -246,6 +246,48 @@ describe('FlutterwaveV4PayoutAdapter', () => {
     expect(adapter.verifyWebhookSignature(undefined, signature)).toBe(false);
     expect(adapter.verifyWebhookSignature(raw, undefined)).toBe(false);
   });
+  it('requires the v3 verification hash and v3 event without accepting a v4 signature', () => {
+    const adapter = new FlutterwaveV4PayoutAdapter(
+      config({ ...values, FLUTTERWAVE_PAYOUT_API_VERSION: '3' }),
+      http() as never,
+      {} as never,
+    );
+    const raw = Buffer.from('{}');
+    const signature = createHmac('sha256', values.FLUTTERWAVE_WEBHOOK_SECRET)
+      .update(raw)
+      .digest('base64');
+    expect(adapter.verifyWebhookSignature(raw, signature)).toBe(false);
+    expect(adapter.verifyWebhookSignature(raw, undefined, 'wrong')).toBe(false);
+    expect(
+      adapter.verifyWebhookSignature(
+        raw,
+        undefined,
+        values.FLUTTERWAVE_WEBHOOK_SECRET,
+      ),
+    ).toBe(true);
+    expect(adapter.supportsWebhookEvent({ event: 'transfer.completed' })).toBe(
+      true,
+    );
+    expect(adapter.supportsWebhookEvent({ type: 'transfer.disburse' })).toBe(
+      false,
+    );
+    const v4 = new FlutterwaveV4PayoutAdapter(
+      config(values),
+      http() as never,
+      {} as never,
+    );
+    expect(
+      v4.verifyWebhookSignature(
+        raw,
+        undefined,
+        values.FLUTTERWAVE_WEBHOOK_SECRET,
+      ),
+    ).toBe(false);
+    expect(v4.supportsWebhookEvent({ event: 'transfer.completed' })).toBe(
+      false,
+    );
+    expect(v4.supportsWebhookEvent({ type: 'transfer.disburse' })).toBe(true);
+  });
   it('uses an existing v3 secret only against v3 beneficiary and transfer APIs', async () => {
     const client = http();
     const oauth = { accessToken: jest.fn() };
