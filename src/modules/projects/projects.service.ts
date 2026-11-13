@@ -552,13 +552,28 @@ export class ProjectsService {
 
   async listMyProjects(creatorId: string) {
     const projects = await this.projectsRepo.findByCreator(creatorId);
-    return this.withLedgerProgress(
-      projects.filter(
-        (project) =>
-          investmentsEnabled(this.configService) ||
-          this.readProjectType(project) !== ProjectType.ROI,
-      ),
+    const owned = projects.filter(
+      (project) =>
+        investmentsEnabled(this.configService) ||
+        this.readProjectType(project) !== ProjectType.ROI,
     );
+    const visible = await this.withLedgerProgress(owned);
+    const funds = this.charityLedger
+      ? await this.charityLedger.campaignFunds(
+          projects
+            .filter(
+              (project) =>
+                this.readProjectType(project) === ProjectType.CHARITY,
+            )
+            .map((project) => String(project._id)),
+        )
+      : [];
+    return visible.map((project, index) => ({
+      ...project,
+      walletFunds: funds.filter(
+        (fund) => fund.project_id === String(owned[index]._id),
+      ),
+    }));
   }
 
   async listPublicProjects(query: QueryProjectsDto, userId?: string) {

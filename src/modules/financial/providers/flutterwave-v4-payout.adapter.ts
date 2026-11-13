@@ -227,6 +227,50 @@ export class FlutterwaveV4PayoutAdapter {
       throw new PayoutProviderError(error, 'transfer status lookup');
     }
   }
+  /** Read-only lookup for a dispatch that never saved a provider ID. */
+  async findTransferByReference(reference: string) {
+    this.assertLivePayoutReady();
+    if (!this.useV3() || !/^KEIBO[-A-Z0-9]+$/i.test(reference))
+      throw new ServiceUnavailableException(
+        'Reference lookup is unavailable for this payout',
+      );
+    try {
+      const response = await firstValueFrom(
+        this.http.get(`${this.baseUrl()}/transfers`, {
+          headers: await this.headers(),
+          params: { reference, page: 1, page_size: 100 },
+          timeout: 15_000,
+        }),
+      );
+      const body = response.data as {
+        status?: unknown;
+        data?: unknown;
+        meta?: { page_info?: { total_pages?: unknown } };
+      };
+      if (body?.status !== 'success' || !Array.isArray(body.data))
+        throw new Error('Invalid reference lookup response');
+      // Do not claim absence from a partial or unexpectedly broad response.
+      if (Number(body.meta?.page_info?.total_pages ?? 1) > 1)
+        throw new Error('Reference lookup response is incomplete');
+      const matches = (body.data as Record<string, unknown>[]).filter(
+        (item) => item?.reference === reference,
+      );
+      if (matches.length > 1) throw new Error('Ambiguous reference lookup');
+      if (!matches.length) return null;
+      const data = matches[0];
+      const id = this.scalar(data.id);
+      if (!id) throw new Error('Missing transfer identifier');
+      return {
+        id,
+        reference,
+        status: this.status(this.scalar(data.status)),
+        amount: this.scalar(data.amount),
+        currency: this.scalar(data.currency),
+      };
+    } catch (error) {
+      throw new PayoutProviderError(error, 'transfer reference lookup');
+    }
+  }
   verifyWebhookSignature(
     raw: Buffer | undefined,
     signature: string | undefined,

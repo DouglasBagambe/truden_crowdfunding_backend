@@ -10,6 +10,79 @@ const config = (values: Record<string, string>) =>
 const http = () => ({ post: jest.fn(), get: jest.fn() });
 
 describe('FlutterwaveV4PayoutAdapter', () => {
+  it('looks up only an exact Keibo reference using GET, never a transfer POST', async () => {
+    const client = http();
+    client.get.mockReturnValue(
+      of({
+        data: {
+          status: 'success',
+          data: [
+            {
+              id: 123,
+              reference: 'KEIBO-WALLET-ref',
+              amount: 475,
+              currency: 'UGX',
+              status: 'FAILED',
+              account_number: 'private-number',
+            },
+          ],
+        },
+      }),
+    );
+    const adapter = new FlutterwaveV4PayoutAdapter(
+      config({
+        FLUTTERWAVE_PAYOUT_API_VERSION: '3',
+        FLUTTERWAVE_SECRET_KEY: 'FLWSECK-live-fixture',
+      }),
+      client as never,
+      {} as never,
+    );
+    const result = await adapter.findTransferByReference('KEIBO-WALLET-ref');
+    expect(result).toEqual({
+      id: '123',
+      reference: 'KEIBO-WALLET-ref',
+      amount: '475',
+      currency: 'UGX',
+      status: 'FAILED',
+    });
+    expect(client.get).toHaveBeenCalledWith(
+      'https://api.flutterwave.com/v3/transfers',
+      expect.objectContaining({
+        params: { reference: 'KEIBO-WALLET-ref', page: 1, page_size: 100 },
+      }),
+    );
+    expect(client.post).not.toHaveBeenCalled();
+  });
+  it.each([
+    { status: 'error', data: [] },
+    { status: 'success', data: {} },
+    { status: 'success', data: [], meta: { page_info: { total_pages: 2 } } },
+    {
+      status: 'success',
+      data: [
+        { reference: 'KEIBO-WALLET-ref', id: 1 },
+        { reference: 'KEIBO-WALLET-ref', id: 2 },
+      ],
+    },
+  ])(
+    'does not treat incomplete or ambiguous lookup as proof of no transfer',
+    async (body) => {
+      const client = http();
+      client.get.mockReturnValue(of({ data: body }));
+      const adapter = new FlutterwaveV4PayoutAdapter(
+        config({
+          FLUTTERWAVE_PAYOUT_API_VERSION: '3',
+          FLUTTERWAVE_SECRET_KEY: 'FLWSECK-live-fixture',
+        }),
+        client as never,
+        {} as never,
+      );
+      await expect(
+        adapter.findTransferByReference('KEIBO-WALLET-ref'),
+      ).rejects.toThrow('reference lookup failed');
+      expect(client.post).not.toHaveBeenCalled();
+    },
+  );
   const values = {
     FLUTTERWAVE_SECRET_KEY: 'secret-not-to-log',
     FLUTTERWAVE_WEBHOOK_SECRET: 'webhook-secret',

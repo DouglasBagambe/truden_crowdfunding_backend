@@ -263,6 +263,15 @@ export class FinancialController {
     if (!creatorId) throw new Error('Authenticated user is required');
     return this.payouts.getPayout(creatorId, id);
   }
+  @Get('payouts/:id/provider-evidence')
+  getPayoutProviderEvidence(
+    @Param('id') id: string,
+    @Request() req: { user: { sub?: string; userId?: string } },
+  ) {
+    const creatorId = req.user?.sub ?? req.user?.userId;
+    if (!creatorId) throw new Error('Authenticated user is required');
+    return this.payouts.providerEvidence(creatorId, id);
+  }
   @Post('receipts/:settlementId/authorize') authorizeReceipt(
     @Param('settlementId') settlementId: string,
     @Request() req: { user: { sub?: string; userId?: string } },

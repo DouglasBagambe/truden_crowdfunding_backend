@@ -117,6 +117,11 @@ describe('financial PostgreSQL integration', () => {
     };
     await expect(transfer()).rejects.toThrow('No settled');
     expect(adapter.hasCompletedSettlement(evidence)).toBe(false);
+    expect((await charityReads.campaignFunds([projectId]))[0]).toMatchObject({
+      awaitingSettlementMinor: '2062',
+      transferableMinor: '0',
+      transferredMinor: '0',
+    });
     expect(
       (
         await database.query(
@@ -173,6 +178,11 @@ describe('financial PostgreSQL integration', () => {
     expect(release).toMatchObject({
       ownerProceedsMinor: '1900',
       successFeeMinor: '100',
+    });
+    expect((await charityReads.campaignFunds([projectId]))[0]).toMatchObject({
+      awaitingSettlementMinor: '0',
+      transferableMinor: '0',
+      transferredMinor: '2000',
     });
   });
 
