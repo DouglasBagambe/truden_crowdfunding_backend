@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import type { DpoVerifyResult } from '../../payments/dpo.service';
 import type { ProviderEvent } from '../financial.types';
 import { decimalToMinor } from './provider-adapter';
+import { createHash } from 'crypto';
 
 @Injectable()
 export class DpoFinancialAdapter {
@@ -59,7 +60,17 @@ export class DpoFinancialAdapter {
       Number.isFinite(date.getTime()) &&
       date.toISOString().slice(0, 10) === `${year}-${month}-${day}` &&
       date.getTime() <= Date.now() &&
-      Boolean(evidence.netAmount?.trim())
+      this.usableNet(evidence)
+    );
+  }
+
+  private usableNet(evidence: DpoVerifyResult): boolean {
+    const net = evidence.netAmount?.trim() ?? '';
+    return (
+      /^\d+(?:\.\d+)?$/.test(net) &&
+      /[1-9]/.test(net) &&
+      (String(evidence.currency).toUpperCase() !== 'UGX' ||
+        BigInt(net.split('.')[0]) > 0n)
     );
   }
 
@@ -87,8 +98,19 @@ export class DpoFinancialAdapter {
       );
     }
     const grossMinor = decimalToMinor(evidence.amount, currency);
+    if (
+      evidence.netAmount?.trim() &&
+      !/^\d+(?:\.\d+)?$/.test(evidence.netAmount.trim())
+    )
+      throw new ForbiddenException('DPO net amount is invalid');
     // DPO can report sub-shilling fees. Allocate only whole UGX to the campaign.
-    const netAmount = evidence.netAmount?.trim();
+    const netAmount = this.usableNet(evidence)
+      ? evidence.netAmount?.trim()
+      : undefined;
+    if (eventType === 'settled' && !netAmount)
+      throw new ForbiddenException(
+        'DPO settlement requires a positive net amount',
+      );
     const fractionalUgx =
       currency === 'UGX' && netAmount
         ? /^(\d+)\.(\d*[1-9]\d*)$/.exec(netAmount)
@@ -101,15 +123,21 @@ export class DpoFinancialAdapter {
     }
     return {
       provider: this.provider,
-      providerEventId:
-        eventType === 'captured'
-          ? `verified-token:${params.token}`
-          : `verified-settlement:${params.token}`,
+      // Evidence can mature after payment (zero/missing net -> final net).
+      // Do not let a permanently deduplicated earlier payload block fresh evidence.
+      providerEventId: `${eventType === 'captured' ? 'verified-token' : 'verified-settlement'}:${params.token}:v2:${createHash(
+        'sha256',
+      )
+        .update(
+          `${grossMinor}:${netAmount ?? 'unknown'}:${evidence.settlementDate ?? ''}`,
+        )
+        .digest('hex')
+        .slice(0, 24)}`,
       eventType,
       paymentIntentId: params.paymentIntentId,
       amountMinor: grossMinor,
       currency,
-      providerFeeMinor: grossMinor - netMinor,
+      ...(netAmount ? { providerFeeMinor: grossMinor - netMinor } : {}),
       receivedAt: new Date(),
     };
   }

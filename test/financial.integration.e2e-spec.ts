@@ -8,6 +8,7 @@ import { FinancialDatabase } from '../src/modules/financial/financial.database';
 import { FinancialService } from '../src/modules/financial/financial.service';
 import { FinancialOutboxService } from '../src/modules/financial/financial-outbox.service';
 import type { ProjectsService } from '../src/modules/projects/projects.service';
+import { DpoFinancialAdapter } from '../src/modules/financial/providers/dpo-financial.adapter';
 
 describe('financial PostgreSQL integration', () => {
   const databaseUrl = process.env.FINANCIAL_DATABASE_URL;
@@ -61,6 +62,118 @@ describe('financial PostgreSQL integration', () => {
     await database.query(
       'TRUNCATE financial_outbox, financial_inbox, financial_postings, financial_campaign_releases, financial_journals, financial_payment_intents, financial_reconciliations CASCADE',
     );
+  });
+
+  it('automatically reflects paid DPO zero-net evidence, blocks release, and finalizes a later positive net exactly once', async () => {
+    const projectId = randomUUID();
+    const paymentId = randomUUID();
+    await database.query(
+      `INSERT INTO financial_payment_intents(id,project_id,contributor_id,amount_minor,currency,state,idempotency_key,correlation_id) VALUES($1,$2,'donor',2062,'UGX','pending',$3,$4)`,
+      [paymentId, projectId, randomUUID(), randomUUID()],
+    );
+    const adapter = new DpoFinancialAdapter({
+      get: (key: string) =>
+        ({
+          DPO_COMPANY_TOKEN: 'isolated-fixture',
+          DPO_API_URL: 'https://fixture.invalid/api',
+        })[key],
+    } as ConfigService);
+    const evidence = {
+      status: '000',
+      message: 'Paid',
+      amount: '2062',
+      currency: 'UGX',
+      netAmount: '0.00',
+      settlementDate: '2026/01/01',
+    };
+    const captured = adapter.fromVerifiedToken({
+      token: randomUUID(),
+      paymentIntentId: paymentId,
+      evidence,
+    });
+    await financial.acceptProviderEvent(captured);
+    await expect(
+      financial.processNextInboxEvent(captured),
+    ).resolves.toMatchObject({ processed: true });
+    await financial.acceptProviderEvent(captured);
+    expect((await charityReads.totals([projectId]))[0]).toMatchObject({
+      amount_minor: '2062',
+      backer_count: '1',
+    });
+    const transfer = () => {
+      projectsService.getCharityWalletTransferEligibility = jest
+        .fn()
+        .mockResolvedValueOnce({
+          creatorId: 'dpo-net-creator',
+          currency: 'UGX',
+        })
+        .mockResolvedValue({ creatorId: 'wallet-creator', currency: 'UGX' });
+      return financial.transferCharityToWallet({
+        projectId,
+        requesterId: 'dpo-net-creator',
+        idempotencyKey: randomUUID(),
+        correlationId: randomUUID(),
+      });
+    };
+    await expect(transfer()).rejects.toThrow('No settled');
+    expect(adapter.hasCompletedSettlement(evidence)).toBe(false);
+    expect(
+      (
+        await database.query(
+          'SELECT provider_fee_minor,state FROM financial_payment_intents WHERE id=$1',
+          [paymentId],
+        )
+      ).rows[0],
+    ).toEqual({ provider_fee_minor: null, state: 'captured' });
+    // A distinct verified refresh must not be blocked by the original deduplication key.
+    const settled = adapter.fromVerifiedSettlement({
+      token: randomUUID(),
+      paymentIntentId: paymentId,
+      evidence: { ...evidence, netAmount: '2000.14' },
+    });
+    await financial.acceptProviderEvent(settled);
+    await expect(
+      financial.processNextInboxEvent(settled),
+    ).resolves.toMatchObject({ processed: true });
+    // Another provider event identity for the same evidence must not post another fee.
+    const duplicate = { ...settled, providerEventId: randomUUID() };
+    await financial.acceptProviderEvent(duplicate);
+    await expect(
+      financial.processNextInboxEvent(duplicate),
+    ).resolves.toMatchObject({ processed: true });
+    expect((await charityReads.totals([projectId]))[0]).toMatchObject({
+      amount_minor: '2000',
+      backer_count: '1',
+    });
+    expect(
+      (
+        await database.query(
+          'SELECT provider_fee_minor,state FROM financial_payment_intents WHERE id=$1',
+          [paymentId],
+        )
+      ).rows[0],
+    ).toEqual({ provider_fee_minor: '62', state: 'settled' });
+    expect(
+      (
+        await database.query(
+          `SELECT COUNT(*)::text AS count FROM financial_journals WHERE idempotency_key=$1`,
+          [`dpo-final-fee:${paymentId}`],
+        )
+      ).rows[0].count,
+    ).toBe('1');
+    expect(
+      (
+        await database.query(
+          `SELECT COALESCE(SUM(credit_minor-debit_minor),0)::text AS balance FROM financial_postings WHERE account=$1`,
+          [`liability:campaign_escrow:${projectId}:UGX`],
+        )
+      ).rows[0].balance,
+    ).toBe('2000');
+    const release = await transfer();
+    expect(release).toMatchObject({
+      ownerProceedsMinor: '1900',
+      successFeeMinor: '100',
+    });
   });
 
   it('transfers settled charity funds without milestones and withdraws the combined Wallet exactly once', async () => {
