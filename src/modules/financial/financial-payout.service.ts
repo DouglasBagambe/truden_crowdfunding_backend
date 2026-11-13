@@ -10,6 +10,7 @@ import { randomUUID } from 'crypto';
 import { FinancialDatabase } from './financial.database';
 import { UsersRepository } from '../users/repositories/users.repository';
 import { FlutterwaveV4PayoutAdapter } from './providers/flutterwave-v4-payout.adapter';
+import { decimalToMinor } from './providers/provider-adapter';
 
 @Injectable()
 export class FinancialPayoutService {
@@ -196,6 +197,46 @@ export class FinancialPayoutService {
       [creatorId],
     );
     return { balances: result.rows, transfers: transfers.rows };
+  }
+
+  /** No dispatch, retry, ledger mutation, or reservation release is allowed here. */
+  async providerEvidence(creatorId: string, id: string) {
+    const record = await this.database.query<{
+      keibo_reference: string;
+      provider_transfer_id: string | null;
+      currency: string;
+      amount_minor: string;
+    }>(
+      `SELECT keibo_reference,provider_transfer_id,currency,amount_minor
+      FROM financial_payout_transfers WHERE id=$1 AND creator_id=$2`,
+      [id, creatorId],
+    );
+    if (!record.rowCount) throw new NotFoundException('Payout not found');
+    this.flutterwave.assertLivePayoutReady();
+    const payout = record.rows[0];
+    const evidence = payout.provider_transfer_id
+      ? await this.flutterwave.getTransferStatus(payout.provider_transfer_id)
+      : await this.flutterwave.findTransferByReference(payout.keibo_reference);
+    if (
+      evidence &&
+      (evidence.reference !== payout.keibo_reference ||
+        (payout.provider_transfer_id &&
+          evidence.id !== payout.provider_transfer_id) ||
+        evidence.currency !== payout.currency ||
+        decimalToMinor(evidence.amount, evidence.currency) !==
+          BigInt(payout.amount_minor))
+    )
+      throw new ConflictException(
+        'Provider payout evidence does not match this withdrawal. Admin review is required.',
+      );
+    return {
+      reference: payout.keibo_reference,
+      checkedAt: new Date().toISOString(),
+      outcome: evidence?.status || 'NO_MATCHING_TRANSFER',
+      message: evidence
+        ? `Provider lookup returned ${evidence.status}. No payment was initiated and no reserved funds were released by this check. Admin reconciliation is required before a replacement payment.`
+        : 'No matching transfer was returned for this reference. This alone does not authorize a replacement payment or release reserved funds. Admin reconciliation is required.',
+    };
   }
 
   async withdrawWallet(input: {

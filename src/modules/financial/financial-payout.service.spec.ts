@@ -17,6 +17,8 @@ const setup = () => {
   const users = { findById: jest.fn().mockResolvedValue(verifiedUser) };
   const flutterwave = {
     assertLivePayoutReady: jest.fn(),
+    findTransferByReference: jest.fn(),
+    getTransferStatus: jest.fn(),
     environment: jest.fn().mockReturnValue('live'),
     createRecipient: jest.fn().mockResolvedValue({
       id: 'recipient-1',
@@ -37,6 +39,80 @@ const setup = () => {
 };
 
 describe('FinancialPayoutService', () => {
+  it('denies cross-user provider lookups before any provider request', async () => {
+    const { service, database, flutterwave } = setup();
+    database.query.mockResolvedValue({ rowCount: 0, rows: [] });
+    await expect(service.providerEvidence('other', 'payout')).rejects.toThrow(
+      'Payout not found',
+    );
+    expect(flutterwave.findTransferByReference).not.toHaveBeenCalled();
+    expect(flutterwave.getTransferStatus).not.toHaveBeenCalled();
+  });
+  it.each(['FAILED', 'SUCCESSFUL', 'PENDING', null])(
+    'reads provider outcome %s without releasing, retrying or changing balances',
+    async (status) => {
+      const { service, database, flutterwave } = setup();
+      database.query.mockResolvedValue({
+        rowCount: 1,
+        rows: [
+          {
+            keibo_reference: 'KEIBO-WALLET-ref',
+            provider_transfer_id: null,
+            amount_minor: '475',
+            currency: 'UGX',
+          },
+        ],
+      });
+      flutterwave.findTransferByReference.mockResolvedValue(
+        status
+          ? {
+              id: '123',
+              reference: 'KEIBO-WALLET-ref',
+              amount: '475',
+              currency: 'UGX',
+              status,
+            }
+          : null,
+      );
+      const result = await service.providerEvidence('owner', 'payout');
+      expect(result.outcome).toBe(status || 'NO_MATCHING_TRANSFER');
+      expect(flutterwave.findTransferByReference).toHaveBeenCalledWith(
+        'KEIBO-WALLET-ref',
+      );
+      expect(database.query).toHaveBeenCalledTimes(1);
+      expect(database.transaction).not.toHaveBeenCalled();
+      expect(result).not.toHaveProperty('id');
+    },
+  );
+  it.each([{ reference: 'other' }, { amount: '476' }, { currency: 'USD' }])(
+    'rejects mismatched provider evidence: %j',
+    async (override) => {
+      const { service, database, flutterwave } = setup();
+      database.query.mockResolvedValue({
+        rowCount: 1,
+        rows: [
+          {
+            keibo_reference: 'KEIBO-WALLET-ref',
+            provider_transfer_id: null,
+            amount_minor: '475',
+            currency: 'UGX',
+          },
+        ],
+      });
+      flutterwave.findTransferByReference.mockResolvedValue({
+        id: '123',
+        reference: 'KEIBO-WALLET-ref',
+        amount: '475',
+        currency: 'UGX',
+        status: 'SUCCESSFUL',
+        ...override,
+      });
+      await expect(service.providerEvidence('owner', 'payout')).rejects.toThrow(
+        'does not match',
+      );
+      expect(database.transaction).not.toHaveBeenCalled();
+    },
+  );
   it.each(['475', '999'])(
     'rejects below-minimum wallet withdrawal %s before any reservation or job',
     async (amount) => {

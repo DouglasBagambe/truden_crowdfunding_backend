@@ -1,4 +1,8 @@
 import { FinancialDatabaseModule } from '../financial/financial-database.module';
+import {
+  PaymentTransaction,
+  PaymentTransactionSchema,
+} from '../payments/schemas/payment-transaction.schema';
 import { CharityLedgerReadService } from './services/charity-ledger-read.service';
 import {
   SavedProject,
@@ -60,6 +64,7 @@ import {
     UsersModule,
     NotificationsModule,
     MongooseModule.forFeature([
+      { name: PaymentTransaction.name, schema: PaymentTransactionSchema },
       { name: SavedProject.name, schema: SavedProjectSchema },
       { name: Investment.name, schema: InvestmentSchema },
       {
