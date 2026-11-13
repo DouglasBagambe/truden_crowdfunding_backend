@@ -735,12 +735,16 @@ export class FinancialService {
           );
         return { ...this.serializeCampaignRelease(row), replayed: true };
       }
-      // Captured funds are already in escrow, but ONLY settled funds may move.
-      // Subtract all historical releases so old and new paths cannot double-spend.
+      // A verified capture with a known provider fee is already credited to
+      // campaign escrow. DPO's later bank settlement is a separate event.
+      // Unknown fees remain ineligible until the net amount is verified.
+      // Subtract historical releases so old and new paths cannot double-spend.
       const totals = await client.query<{ available: string }>(
         `
         SELECT (COALESCE((SELECT SUM(amount_minor-COALESCE(provider_fee_minor,0))
-          FROM financial_payment_intents WHERE project_id=$1 AND currency=$2 AND state='settled'),0)
+          FROM financial_payment_intents WHERE project_id=$1 AND currency=$2
+            AND state IN ('captured','settled')
+            AND (state='settled' OR provider_fee_minor IS NOT NULL)),0)
           - COALESCE((SELECT SUM(gross_amount_minor) FROM financial_campaign_releases
           WHERE project_id=$1 AND currency=$2),0))::text AS available`,
         [params.projectId, currency],
@@ -748,14 +752,14 @@ export class FinancialService {
       const gross = BigInt(totals.rows[0]?.available || '0');
       if (gross <= 0n)
         throw new ConflictException(
-          'No settled campaign funds are available to transfer to Wallet',
+          'No confirmed campaign funds with a known provider fee are available to transfer to Wallet',
         );
       await this.assertCreditBalance(client, account, gross);
       const fee = calculateCampaignSuccessFee(gross);
       const journal = await this.postJournalInTransaction(client, {
         idempotencyKey: `wallet-transfer:${params.idempotencyKey}`,
         correlationId: params.correlationId,
-        description: 'Settled charity funds transferred to creator Wallet',
+        description: 'Confirmed charity funds transferred to creator Wallet',
         lines: [
           { account, debitMinor: gross, creditMinor: 0n },
           {

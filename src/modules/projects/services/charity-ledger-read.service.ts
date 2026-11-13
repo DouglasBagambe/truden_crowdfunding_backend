@@ -38,7 +38,7 @@ export class CharityLedgerReadService {
     private readonly checkoutPayments?: Model<PaymentTransaction>,
   ) {}
 
-  /** Owner-only read model: paid is not necessarily settled or spendable. */
+  /** Owner-only read model: verified net captures may be transferred before bank settlement. */
   async campaignFunds(projectIds: string[]) {
     if (!projectIds.length) return [];
     const result = await this.database.query<{
@@ -50,15 +50,16 @@ export class CharityLedgerReadService {
     }>(
       `WITH paid AS (
         SELECT project_id,currency,
-          SUM(amount_minor-COALESCE(provider_fee_minor,0)) FILTER (WHERE state='captured') AS awaiting,
-          SUM(amount_minor-COALESCE(provider_fee_minor,0)) FILTER (WHERE state='settled') AS settled
+          SUM(amount_minor) FILTER (WHERE state='captured' AND provider_fee_minor IS NULL) AS awaiting,
+          SUM(amount_minor-COALESCE(provider_fee_minor,0)) FILTER
+            (WHERE state='settled' OR (state='captured' AND provider_fee_minor IS NOT NULL)) AS transferable
         FROM financial_payment_intents WHERE project_id=ANY($1::text[]) AND currency<>'USDC'
         GROUP BY project_id,currency
       ), released AS (
         SELECT project_id,currency,SUM(gross_amount_minor) AS amount
         FROM financial_campaign_releases WHERE project_id=ANY($1::text[]) GROUP BY project_id,currency
       ) SELECT p.project_id,p.currency,COALESCE(p.awaiting,0)::text AS "awaitingSettlementMinor",
-        GREATEST(COALESCE(p.settled,0)-COALESCE(r.amount,0),0)::text AS "transferableMinor",
+        GREATEST(COALESCE(p.transferable,0)-COALESCE(r.amount,0),0)::text AS "transferableMinor",
         COALESCE(r.amount,0)::text AS "transferredMinor"
       FROM paid p LEFT JOIN released r ON r.project_id=p.project_id AND r.currency=p.currency`,
       [projectIds],
