@@ -1,6 +1,7 @@
 import { decimalToMinor } from './providers/provider-adapter';
 import { ConflictException, Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
+import { randomUUID } from 'crypto';
 import { FinancialDatabase } from './financial.database';
 import { FlutterwaveV4PayoutAdapter } from './providers/flutterwave-v4-payout.adapter';
 
@@ -309,7 +310,14 @@ export class FinancialPayoutWorker {
   private async schedule(client: PoolClient, payoutId: string) {
     await client.query(
       `INSERT INTO financial_jobs(job_type,aggregate_type,aggregate_id,deduplication_key,payload,available_at) VALUES ('payout.reconcile.requested','payout_transfer',$1,$2,$3::jsonb,now()+interval '60 seconds') ON CONFLICT(deduplication_key) DO UPDATE SET available_at=LEAST(financial_jobs.available_at,EXCLUDED.available_at)`,
-      [payoutId, `payout.reconcile:${payoutId}`, JSON.stringify({ payoutId })],
+      // Each observation needs a successor, not the key of the job currently
+      // being processed: that job will be acknowledged as succeeded afterward.
+      // Financial state transitions remain idempotent per payout/journal.
+      [
+        payoutId,
+        `payout.reconcile:${payoutId}:${randomUUID()}`,
+        JSON.stringify({ payoutId }),
+      ],
     );
   }
   private async outbox(

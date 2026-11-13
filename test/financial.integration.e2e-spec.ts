@@ -1,6 +1,7 @@
 import { CharityLedgerReadService } from '../src/modules/projects/services/charity-ledger-read.service';
 import { FinancialPayoutService } from '../src/modules/financial/financial-payout.service';
 import { FinancialPayoutWorker } from '../src/modules/financial/financial-payout.worker';
+import { FinancialJobsService } from '../src/modules/financial/financial-jobs.service';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { createClient } from 'redis';
@@ -320,6 +321,36 @@ describe('financial PostgreSQL integration', () => {
       currency: 'UGX',
       status: 'SUCCESSFUL' as const,
     };
+    // Exercise the durable queue, not direct reconcile calls: acknowledging
+    // today's pending check must not consume the next scheduled observation.
+    const jobs = new FinancialJobsService(database, worker);
+    await database.query(
+      `UPDATE financial_jobs SET available_at=now()+interval '1 day' WHERE aggregate_id<>$1`,
+      [payout.id],
+    );
+    for (const status of ['PENDING', 'PROCESSING', 'SUCCESSFUL']) {
+      provider.getTransferStatus.mockResolvedValue({
+        id: callback.transferId,
+        reference: callback.reference,
+        amount: callback.amount,
+        currency: callback.currency,
+        status,
+      });
+      await database.query(
+        `UPDATE financial_jobs SET available_at=now()-interval '1 second'
+        WHERE aggregate_id=$1 AND job_type='payout.reconcile.requested' AND status IN ('pending','retry')`,
+        [payout.id],
+      );
+      expect(await jobs.processOne()).toEqual({ processed: true });
+      const successor = await database.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM financial_jobs WHERE aggregate_id=$1
+        AND job_type='payout.reconcile.requested' AND status IN ('pending','retry')`,
+        [payout.id],
+      );
+      expect(successor.rows[0].count).toBe(status === 'SUCCESSFUL' ? '0' : '1');
+    }
+    expect(provider.createTransfer).toHaveBeenCalledTimes(1);
+    expect(provider.getTransferStatus).toHaveBeenCalledTimes(3);
     provider.getTransferStatus.mockResolvedValue({
       id: callback.transferId,
       reference: callback.reference,
