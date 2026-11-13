@@ -1,6 +1,7 @@
 import { CharityLedgerReadService } from '../src/modules/projects/services/charity-ledger-read.service';
 import { FinancialPayoutService } from '../src/modules/financial/financial-payout.service';
 import { FinancialPayoutWorker } from '../src/modules/financial/financial-payout.worker';
+import { FinancialJobsService } from '../src/modules/financial/financial-jobs.service';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { createClient } from 'redis';
@@ -115,7 +116,7 @@ describe('financial PostgreSQL integration', () => {
         correlationId: randomUUID(),
       });
     };
-    await expect(transfer()).rejects.toThrow('No settled');
+    await expect(transfer()).rejects.toThrow('No confirmed');
     expect(adapter.hasCompletedSettlement(evidence)).toBe(false);
     expect((await charityReads.campaignFunds([projectId]))[0]).toMatchObject({
       awaitingSettlementMinor: '2062',
@@ -193,8 +194,8 @@ describe('financial PostgreSQL integration', () => {
       state = 'settled',
     ) => {
       await database.query(
-        `INSERT INTO financial_payment_intents(project_id,contributor_id,amount_minor,currency,state,idempotency_key,correlation_id)
-        VALUES($1,'wallet-test-donor',$2,'UGX',$3,$4,$5)`,
+        `INSERT INTO financial_payment_intents(project_id,contributor_id,amount_minor,currency,state,provider_fee_minor,idempotency_key,correlation_id)
+        VALUES($1,'wallet-test-donor',$2,'UGX',$3,CASE WHEN $3='captured' THEN NULL ELSE 0 END,$4,$5)`,
         [projectId, amount.toString(), state, randomUUID(), randomUUID()],
       );
       await financial.postJournal({
@@ -224,7 +225,7 @@ describe('financial PostgreSQL integration', () => {
     await seed(first, 10000n);
     await seed(second, 20000n);
     await seed(captured, 50000n, 'captured');
-    await expect(transfer(captured)).rejects.toThrow(/No settled/);
+    await expect(transfer(captured)).rejects.toThrow(/No confirmed/);
     const key = randomUUID();
     const moved = await transfer(first, key);
     expect(moved).toMatchObject({
@@ -235,7 +236,7 @@ describe('financial PostgreSQL integration', () => {
       id: moved.id,
       replayed: true,
     });
-    await expect(transfer(first)).rejects.toThrow(/No settled/);
+    await expect(transfer(first)).rejects.toThrow(/No confirmed/);
     await transfer(second);
     const users = {
       findById: jest.fn().mockResolvedValue({
@@ -320,6 +321,36 @@ describe('financial PostgreSQL integration', () => {
       currency: 'UGX',
       status: 'SUCCESSFUL' as const,
     };
+    // Exercise the durable queue, not direct reconcile calls: acknowledging
+    // today's pending check must not consume the next scheduled observation.
+    const jobs = new FinancialJobsService(database, worker);
+    await database.query(
+      `UPDATE financial_jobs SET available_at=now()+interval '1 day' WHERE aggregate_id<>$1`,
+      [payout.id],
+    );
+    for (const status of ['PENDING', 'PROCESSING', 'SUCCESSFUL']) {
+      provider.getTransferStatus.mockResolvedValue({
+        id: callback.transferId,
+        reference: callback.reference,
+        amount: callback.amount,
+        currency: callback.currency,
+        status,
+      });
+      await database.query(
+        `UPDATE financial_jobs SET available_at=now()-interval '1 second'
+        WHERE aggregate_id=$1 AND job_type='payout.reconcile.requested' AND status IN ('pending','retry')`,
+        [payout.id],
+      );
+      expect(await jobs.processOne()).toEqual({ processed: true });
+      const successor = await database.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM financial_jobs WHERE aggregate_id=$1
+        AND job_type='payout.reconcile.requested' AND status IN ('pending','retry')`,
+        [payout.id],
+      );
+      expect(successor.rows[0].count).toBe(status === 'SUCCESSFUL' ? '0' : '1');
+    }
+    expect(provider.createTransfer).toHaveBeenCalledTimes(1);
+    expect(provider.getTransferStatus).toHaveBeenCalledTimes(3);
     provider.getTransferStatus.mockResolvedValue({
       id: callback.transferId,
       reference: callback.reference,
@@ -572,9 +603,12 @@ describe('financial PostgreSQL integration', () => {
       idempotencyKey: 'dpo-wallet-ready',
       correlationId: randomUUID(),
     };
-    await expect(financial.transferCharityToWallet(transfer)).rejects.toThrow(
-      'No settled campaign funds',
-    );
+    const beforeSettlement = await financial.transferCharityToWallet(transfer);
+    expect(beforeSettlement).toMatchObject({
+      grossAmountMinor: '500',
+      ownerProceedsMinor: '475',
+      successFeeMinor: '25',
+    });
     const settlement = {
       paymentIntentId: intent.id,
       currency: 'UGX',
@@ -594,6 +628,7 @@ describe('financial PostgreSQL integration', () => {
       grossAmountMinor: '500',
       ownerProceedsMinor: '475',
       successFeeMinor: '25',
+      replayed: true,
     });
     await expect(
       financial.transferCharityToWallet(transfer),
