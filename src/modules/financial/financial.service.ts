@@ -425,7 +425,23 @@ export class FinancialService {
           ],
         );
         this.logger.error(
-          `Financial inbox event ${item.id} failed without sensitive payload logging`,
+          JSON.stringify({
+            eventId: item.id,
+            attempts,
+            status: dead ? 'dead_letter' : 'retry_scheduled',
+            reason:
+              error instanceof Error &&
+              [
+                'Provider fee cannot equal or exceed captured amount',
+                'Provider evidence does not match payment intent',
+                'Provider evidence does not match captured provider',
+                'DPO settlement requires confirmed provider fee evidence',
+                'Provider fee evidence changed for payment intent',
+                'Payment intent not found',
+              ].includes(error.message)
+                ? error.message
+                : 'Financial event processing failed; inspect the stored error using this event ID',
+          }),
         );
         return { processed: false, deadLettered: dead };
       }
@@ -993,6 +1009,16 @@ export class FinancialService {
     if (payment.provider && payment.provider !== event.provider)
       throw new Error('Provider evidence does not match captured provider');
     if (['refunded', 'reversed'].includes(payment.state)) return;
+    if (
+      event.eventType === 'captured' &&
+      ['captured', 'settled', 'released'].includes(payment.state)
+    )
+      return;
+    if (
+      event.eventType === 'settled' &&
+      ['settled', 'released'].includes(payment.state)
+    )
+      return;
     if (event.eventType === 'failed') {
       if (!['pending', 'authorized'].includes(payment.state))
         throw new Error(`Cannot fail payment from ${payment.state}`);
@@ -1027,6 +1053,41 @@ export class FinancialService {
       if (payment.state === 'settled') return;
       if (payment.state !== 'captured')
         throw new Error(`Cannot settle payment from ${payment.state}`);
+      if (event.provider === 'dpo' && event.providerFeeMinor === undefined)
+        throw new Error(
+          'DPO settlement requires confirmed provider fee evidence',
+        );
+      if (event.provider === 'dpo' && payment.provider_fee_minor === null) {
+        // Capture without net evidence credits gross pending funds. Recognize the
+        // actual fee before settlement makes any of that money transferable.
+        const escrow = `liability:campaign_escrow:${payment.project_id}:${payment.currency}`;
+        await this.lockLedgerAccount(client, escrow);
+        await this.assertCreditBalance(client, escrow, gross);
+        if (providerFee > 0n)
+          await this.postJournalInTransaction(client, {
+            idempotencyKey: `dpo-final-fee:${payment.id}`,
+            correlationId: randomUUID(),
+            description:
+              'Finalize DPO provider fee from verified net settlement',
+            lines: [
+              { account: escrow, debitMinor: providerFee, creditMinor: 0n },
+              {
+                account: `liability:provider_cost:dpo:${payment.currency}`,
+                debitMinor: 0n,
+                creditMinor: providerFee,
+              },
+            ],
+          });
+        await client.query(
+          'UPDATE financial_payment_intents SET provider_fee_minor=$2 WHERE id=$1',
+          [payment.id, providerFee.toString()],
+        );
+      } else if (
+        event.provider === 'dpo' &&
+        providerFee !== evidenceProviderFee
+      ) {
+        throw new Error('Provider fee evidence changed for payment intent');
+      }
       if (event.provider !== 'dpo') {
         await this.projectsService.ensureProjectCanReceiveDonation(
           payment.project_id,
@@ -1172,7 +1233,14 @@ export class FinancialService {
     });
     await client.query(
       "UPDATE financial_payment_intents SET state = 'captured', provider = $2, provider_fee_minor = $3, capture_journal_id = $4, updated_at = now() WHERE id = $1",
-      [payment.id, event.provider, providerFee.toString(), journal.id],
+      [
+        payment.id,
+        event.provider,
+        event.provider === 'dpo' && event.providerFeeMinor === undefined
+          ? null
+          : providerFee.toString(),
+        journal.id,
+      ],
     );
     await this.enqueue(client, 'payment.captured', payment.id, randomUUID(), {
       projectId: payment.project_id,

@@ -1,5 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { PaymentsService } from './payments.service';
+import { DpoFinancialAdapter } from '../financial/providers/dpo-financial.adapter';
 import {
   PaymentMethod,
   PaymentStatus,
@@ -21,8 +22,14 @@ const setup = () => {
   };
   const dpo = {
     createToken: jest.fn().mockResolvedValue({ token: 'test-token' }),
+    verifyToken: jest.fn(),
   };
-  const financial = { assertIntentForCheckout: jest.fn() };
+  const financial = {
+    assertIntentForCheckout: jest.fn(),
+    acceptProviderEvent: jest.fn(),
+    processNextInboxEvent: jest.fn().mockResolvedValue({ processed: true }),
+    getPaymentIntent: jest.fn(),
+  };
   const charityProject = {
     projectType: 'CHARITY',
     name: 'Sandbox charity',
@@ -50,7 +57,12 @@ const setup = () => {
     {} as never,
     {} as never,
     financial as never,
-    {} as never,
+    new DpoFinancialAdapter(
+      new ConfigService({
+        DPO_COMPANY_TOKEN: 'local-test-token',
+        DPO_API_URL: 'https://fixture.invalid/api',
+      }),
+    ),
   );
   return { service, dpo, transactions, financial };
 };
@@ -96,6 +108,41 @@ describe('Charity DPO checkout retry safety', () => {
 });
 
 describe('DPO delayed-settlement recovery', () => {
+  it.each(['0.00', undefined])(
+    'automatically captures a paid callback with net %s without queuing false settlement',
+    async (netAmount) => {
+      const c = setup();
+      c.transactions.findOne.mockResolvedValue({
+        _id: '507f1f77bcf86cd799439099',
+        userId,
+        metadata: { paymentIntentId: intentId },
+      });
+      c.dpo.verifyToken.mockResolvedValue({
+        status: '000',
+        message: 'Paid',
+        amount: '2062',
+        currency: 'UGX',
+        netAmount,
+        settlementDate: '2026/01/01',
+      });
+      c.financial.getPaymentIntent.mockResolvedValue({
+        id: intentId,
+        state: 'captured',
+      });
+      await expect(
+        c.service.handleDPOWebhook({ TransactionToken: 'test-token' }),
+      ).resolves.toEqual({ received: true, status: 'captured' });
+      expect(c.financial.acceptProviderEvent).toHaveBeenCalledTimes(1);
+      expect(c.financial.acceptProviderEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'captured', amountMinor: 2062n }),
+      );
+      const calls = c.financial.acceptProviderEvent.mock.calls as unknown as [
+        { providerFeeMinor?: bigint },
+      ][];
+      expect(calls[0][0].providerFeeMinor).toBeUndefined();
+      expect(c.financial.processNextInboxEvent).toHaveBeenCalledTimes(1);
+    },
+  );
   const reconcile = (service: PaymentsService) =>
     (
       service as unknown as { reconcilePendingDpoPayments(): Promise<void> }

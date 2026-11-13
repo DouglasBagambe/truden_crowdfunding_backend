@@ -9,6 +9,71 @@ function config(values: Record<string, string>): ConfigService {
 }
 
 describe('financial provider adapters', () => {
+  it.each([undefined, '', '0', '0.00'])(
+    'records verified payment with unknown fees but never settles zero/missing net: %s',
+    (netAmount) => {
+      const adapter = new DpoFinancialAdapter(
+        config({
+          DPO_COMPANY_TOKEN: 'local-test-token',
+          DPO_API_URL: 'https://sandbox-provider.invalid/api',
+        }),
+      );
+      const evidence = {
+        status: '000',
+        message: 'Paid',
+        amount: '2062',
+        currency: 'UGX',
+        netAmount,
+        settlementDate: '2026/01/01',
+      };
+      const event = adapter.fromVerifiedToken({
+        token: 'test',
+        paymentIntentId: 'intent',
+        evidence,
+      });
+      expect(event.amountMinor).toBe(2062n);
+      expect(event).not.toHaveProperty('providerFeeMinor');
+      expect(adapter.hasCompletedSettlement(evidence)).toBe(false);
+      const refreshed = adapter.fromVerifiedToken({
+        token: 'test',
+        paymentIntentId: 'intent',
+        evidence: { ...evidence, netAmount: '2000.14' },
+      });
+      expect(refreshed.providerFeeMinor).toBe(62n);
+      expect(refreshed.providerEventId).not.toBe(event.providerEventId);
+      expect(
+        adapter.fromVerifiedToken({
+          token: 'test',
+          paymentIntentId: 'intent',
+          evidence,
+        }).providerEventId,
+      ).toBe(event.providerEventId);
+    },
+  );
+  it.each(['-1', 'oops', '2063'])(
+    'rejects invalid net amount %s instead of fabricating a fee',
+    (netAmount) => {
+      const adapter = new DpoFinancialAdapter(
+        config({
+          DPO_COMPANY_TOKEN: 'local-test-token',
+          DPO_API_URL: 'https://sandbox-provider.invalid/api',
+        }),
+      );
+      expect(() =>
+        adapter.fromVerifiedToken({
+          token: 'test',
+          paymentIntentId: 'intent',
+          evidence: {
+            status: '000',
+            message: 'Paid',
+            amount: '2062',
+            currency: 'UGX',
+            netAmount,
+          },
+        }),
+      ).toThrow();
+    },
+  );
   it('rejects missing, forged and placeholder Flutterwave evidence', () => {
     const disabled = new FlutterwaveFinancialAdapter(
       config({ FLUTTERWAVE_WEBHOOK_SECRET: 'replace-with-secret' }),
@@ -62,7 +127,9 @@ describe('financial provider adapters', () => {
         },
       }),
     ).toMatchObject({
-      providerEventId: 'verified-settlement:provider-token',
+      providerEventId: expect.stringMatching(
+        /^verified-settlement:provider-token:v2:/,
+      ) as unknown,
       eventType: 'settled',
       amountMinor: 516n,
       providerFeeMinor: 16n,
