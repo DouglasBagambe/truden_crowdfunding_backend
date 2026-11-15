@@ -251,6 +251,7 @@ describe('financial PostgreSQL integration', () => {
         id: 'wallet-provider-transfer',
         status: 'PENDING',
       }),
+      findTransferByReference: jest.fn().mockResolvedValue(null),
       getTransferStatus: jest.fn(),
     };
     const payouts = new FinancialPayoutService(
@@ -396,6 +397,41 @@ describe('financial PostgreSQL integration', () => {
     expect((await payouts.wallet('wallet-creator')).balances).toMatchObject([
       { availableMinor: '950', heldMinor: '0' },
     ]);
+    // A definitive HTTP 400 allowlist rejection may be returned to Wallet,
+    // but only after a read-only provider reference lookup finds no transfer.
+    const rejectedProject = randomUUID();
+    await seed(rejectedProject, 2000n);
+    await transfer(rejectedProject);
+    const rejected = await payouts.withdrawWallet({
+      ...request,
+      idempotencyKey: randomUUID(),
+      expectedAmountMinor: '2850',
+    });
+    await database.query(
+      `UPDATE financial_jobs SET status='dead_letter',last_error_code='PROVIDER_PERMANENT',
+       last_error_message_safe='Flutterwave transfer submission failed (HTTP 400): Provider IP allowlist rejected the request.'
+       WHERE aggregate_type='payout_transfer' AND aggregate_id=$1`,
+      [rejected.id],
+    );
+    const beforeRelease = await database.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM financial_postings',
+    );
+    await expect(
+      payouts.releaseAllowlistRejectedWithdrawal(rejected.id, 'test-admin'),
+    ).resolves.toMatchObject({ released: true, amountMinor: '2850' });
+    expect((await payouts.wallet('wallet-creator')).balances).toMatchObject([
+      { availableMinor: '2850', heldMinor: '0', paidMinor: '28500' },
+    ]);
+    expect(
+      (
+        await database.query<{ count: string }>(
+          'SELECT count(*)::text AS count FROM financial_postings',
+        )
+      ).rows[0].count,
+    ).toBe(beforeRelease.rows[0].count);
+    await expect(
+      payouts.releaseAllowlistRejectedWithdrawal(rejected.id, 'test-admin'),
+    ).rejects.toThrow('not eligible');
   });
 
   it('serializes competing charity transfers so the campaign cannot be credited to Wallet twice', async () => {
