@@ -58,13 +58,13 @@ describe('FinancialPayoutService', () => {
     const { service, database, client, flutterwave } = setup();
     database.query.mockResolvedValue({ rowCount: 1, rows: [rejectedPayout] });
     flutterwave.findTransferByReference.mockResolvedValue(null);
-    client.query.mockImplementation(async (sql: string) => {
+    client.query.mockImplementation((sql: string) => {
       if (
         sql.includes('FROM financial_payout_transfers WHERE id=$1 FOR UPDATE')
       )
-        return { rowCount: 1, rows: [rejectedPayout] };
+        return Promise.resolve({ rowCount: 1, rows: [rejectedPayout] });
       if (sql.includes('FROM financial_jobs'))
-        return {
+        return Promise.resolve({
           rowCount: 1,
           rows: [
             {
@@ -73,13 +73,13 @@ describe('FinancialPayoutService', () => {
               last_error_message_safe: rejectedMessage,
             },
           ],
-        };
+        });
       if (sql.includes('FROM financial_wallet_payout_allocations'))
-        return {
+        return Promise.resolve({
           rowCount: 1,
           rows: [{ release_id: 'release-1', amount_minor: '1901' }],
-        };
-      return { rowCount: 1, rows: [] };
+        });
+      return Promise.resolve({ rowCount: 1, rows: [] });
     });
     await expect(
       service.releaseAllowlistRejectedWithdrawal('payout-1', 'admin-1'),
