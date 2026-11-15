@@ -272,6 +272,17 @@ export class FinancialController {
     if (!creatorId) throw new Error('Authenticated user is required');
     return this.payouts.providerEvidence(creatorId, id);
   }
+  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN)
+  @Post('payouts/:id/release-allowlist-rejection')
+  releaseAllowlistRejectedPayout(
+    @Param('id') id: string,
+    @Request() req: { user: { sub?: string; userId?: string } },
+  ) {
+    const reviewedBy = req.user?.sub ?? req.user?.userId;
+    if (!reviewedBy)
+      throw new ForbiddenException('Authenticated administrator is required');
+    return this.payouts.releaseAllowlistRejectedWithdrawal(id, reviewedBy);
+  }
   @Post('receipts/:settlementId/authorize') authorizeReceipt(
     @Param('settlementId') settlementId: string,
     @Request() req: { user: { sub?: string; userId?: string } },

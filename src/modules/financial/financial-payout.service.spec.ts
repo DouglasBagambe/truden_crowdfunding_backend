@@ -39,6 +39,91 @@ const setup = () => {
 };
 
 describe('FinancialPayoutService', () => {
+  const rejectedMessage =
+    'Flutterwave transfer submission failed (HTTP 400): Provider IP allowlist rejected the request.';
+  const rejectedPayout = {
+    id: 'payout-1',
+    creator_id: 'creator-1',
+    keibo_reference: 'KEIBO-WALLET-payout-1',
+    amount_minor: '1901',
+    currency: 'UGX',
+    state: 'pending',
+    wallet_withdrawal: true,
+    provider_transfer_id: null,
+    job_type: 'payout.dispatch.requested',
+    job_status: 'dead_letter',
+    last_error_message_safe: rejectedMessage,
+  };
+  it('returns a confirmed allowlist-rejected withdrawal to available Wallet funds with an audit event', async () => {
+    const { service, database, client, flutterwave } = setup();
+    database.query.mockResolvedValue({ rowCount: 1, rows: [rejectedPayout] });
+    flutterwave.findTransferByReference.mockResolvedValue(null);
+    client.query.mockImplementation((sql: string) => {
+      if (
+        sql.includes('FROM financial_payout_transfers WHERE id=$1 FOR UPDATE')
+      )
+        return Promise.resolve({ rowCount: 1, rows: [rejectedPayout] });
+      if (sql.includes('FROM financial_jobs'))
+        return Promise.resolve({
+          rowCount: 1,
+          rows: [
+            {
+              job_type: 'payout.dispatch.requested',
+              status: 'dead_letter',
+              last_error_message_safe: rejectedMessage,
+            },
+          ],
+        });
+      if (sql.includes('FROM financial_wallet_payout_allocations'))
+        return Promise.resolve({
+          rowCount: 1,
+          rows: [{ release_id: 'release-1', amount_minor: '1901' }],
+        });
+      return Promise.resolve({ rowCount: 1, rows: [] });
+    });
+    await expect(
+      service.releaseAllowlistRejectedWithdrawal('payout-1', 'admin-1'),
+    ).resolves.toMatchObject({ released: true, amountMinor: '1901' });
+    expect(flutterwave.findTransferByReference).toHaveBeenCalledWith(
+      rejectedPayout.keibo_reference,
+    );
+    expect(
+      client.query.mock.calls.map(([sql]: [string]) => sql).join('\n'),
+    ).toContain('DELETE FROM financial_wallet_payout_allocations');
+    expect(
+      client.query.mock.calls.map(([sql]: [string]) => sql).join('\n'),
+    ).toContain('wallet.withdrawal.released');
+  });
+  it.each([
+    { state: 'paid' },
+    { provider_transfer_id: '123' },
+    { last_error_message_safe: 'Payout processing stopped' },
+    { job_status: 'retry' },
+    { wallet_withdrawal: false },
+  ])(
+    'never releases a withdrawal without definitive rejection: %j',
+    async (override) => {
+      const { service, database, flutterwave } = setup();
+      database.query.mockResolvedValue({
+        rowCount: 1,
+        rows: [{ ...rejectedPayout, ...override }],
+      });
+      await expect(
+        service.releaseAllowlistRejectedWithdrawal('payout-1', 'admin-1'),
+      ).rejects.toThrow('not eligible');
+      expect(flutterwave.findTransferByReference).not.toHaveBeenCalled();
+      expect(database.transaction).not.toHaveBeenCalled();
+    },
+  );
+  it('does not release when Flutterwave finds an existing transfer', async () => {
+    const { service, database, flutterwave } = setup();
+    database.query.mockResolvedValue({ rowCount: 1, rows: [rejectedPayout] });
+    flutterwave.findTransferByReference.mockResolvedValue({ id: '123' });
+    await expect(
+      service.releaseAllowlistRejectedWithdrawal('payout-1', 'admin-1'),
+    ).rejects.toThrow('has a transfer');
+    expect(database.transaction).not.toHaveBeenCalled();
+  });
   it('denies cross-user provider lookups before any provider request', async () => {
     const { service, database, flutterwave } = setup();
     database.query.mockResolvedValue({ rowCount: 0, rows: [] });

@@ -239,6 +239,145 @@ export class FinancialPayoutService {
     };
   }
 
+  /** Return only a definitively rejected, never-dispatched Wallet withdrawal. */
+  async releaseAllowlistRejectedWithdrawal(id: string, reviewedBy: string) {
+    const rejectedMessage =
+      'Flutterwave transfer submission failed (HTTP 400): Provider IP allowlist rejected the request.';
+    const record = await this.database.query<{
+      id: string;
+      creator_id: string;
+      keibo_reference: string;
+      provider_transfer_id: string | null;
+      state: string;
+      wallet_withdrawal: boolean;
+      job_type: string;
+      job_status: string;
+      last_error_message_safe: string;
+    }>(
+      `SELECT p.id,p.creator_id,p.keibo_reference,p.provider_transfer_id,p.state,p.wallet_withdrawal,
+        j.job_type,j.status AS job_status,j.last_error_message_safe
+       FROM financial_payout_transfers p
+       LEFT JOIN LATERAL (SELECT job_type,status,last_error_message_safe
+         FROM financial_jobs WHERE aggregate_type='payout_transfer' AND aggregate_id=p.id::text
+         ORDER BY updated_at DESC,created_at DESC,id DESC LIMIT 1) j ON true
+       WHERE p.id=$1`,
+      [id],
+    );
+    const payout = record.rows[0];
+    if (!payout) throw new NotFoundException('Payout not found');
+    if (
+      !payout.wallet_withdrawal ||
+      payout.state !== 'pending' ||
+      payout.provider_transfer_id ||
+      payout.job_type !== 'payout.dispatch.requested' ||
+      payout.job_status !== 'dead_letter' ||
+      payout.last_error_message_safe !== rejectedMessage
+    )
+      throw new ConflictException(
+        'Withdrawal is not eligible for safe release',
+      );
+
+    this.flutterwave.assertLivePayoutReady();
+    const providerTransfer = await this.flutterwave.findTransferByReference(
+      payout.keibo_reference,
+    );
+    if (providerTransfer)
+      throw new ConflictException(
+        'Flutterwave has a transfer with this reference; admin reconciliation is required',
+      );
+
+    return this.database.transaction(async (client) => {
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+        [`creator-wallet:${payout.creator_id}`],
+      );
+      const locked = await client.query<{
+        id: string;
+        creator_id: string;
+        amount_minor: string;
+        currency: string;
+        state: string;
+        provider_transfer_id: string | null;
+      }>(
+        `SELECT id,creator_id,amount_minor,currency,state,provider_transfer_id
+         FROM financial_payout_transfers WHERE id=$1 FOR UPDATE`,
+        [id],
+      );
+      const current = locked.rows[0];
+      if (
+        !current ||
+        current.creator_id !== payout.creator_id ||
+        current.state !== 'pending' ||
+        current.provider_transfer_id
+      )
+        throw new ConflictException('Withdrawal changed during review');
+      const job = await client.query<{
+        job_type: string;
+        status: string;
+        last_error_message_safe: string;
+      }>(
+        `SELECT job_type,status,last_error_message_safe FROM financial_jobs
+         WHERE aggregate_type='payout_transfer' AND aggregate_id=$1
+         ORDER BY updated_at DESC,created_at DESC,id DESC LIMIT 1 FOR UPDATE`,
+        [id],
+      );
+      if (
+        job.rows[0]?.job_type !== 'payout.dispatch.requested' ||
+        job.rows[0]?.status !== 'dead_letter' ||
+        job.rows[0]?.last_error_message_safe !== rejectedMessage
+      )
+        throw new ConflictException('Withdrawal job changed during review');
+      const allocations = await client.query<{
+        release_id: string;
+        amount_minor: string;
+      }>(
+        `SELECT release_id,amount_minor FROM financial_wallet_payout_allocations
+         WHERE payout_id=$1 ORDER BY release_id FOR UPDATE`,
+        [id],
+      );
+      if (
+        !allocations.rowCount ||
+        allocations.rows.reduce(
+          (sum, row) => sum + BigInt(row.amount_minor),
+          0n,
+        ) !== BigInt(current.amount_minor)
+      )
+        throw new ConflictException('Wallet allocation mismatch');
+      await client.query(
+        `UPDATE financial_payout_transfers SET state='failed',provider_status='REJECTED',
+         failure_code='PROVIDER_SUBMISSION_REJECTED',failure_message_safe=$2,
+         failed_at=now(),updated_at=now() WHERE id=$1`,
+        [id, rejectedMessage],
+      );
+      await client.query(
+        'DELETE FROM financial_wallet_payout_allocations WHERE payout_id=$1',
+        [id],
+      );
+      await client.query(
+        `INSERT INTO financial_outbox(topic,aggregate_id,payload,correlation_id)
+         VALUES('wallet.withdrawal.released',$1,$2::jsonb,gen_random_uuid())`,
+        [
+          id,
+          JSON.stringify({
+            payoutId: id,
+            reference: payout.keibo_reference,
+            amountMinor: current.amount_minor,
+            currency: current.currency,
+            reviewedBy,
+            reason: 'provider_ip_allowlist_rejection',
+            allocations: allocations.rows,
+          }),
+        ],
+      );
+      return {
+        reference: payout.keibo_reference,
+        amountMinor: current.amount_minor,
+        currency: current.currency,
+        released: true,
+      };
+    });
+  }
+
   async withdrawWallet(input: {
     creatorId: string;
     destinationId: string;
@@ -469,16 +608,24 @@ export class FinancialPayoutService {
         : {}),
       ...(row.state === 'failed'
         ? {
-            failureStage: 'provider_execution',
+            failureStage:
+              failure_code === 'PROVIDER_SUBMISSION_REJECTED'
+                ? 'provider_submission'
+                : 'provider_execution',
             errorCode:
-              failure_code === 'PROVIDER_TRANSFER_FAILED'
+              failure_code === 'PROVIDER_TRANSFER_FAILED' ||
+              failure_code === 'PROVIDER_SUBMISSION_REJECTED'
                 ? failure_code
                 : 'PAYOUT_FAILED',
-            errorMessage: failure_message_safe?.startsWith(
-              'Flutterwave transfer execution failed:',
-            )
-              ? failure_message_safe
-              : 'Provider confirmed the transfer failed. No detailed reason was recorded; admin review is required.',
+            errorMessage:
+              failure_message_safe?.startsWith(
+                'Flutterwave transfer execution failed:',
+              ) ||
+              failure_message_safe?.startsWith(
+                'Flutterwave transfer submission failed (HTTP 400): Provider IP allowlist rejected the request.',
+              )
+                ? failure_message_safe
+                : 'Provider confirmed the transfer failed. No detailed reason was recorded; admin review is required.',
           }
         : {}),
     };
